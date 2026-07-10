@@ -1,4 +1,5 @@
 pub mod menu;
+pub mod render;
 
 #[derive(Clone, Default)]
 pub enum State {
