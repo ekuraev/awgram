@@ -34,18 +34,34 @@ cargo build --release
 
 Бинарник появится в `target/release/awg-bot`.
 
-### Кросс-сборка под musl (опционально)
+TLS реализован на **rustls** (без OpenSSL), поэтому у бинарника нет системной
+зависимости от `libssl`.
 
-Если сервер минималистичный (Alpine и т.п.) или хочется полностью статический
-бинарник без зависимости от glibc:
+### Статический Linux amd64 бинарник (для деплоя на VPS)
+
+Готовый портативный бинарник собирается одной командой (нужен Docker):
 
 ```bash
-rustup target add x86_64-unknown-linux-musl
-cargo build --release --target x86_64-unknown-linux-musl
+./scripts/build-musl.sh
 ```
 
-Бинарник будет в `target/x86_64-unknown-linux-musl/release/awg-bot`. Дальше
-шаги установки те же, только путь к бинарнику другой.
+Скрипт собирает в контейнере `linux/amd64` полностью статический ET_EXEC
+(`x86_64-unknown-linux-musl`, `crt-static` + `relocation-model=static`, rustls)
+и кладёт его в `dist/awg-bot-linux-amd64`. Такой бинарник не зависит ни от
+glibc, ни от `libssl`, ни от musl-загрузчика — запускается на любом Linux
+x86_64 (Ubuntu/Debian/Alpine). Проверка: `ldd dist/awg-bot-linux-amd64` →
+`not a dynamic executable`.
+
+Перенос на сервер:
+
+```bash
+scp dist/awg-bot-linux-amd64 root@SERVER:/usr/local/bin/awg-bot
+ssh root@SERVER chmod +x /usr/local/bin/awg-bot
+```
+
+> На хосте с Apple Silicon сборка идёт под эмуляцией amd64 (qemu) — это
+> медленнее, но результат корректный. Кэш cargo хранится в docker-volume
+> `awgbot-cargo-registry`, поэтому повторные сборки быстрее.
 
 ## Установка
 
