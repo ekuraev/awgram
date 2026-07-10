@@ -6,6 +6,7 @@ use teloxide::prelude::*;
 
 use awg_bot::bot::{handlers, State};
 use awg_bot::config::Config;
+use awg_bot::settings::SettingsStore;
 use awg_bot::vpn::Vpn;
 
 #[tokio::main]
@@ -32,10 +33,11 @@ async fn main() {
 
     let bot = Bot::new(&cfg.bot_token);
     let vpn = Arc::new(Vpn::from_config(&cfg));
+    let settings = Arc::new(SettingsStore::load(cfg.state_file.clone()));
 
     tracing::info!("запуск long polling");
     Dispatcher::builder(bot, handlers::schema())
-        .dependencies(dptree::deps![InMemStorage::<State>::new(), cfg, vpn])
+        .dependencies(dptree::deps![InMemStorage::<State>::new(), cfg, vpn, settings])
         .enable_ctrlc_handler()
         .build()
         .dispatch()

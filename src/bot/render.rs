@@ -1,45 +1,39 @@
 use teloxide::prelude::*;
-use teloxide::types::{ChatId, InputFile};
+use teloxide::types::{ChatId, InputFile, ParseMode};
 
 use crate::error::{Error, Result};
+use crate::i18n::{self, Lang};
 use crate::vpn::model::{format_expiry, format_handshake, human_bytes, AddResult, Client};
 
-pub fn format_client_card(c: &Client, now: i64, expiry: Option<i64>) -> String {
+pub fn format_client_card(lang: Lang, c: &Client, now: i64, expiry: Option<i64>) -> String {
     let status = if !c.status.is_empty() {
         c.status.clone()
     } else if c.active() {
-        "активен".to_string()
+        match lang { Lang::Ru => "активен", Lang::En => "active" }.to_string()
     } else {
-        "отключён".to_string()
+        match lang { Lang::Ru => "отключён", Lang::En => "inactive" }.to_string()
     };
-    let ip_line = if c.ip.is_empty() {
-        String::new()
-    } else {
-        format!("IP: {}\n", c.ip)
-    };
-    format!(
-        "👤 {name}\nСтатус: {status}\n{ip_line}Трафик:  ↓ {rx}   ↑ {tx}\nРукопожатие: {handshake}\nДействует: {expires}",
-        name = c.name,
-        rx = human_bytes(c.rx),
-        tx = human_bytes(c.tx),
-        handshake = format_handshake(now, c.last_handshake.unwrap_or(0)),
-        expires = format_expiry(now, expiry),
+    i18n::client_card(
+        lang,
+        &c.name,
+        &status,
+        &c.ip,
+        &human_bytes(c.rx),
+        &human_bytes(c.tx),
+        &format_handshake(now, c.last_handshake.unwrap_or(0)),
+        &format_expiry(now, expiry),
     )
 }
 
-pub fn format_stats(clients: &[Client]) -> String {
+pub fn format_stats(lang: Lang, clients: &[Client]) -> String {
     let total = clients.len();
     let active = clients.iter().filter(|c| c.active()).count();
     let rx: u64 = clients.iter().map(|c| c.rx).sum();
     let tx: u64 = clients.iter().map(|c| c.tx).sum();
-    format!(
-        "📊 Статистика\nВсего клиентов: {total}\nАктивных: {active}\nТрафик суммарно: ↓ {rx}  ↑ {tx}",
-        rx = human_bytes(rx),
-        tx = human_bytes(tx),
-    )
+    i18n::stats_summary(lang, total, active, &human_bytes(rx), &human_bytes(tx))
 }
 
-pub async fn send_client_files(bot: &Bot, chat: ChatId, res: &AddResult) -> Result<()> {
+pub async fn send_client_files(bot: &Bot, chat: ChatId, lang: Lang, res: &AddResult) -> Result<()> {
     bot.send_document(chat, InputFile::file(&res.conf_path))
         .await
         .map_err(|e| Error::Telegram(e.to_string()))?;
@@ -51,8 +45,8 @@ pub async fn send_client_files(bot: &Bot, chat: ChatId, res: &AddResult) -> Resu
             .map_err(|e| Error::Telegram(e.to_string()))?;
     }
     if !res.uri.is_empty() {
-        bot.send_message(chat, format!("🔗 Ссылка для импорта:\n`{}`", res.uri))
-            .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+        bot.send_message(chat, i18n::import_link(lang, &res.uri))
+            .parse_mode(ParseMode::Html)
             .await
             .map_err(|e| Error::Telegram(e.to_string()))?;
     }
@@ -80,12 +74,32 @@ mod tests {
     fn card_contains_name_and_traffic() {
         let now = 1_700_000_000;
         let expiry = Some(now + 5 * 86400);
-        let text = format_client_card(&sample(), now, expiry);
+        let text = format_client_card(Lang::Ru, &sample(), now, expiry);
         assert!(text.contains("alice"));
         assert!(text.contains("Активен"));
         assert!(text.contains("1.2 GB"));
         assert!(text.contains("Рукопожатие:")); // строка рукопожатия отрендерена
         assert!(text.contains("ещё")); // истечение через 5 дней
+    }
+
+    #[test]
+    fn card_escapes_name_html() {
+        let now = 1_700_000_000;
+        let mut c = sample();
+        c.name = "a<b>&c".to_string();
+        let text = format_client_card(Lang::Ru, &c, now, None);
+        assert!(text.contains("a&lt;b&gt;&amp;c"));
+        assert!(!text.contains("a<b>&c"));
+    }
+
+    #[test]
+    fn card_localized_en() {
+        let now = 1_700_000_000;
+        let text = format_client_card(Lang::En, &sample(), now, Some(now + 86400));
+        assert!(text.contains("Status:"));
+        assert!(text.contains("Handshake:"));
+        assert!(text.contains("Expires:"));
+        assert!(text.contains("1.2 GB"));
     }
 
     #[test]
@@ -103,7 +117,7 @@ mod tests {
                 last_handshake: None,
             },
         ];
-        let text = format_stats(&clients);
+        let text = format_stats(Lang::Ru, &clients);
         assert!(text.contains("2")); // всего клиентов
         assert!(text.contains("1")); // активных
     }
@@ -121,7 +135,7 @@ mod tests {
             tx: 524288,
             last_handshake: Some(1700000000 - 600),
         };
-        let text = format_client_card(&client, now, None);
+        let text = format_client_card(Lang::Ru, &client, now, None);
         assert!(!text.contains("IP:"));
         assert!(text.contains("charlie"));
         assert!(text.contains("Трафик"));
