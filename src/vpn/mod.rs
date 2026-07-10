@@ -65,7 +65,7 @@ impl Vpn {
         let conf = self.clients_dir.join(format!("{name}.conf"));
         let qr = self.clients_dir.join(format!("{name}.png"));
         let uri_path = self.clients_dir.join(format!("{name}.vpnuri"));
-        if !conf.exists() {
+        if !conf.exists() || !qr.exists() {
             return Err(crate::error::Error::Parse("файлы клиента не найдены".into()));
         }
         let uri = std::fs::read_to_string(&uri_path).unwrap_or_default().trim().to_string();
@@ -123,11 +123,19 @@ mod tests {
     fn existing_files_returns_paths_when_conf_present() {
         let (dir, vpn) = vpn_with_script("#!/bin/sh\n");
         std::fs::write(dir.path().join("alice.conf"), "conf").unwrap();
+        std::fs::write(dir.path().join("alice.png"), "png").unwrap();
         std::fs::write(dir.path().join("alice.vpnuri"), "vpn://x\n").unwrap();
         let res = vpn.existing_files("alice").unwrap();
         assert!(res.conf_path.ends_with("alice.conf"));
         assert!(res.qr_path.ends_with("alice.png"));
         assert_eq!(res.uri, "vpn://x");
+    }
+
+    #[test]
+    fn existing_files_errors_when_qr_missing() {
+        let (dir, vpn) = vpn_with_script("#!/bin/sh\n");
+        std::fs::write(dir.path().join("alice.conf"), "conf").unwrap();
+        assert!(matches!(vpn.existing_files("alice"), Err(crate::error::Error::Parse(_))));
     }
 
     #[test]
