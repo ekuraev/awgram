@@ -6,3 +6,4 @@ manage_script = "/root/awg/manage_amneziawg.sh"
 clients_dir   = "/root/awg"
 sudo_prefix   = ""                              # "" если сервис от root; "sudo" для hardened-режима
 op_timeout_secs = 60
+# state_file = "/etc/awg-bot/state.json"        # путь к персистентному состоянию бота (язык, psk_default); необязательно

@@ -8,6 +8,7 @@ pub struct Config {
     pub clients_dir: PathBuf,
     pub sudo_prefix: String,
     pub op_timeout_secs: u64,
+    pub state_file: PathBuf,
 }
 
 impl std::fmt::Debug for Config {
@@ -19,6 +20,7 @@ impl std::fmt::Debug for Config {
             .field("clients_dir", &self.clients_dir)
             .field("sudo_prefix", &self.sudo_prefix)
             .field("op_timeout_secs", &self.op_timeout_secs)
+            .field("state_file", &self.state_file)
             .finish()
     }
 }
@@ -47,10 +49,16 @@ struct Raw {
     sudo_prefix: String,
     #[serde(default = "default_timeout")]
     op_timeout_secs: u64,
+    #[serde(default = "default_state_file")]
+    state_file: PathBuf,
 }
 
 fn default_timeout() -> u64 {
     60
+}
+
+fn default_state_file() -> PathBuf {
+    PathBuf::from("/etc/awg-bot/state.json")
 }
 
 impl Config {
@@ -78,6 +86,7 @@ impl Config {
             clients_dir: raw.clients_dir,
             sudo_prefix: raw.sudo_prefix,
             op_timeout_secs: raw.op_timeout_secs,
+            state_file: raw.state_file,
         })
     }
 }
@@ -169,6 +178,42 @@ mod tests {
         let cfg = Config::load(&cfg_path).unwrap();
         std::env::remove_var("AWG_BOT_TOKEN");
         assert_eq!(cfg.bot_token, "env-token");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn state_file_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = write(&dir, "manage.sh", "#!/bin/sh\n");
+        let cfg_path = write(
+            &dir,
+            "config.toml",
+            &format!(
+                "bot_token = \"t\"\nadmin_ids = [1]\nmanage_script = \"{}\"\nclients_dir = \"{}\"\n",
+                script.display(),
+                dir.path().display()
+            ),
+        );
+        let cfg = Config::load(&cfg_path).unwrap();
+        assert_eq!(cfg.state_file, PathBuf::from("/etc/awg-bot/state.json"));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn state_file_explicit_value_used() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = write(&dir, "manage.sh", "#!/bin/sh\n");
+        let cfg_path = write(
+            &dir,
+            "config.toml",
+            &format!(
+                "bot_token = \"t\"\nadmin_ids = [1]\nmanage_script = \"{}\"\nclients_dir = \"{}\"\nstate_file = \"/custom/state.json\"\n",
+                script.display(),
+                dir.path().display()
+            ),
+        );
+        let cfg = Config::load(&cfg_path).unwrap();
+        assert_eq!(cfg.state_file, PathBuf::from("/custom/state.json"));
     }
 
     #[test]
