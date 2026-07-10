@@ -3,7 +3,7 @@ use std::sync::Arc;
 use teloxide::dispatching::dialogue::InMemStorage;
 use teloxide::dispatching::{HandlerExt, UpdateFilterExt};
 use teloxide::prelude::*;
-use teloxide::types::{CallbackQuery, ParseMode};
+use teloxide::types::{CallbackQuery, InputFile, ParseMode};
 
 use crate::auth::is_admin;
 use crate::bot::menu;
@@ -31,6 +31,13 @@ pub enum Action {
     SetLang(String), // "ru" | "en" — смена языка из экрана настроек
     SetPsk(bool),
     AddPsk(bool),
+    Backup,
+    BackupNew,
+    BackupList,
+    BackupCard(usize),
+    BackupDownload(usize),
+    Restore(usize),
+    RestoreYes(usize),
     Unknown,
 }
 
@@ -41,6 +48,9 @@ fn parse_callback(data: &str) -> Action {
         "add" => Action::Add,
         "stats" => Action::Stats,
         "settings" => Action::Settings,
+        "backup" => Action::Backup,
+        "bk:new" => Action::BackupNew,
+        "bk:list" => Action::BackupList,
         _ => {
             if let Some(v) = data.strip_prefix("page:") {
                 v.parse().map(Action::Page).unwrap_or(Action::Unknown)
@@ -70,6 +80,17 @@ fn parse_callback(data: &str) -> Action {
                 Action::SetPsk(v == "on")
             } else if let Some(v) = data.strip_prefix("lang:") {
                 Action::Lang(v.to_string())
+            } else if let Some(v) = data.strip_prefix("bk:restore_yes:") {
+                // Must be checked before "bk:restore:" — otherwise "bk:restore:"
+                // prefix-matches "bk:restore_yes:..." and confirmed restores get
+                // misparsed as restore-asks (same pattern as delyes:/del:).
+                v.parse().map(Action::RestoreYes).unwrap_or(Action::Unknown)
+            } else if let Some(v) = data.strip_prefix("bk:restore:") {
+                v.parse().map(Action::Restore).unwrap_or(Action::Unknown)
+            } else if let Some(v) = data.strip_prefix("bk:card:") {
+                v.parse().map(Action::BackupCard).unwrap_or(Action::Unknown)
+            } else if let Some(v) = data.strip_prefix("bk:dl:") {
+                v.parse().map(Action::BackupDownload).unwrap_or(Action::Unknown)
             } else {
                 Action::Unknown
             }
@@ -397,6 +418,121 @@ async fn callback_handler(
                 .parse_mode(ParseMode::Html)
                 .await?;
         }
+        Action::Backup => {
+            bot.send_message(chat, i18n::backup_menu_title(lang))
+                .reply_markup(menu::backup_menu(lang))
+                .parse_mode(ParseMode::Html)
+                .await?;
+        }
+        Action::BackupNew => {
+            let waiting = bot.send_message(chat, i18n::backup_creating(lang)).await.ok();
+            match vpn.backup().await {
+                Ok(bf) => {
+                    // Свежесозданный бэкап — самый новый по mtime, т.е. индекс 0 в list_backups().
+                    bot.send_message(chat, i18n::backup_done(lang, &bf.name))
+                        .reply_markup(menu::backup_card(lang, 0))
+                        .parse_mode(ParseMode::Html)
+                        .await?;
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "backup провалился");
+                    bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                }
+            }
+            if let Some(m) = waiting {
+                let _ = bot.delete_message(chat, m.id).await;
+            }
+        }
+        Action::BackupList => match vpn.list_backups() {
+            Ok(list) if list.is_empty() => {
+                bot.send_message(chat, i18n::backups_empty(lang))
+                    .reply_markup(menu::main_menu(lang))
+                    .await?;
+            }
+            Ok(list) => {
+                bot.send_message(chat, i18n::backups_list_title(lang))
+                    .reply_markup(menu::backups_list(lang, &list))
+                    .parse_mode(ParseMode::Html)
+                    .await?;
+            }
+            Err(e) => {
+                bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+            }
+        },
+        Action::BackupCard(idx) => match vpn.list_backups() {
+            Ok(list) => match list.get(idx) {
+                Some(bf) => {
+                    let text = format!("<code>{}</code>", i18n::html_escape(&bf.name));
+                    bot.send_message(chat, text)
+                        .reply_markup(menu::backup_card(lang, idx))
+                        .parse_mode(ParseMode::Html)
+                        .await?;
+                }
+                None => {
+                    bot.send_message(chat, i18n::not_found(lang))
+                        .reply_markup(menu::main_menu(lang))
+                        .await?;
+                }
+            },
+            Err(e) => {
+                bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+            }
+        },
+        Action::BackupDownload(idx) => match vpn.list_backups() {
+            Ok(list) => match list.get(idx) {
+                Some(bf) => {
+                    if let Err(e) = bot.send_document(chat, InputFile::file(&bf.path)).await {
+                        tracing::error!(error = %e, "send_document провалился");
+                        let err = crate::error::Error::Telegram(e.to_string());
+                        bot.send_message(chat, i18n::error_text(lang, &err)).await?;
+                    }
+                }
+                None => {
+                    bot.send_message(chat, i18n::not_found(lang))
+                        .reply_markup(menu::main_menu(lang))
+                        .await?;
+                }
+            },
+            Err(e) => {
+                bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+            }
+        },
+        Action::Restore(idx) => match vpn.list_backups() {
+            Ok(list) => match list.get(idx) {
+                Some(bf) => {
+                    bot.send_message(chat, i18n::confirm_restore(lang, &bf.name))
+                        .reply_markup(menu::confirm_restore(lang, idx))
+                        .parse_mode(ParseMode::Html)
+                        .await?;
+                }
+                None => {
+                    bot.send_message(chat, i18n::not_found(lang))
+                        .reply_markup(menu::main_menu(lang))
+                        .await?;
+                }
+            },
+            Err(e) => {
+                bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+            }
+        },
+        Action::RestoreYes(idx) => {
+            let waiting = bot.send_message(chat, i18n::restoring(lang)).await.ok();
+            match vpn.restore(idx).await {
+                Ok(()) => {
+                    bot.send_message(chat, i18n::restore_done(lang))
+                        .reply_markup(menu::main_menu(lang))
+                        .parse_mode(ParseMode::Html)
+                        .await?;
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "restore провалился");
+                    bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                }
+            }
+            if let Some(m) = waiting {
+                let _ = bot.delete_message(chat, m.id).await;
+            }
+        }
         Action::Unknown => {
             bot.send_message(chat, unknown_action_text(lang)).await?;
         }
@@ -440,6 +576,13 @@ mod tests {
         assert_eq!(parse_callback("set:psk:off"), Action::SetPsk(false));
         assert_eq!(parse_callback("add:psk:on"), Action::AddPsk(true));
         assert_eq!(parse_callback("add:psk:off"), Action::AddPsk(false));
+        assert_eq!(parse_callback("backup"), Action::Backup);
+        assert_eq!(parse_callback("bk:new"), Action::BackupNew);
+        assert_eq!(parse_callback("bk:list"), Action::BackupList);
+        assert_eq!(parse_callback("bk:restore_yes:2"), Action::RestoreYes(2));
+        assert_eq!(parse_callback("bk:restore:2"), Action::Restore(2));
+        assert_eq!(parse_callback("bk:dl:1"), Action::BackupDownload(1));
+        assert_eq!(parse_callback("bk:card:0"), Action::BackupCard(0));
         assert_eq!(parse_callback("garbage"), Action::Unknown);
     }
 
@@ -475,6 +618,9 @@ mod tests {
             last_handshake: None,
         };
 
+        let sample_backup =
+            crate::vpn::BackupFile { name: "awg_backup_x.tar.gz".into(), path: "x.tar.gz".into(), size: 1, mtime: 1 };
+
         let keyboards = vec![
             menu::main_menu(Lang::Ru),
             menu::expiry_menu(Lang::Ru),
@@ -486,21 +632,24 @@ mod tests {
             menu::settings_menu(Lang::Ru, true),
             menu::psk_step(Lang::Ru, false),
             menu::psk_step(Lang::Ru, true),
+            menu::backup_menu(Lang::Ru),
+            menu::backups_list(Lang::Ru, &[sample_backup]),
+            menu::backup_card(Lang::Ru, 0),
+            menu::confirm_restore(Lang::Ru, 0),
         ];
 
         for kb in &keyboards {
             for data in all_callback_data(kb) {
-                // `backup`/`check` are already emitted by `main_menu` (buttons
-                // shipped ahead of their handlers) but their Action variants
-                // (`Action::Backup`/`Action::Check`) land in Tasks 7/8. Until
-                // then they intentionally parse to `Action::Unknown` — tapping
-                // them shows "unknown action" rather than crashing. Restore
-                // them to the assertion once Tasks 7/8 land.
-                if data == "backup" || data == "check" {
+                // `check` is already emitted by `main_menu` (button shipped ahead
+                // of its handler) but its Action variant (`Action::Check`) lands
+                // in Task 8. Until then it intentionally parses to
+                // `Action::Unknown` — tapping it shows "unknown action" rather
+                // than crashing. Restore it to the assertion once Task 8 lands.
+                if data == "check" {
                     assert_eq!(
                         parse_callback(&data),
                         Action::Unknown,
-                        "callback data {data:?} expected to be Unknown until Tasks 7/8"
+                        "callback data {data:?} expected to be Unknown until Task 8"
                     );
                     continue;
                 }

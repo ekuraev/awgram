@@ -2,6 +2,7 @@ use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 
 use crate::i18n::{self, Lang};
 use crate::vpn::model::Client;
+use crate::vpn::BackupFile;
 
 fn cb(text: &str, data: &str) -> InlineKeyboardButton {
     InlineKeyboardButton::callback(text.to_string(), data.to_string())
@@ -126,6 +127,44 @@ pub fn confirm_delete(lang: Lang, name: &str) -> InlineKeyboardMarkup {
     ]])
 }
 
+pub fn backup_menu(lang: Lang) -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![
+        vec![cb(&i18n::btn_backup_new(lang), "bk:new")],
+        vec![cb(&i18n::btn_backup_list(lang), "bk:list")],
+        vec![cb(&i18n::btn_back(lang), "menu")],
+    ])
+}
+
+/// Один ряд на бэкап, кнопка ведёт на карточку по индексу в `list_backups()`.
+/// Имя файла — обычный текст кнопки (Telegram не рендерит в кнопках HTML,
+/// экранирование здесь не нужно, в отличие от текста сообщений).
+pub fn backups_list(lang: Lang, backups: &[BackupFile]) -> InlineKeyboardMarkup {
+    let mut rows: Vec<Vec<InlineKeyboardButton>> = backups
+        .iter()
+        .enumerate()
+        .map(|(idx, bf)| vec![cb(&bf.name, &format!("bk:card:{idx}"))])
+        .collect();
+    rows.push(vec![cb(&i18n::btn_back(lang), "menu")]);
+    InlineKeyboardMarkup::new(rows)
+}
+
+pub fn backup_card(lang: Lang, idx: usize) -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![
+        vec![
+            cb(&i18n::btn_download(lang), &format!("bk:dl:{idx}")),
+            cb(&i18n::btn_restore(lang), &format!("bk:restore:{idx}")),
+        ],
+        vec![cb(&i18n::btn_back(lang), "menu")],
+    ])
+}
+
+pub fn confirm_restore(lang: Lang, idx: usize) -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![vec![
+        cb(&i18n::btn_confirm(lang), &format!("bk:restore_yes:{idx}")),
+        cb(&i18n::btn_back(lang), "menu"),
+    ]])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -226,6 +265,41 @@ mod tests {
         let data = all_callback_data(&psk_step(Lang::Ru, false));
         assert!(data.contains(&"add:psk:on".to_string()));
         assert!(data.contains(&"add:psk:off".to_string()));
+        assert!(data.contains(&"menu".to_string()));
+    }
+
+    #[test]
+    fn backup_menu_has_new_list_and_back() {
+        let data = all_callback_data(&backup_menu(Lang::Ru));
+        assert!(data.contains(&"bk:new".to_string()));
+        assert!(data.contains(&"bk:list".to_string()));
+        assert!(data.contains(&"menu".to_string()));
+    }
+
+    #[test]
+    fn backups_list_one_button_per_backup_by_index() {
+        let backups = vec![
+            BackupFile { name: "a.tar.gz".into(), path: "a.tar.gz".into(), size: 1, mtime: 1 },
+            BackupFile { name: "b.tar.gz".into(), path: "b.tar.gz".into(), size: 2, mtime: 2 },
+        ];
+        let data = all_callback_data(&backups_list(Lang::Ru, &backups));
+        assert!(data.contains(&"bk:card:0".to_string()));
+        assert!(data.contains(&"bk:card:1".to_string()));
+        assert!(data.contains(&"menu".to_string()));
+    }
+
+    #[test]
+    fn backup_card_encodes_index() {
+        let data = all_callback_data(&backup_card(Lang::Ru, 2));
+        assert!(data.contains(&"bk:dl:2".to_string()));
+        assert!(data.contains(&"bk:restore:2".to_string()));
+        assert!(data.contains(&"menu".to_string()));
+    }
+
+    #[test]
+    fn confirm_restore_encodes_index() {
+        let data = all_callback_data(&confirm_restore(Lang::Ru, 3));
+        assert!(data.contains(&"bk:restore_yes:3".to_string()));
         assert!(data.contains(&"menu".to_string()));
     }
 
