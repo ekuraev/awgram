@@ -38,7 +38,8 @@ pub fn human_bytes(n: u64) -> String {
     }
     let mut value = n as f64;
     let mut unit = 0;
-    while value >= 1024.0 && unit < UNITS.len() - 1 {
+    // Advance while the value ROUNDED to 1 decimal is still >= 1024 in this unit.
+    while ((value * 10.0).round() / 10.0) >= 1024.0 && unit < UNITS.len() - 1 {
         value /= 1024.0;
         unit += 1;
     }
@@ -82,5 +83,8 @@ mod tests {
         assert_eq!(human_bytes(512), "512 B");
         assert_eq!(human_bytes(1536), "1.5 KB");
         assert_eq!(human_bytes(1288490188), "1.2 GB");
+        assert_eq!(human_bytes(1048526), "1.0 MB");
+        assert_eq!(human_bytes(1073741823), "1.0 GB");
+        assert_eq!(human_bytes(1048576), "1.0 MB");
     }
 }
