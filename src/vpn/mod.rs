@@ -111,6 +111,11 @@ impl Vpn {
                     Ok(m) => m,
                     Err(_) => continue,
                 };
+                if !meta.is_file() {
+                    // Директория с именем вида "x.tar.gz" не должна попадать в список
+                    // бэкапов — только обычные файлы.
+                    continue;
+                }
                 let mtime = meta
                     .modified()
                     .ok()

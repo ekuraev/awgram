@@ -49,6 +49,15 @@ pub fn access_denied(lang: Lang) -> String {
     match lang { Lang::Ru => "⛔ Доступ запрещён.", Lang::En => "⛔ Access denied." }.to_string()
 }
 
+/// Уведомление для не-приватных чатов (группы/супергруппы/каналы). Бот
+/// доставляет секреты (конфиги, QR, ссылки импорта, бэкапы, диагностику check)
+/// в чат, откуда пришёл апдейт — авторизация же идёт по user_id, поэтому в
+/// группе секреты могут утечь всем участникам. Строка билингвальна, т.к. язык
+/// пользователя на этом этапе может быть ещё не определён (не-админ/новый чат).
+pub fn private_only() -> String {
+    "🔒 Бот работает только в личном чате. / Bot works only in a private chat.".to_string()
+}
+
 // --- add-диалог ---
 pub fn ask_client_name(lang: Lang) -> String {
     match lang { Lang::Ru => "Введите имя клиента:", Lang::En => "Enter client name:" }.to_string()
@@ -228,6 +237,16 @@ mod tests {
         assert_eq!(lang_code(Lang::Ru), "ru");
         assert_eq!(lang_code(Lang::En), "en");
         assert_eq!(Lang::default(), Lang::Ru);
+    }
+
+    #[test]
+    fn private_only_mentions_both_languages() {
+        // Строка билингвальна (язык может быть ещё не определён), поэтому
+        // проверяем оба маркера, а не полагаемся на конкретный Lang.
+        let text = private_only();
+        assert!(!text.is_empty());
+        assert!(text.contains("личном"));
+        assert!(text.contains("private"));
     }
 
     #[test]

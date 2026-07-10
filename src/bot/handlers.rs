@@ -136,6 +136,14 @@ async fn message_handler(
     _vpn: Arc<Vpn>,
     settings: Arc<SettingsStore>,
 ) -> HandlerResult {
+    if !msg.chat.is_private() {
+        // Бот доставляет секреты (конфиги, QR, ссылки, бэкапы, диагностику) в чат
+        // апдейта, а авторизует по user_id — в группе это грозит утечкой всем
+        // участникам. Отклоняем до auth-гейта, чтобы вообще не трогать VPN/settings.
+        bot.send_message(msg.chat.id, i18n::private_only()).await?;
+        return Ok(());
+    }
+
     let uid = user_id_of_msg(&msg).unwrap_or(0);
     if !is_admin(uid, &cfg.admin_ids) {
         tracing::warn!(user_id = uid, "отклонён доступ (message)");
@@ -234,17 +242,24 @@ async fn callback_handler(
 ) -> HandlerResult {
     bot.answer_callback_query(q.id.clone()).await.ok();
 
+    let chat = match &q.message {
+        Some(m) => m.chat(),
+        None => return Ok(()),
+    };
+    if !chat.is_private() {
+        // Секреты (конфиги, QR, ссылки, бэкапы, диагностика) уходят в чат
+        // апдейта — в группе они утекли бы всем участникам. Callback уже
+        // отвечен выше, тут просто молча отказываем без запуска VPN-действий.
+        return Ok(());
+    }
+    let chat = chat.id;
+
     let uid = user_id_of_cb(&q);
     if !is_admin(uid, &cfg.admin_ids) {
         tracing::warn!(user_id = uid, "отклонён доступ (callback)");
         return Ok(());
     }
     let lang = settings.lang(uid);
-
-    let chat = match &q.message {
-        Some(m) => m.chat().id,
-        None => return Ok(()),
-    };
 
     let data = q.data.clone().unwrap_or_default();
     match parse_callback(&data) {
