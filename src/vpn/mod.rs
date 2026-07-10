@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use crate::config::Config;
 use crate::error::Result;
 use model::{AddResult, Client};
-use runner::{run, RunSpec};
+use runner::{run, run_capture, RunSpec};
 
 pub struct Vpn {
     script: PathBuf,
@@ -40,12 +40,15 @@ impl Vpn {
         model::parse_client_list(&out).map_err(|e| crate::error::Error::Parse(e.to_string()))
     }
 
-    pub async fn add(&self, name: &str, expires: Option<&str>) -> Result<AddResult> {
+    pub async fn add(&self, name: &str, expires: Option<&str>, psk: bool) -> Result<AddResult> {
         let name = validate::validate_name(name).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
         let mut args: Vec<String> = vec!["add".into(), name.clone()];
         if let Some(exp) = expires {
             let exp = validate::validate_expiry(exp).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
             args.push(format!("--expires={exp}"));
+        }
+        if psk {
+            args.push("--psk".into());
         }
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         // `add` prints no JSON — just human-readable logs. The created files are
@@ -88,6 +91,80 @@ impl Vpn {
         let raw = std::fs::read_to_string(path).ok()?;
         raw.trim().parse::<i64>().ok()
     }
+
+    fn backups_dir(&self) -> PathBuf {
+        self.clients_dir.join("backups")
+    }
+
+    /// Читает `clients_dir/backups/`, отбирая только `*.tar.gz`, отсортированные по mtime убыв.
+    pub fn list_backups(&self) -> Result<Vec<BackupFile>> {
+        let dir = self.backups_dir();
+        let mut out = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for e in entries.flatten() {
+                let path = e.path();
+                let name = e.file_name().to_string_lossy().into_owned();
+                if !name.ends_with(".tar.gz") {
+                    continue;
+                }
+                let meta = match e.metadata() {
+                    Ok(m) => m,
+                    Err(_) => continue,
+                };
+                if !meta.is_file() {
+                    // Директория с именем вида "x.tar.gz" не должна попадать в список
+                    // бэкапов — только обычные файлы.
+                    continue;
+                }
+                let mtime = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                out.push(BackupFile { name, path, size: meta.len(), mtime });
+            }
+        }
+        out.sort_by(|a, b| b.mtime.cmp(&a.mtime));
+        Ok(out)
+    }
+
+    /// Запускает `backup` и возвращает свежесозданный архив (самый новый по mtime).
+    pub async fn backup(&self) -> Result<BackupFile> {
+        run(&self.spec(), &["backup"]).await?;
+        self.list_backups()?
+            .into_iter()
+            .next()
+            .ok_or_else(|| crate::error::Error::Parse("бэкап не найден после создания".into()))
+    }
+
+    /// Восстанавливает из бэкапа по индексу в списке `list_backups()` (0 = самый новый).
+    pub async fn restore(&self, index: usize) -> Result<()> {
+        let backups = self.list_backups()?;
+        let bf = backups.get(index).ok_or_else(|| crate::error::Error::Parse("бэкап не найден".into()))?;
+        // basename-валидация: имя без разделителей пути и по шаблону
+        if bf.name.contains('/') || !bf.name.starts_with("awg_backup_") || !bf.name.ends_with(".tar.gz") {
+            return Err(crate::error::Error::Parse("некорректное имя бэкапа".into()));
+        }
+        let path = bf.path.to_string_lossy().into_owned();
+        run(&self.spec(), &["restore", &path]).await?;
+        Ok(())
+    }
+
+    /// Запускает `check` и возвращает stdout независимо от кода выхода
+    /// (ненулевой код означает «обнаружены проблемы», а не ошибку выполнения).
+    pub async fn check(&self) -> Result<String> {
+        let (out, _code) = run_capture(&self.spec(), &["check"]).await?;
+        Ok(out)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BackupFile {
+    pub name: String,
+    pub path: PathBuf,
+    pub size: u64,
+    pub mtime: i64,
 }
 
 #[cfg(test)]
@@ -127,7 +204,7 @@ mod tests {
     #[tokio::test]
     async fn add_rejects_bad_name_before_running() {
         let (_d, vpn) = vpn_with_script("#!/bin/sh\necho should-not-run 1>&2\nexit 1\n");
-        let err = vpn.add("bad name;rm", None).await.unwrap_err();
+        let err = vpn.add("bad name;rm", None, false).await.unwrap_err();
         // Ошибка валидации, а не запуска скрипта.
         assert!(matches!(err, crate::error::Error::Parse(_)));
     }
@@ -137,7 +214,7 @@ mod tests {
         // Real `add` prints no JSON — just logs — and creates `<name>.conf` on disk.
         let (dir, vpn) = vpn_with_script("#!/bin/sh\nexit 0\n");
         std::fs::write(dir.path().join("alice.conf"), "conf").unwrap();
-        let res = vpn.add("alice", None).await.unwrap();
+        let res = vpn.add("alice", None, false).await.unwrap();
         assert!(res.conf_path.ends_with("alice.conf"));
         assert_eq!(res.uri, "");
     }
@@ -145,8 +222,25 @@ mod tests {
     #[tokio::test]
     async fn add_errors_when_script_did_not_create_conf() {
         let (_d, vpn) = vpn_with_script("#!/bin/sh\nexit 0\n");
-        let err = vpn.add("alice", None).await.unwrap_err();
+        let err = vpn.add("alice", None, false).await.unwrap_err();
         assert!(matches!(err, crate::error::Error::Parse(_)));
+    }
+
+    #[tokio::test]
+    async fn add_passes_psk_flag() {
+        // argv: $0=script, $1="add", $2=<name>, [$3.. flags]. Stub only creates
+        // `<name>.conf` when `--psk` is among the args — proves the flag
+        // actually reaches the script invocation.
+        const STUB: &str = "#!/bin/sh\nname=\"$2\"\nfor a in \"$@\"; do\n  if [ \"$a\" = \"--psk\" ]; then\n    touch \"$(dirname \"$0\")/$name.conf\"\n    exit 0\n  fi\ndone\nexit 1\n";
+
+        let (dir, vpn) = vpn_with_script(STUB);
+        let res = vpn.add("alice", None, true).await;
+        assert!(res.is_ok(), "expected Ok with --psk passed, got {res:?}");
+        drop(dir);
+
+        let (_d2, vpn2) = vpn_with_script(STUB);
+        let err = vpn2.add("bob", None, false).await;
+        assert!(err.is_err(), "expected Err without --psk, got {err:?}");
     }
 
     #[test]
@@ -203,5 +297,43 @@ mod tests {
         let (_d, vpn) = vpn_with_script("#!/bin/sh\n");
         assert_eq!(vpn.client_expiry("../etc/passwd"), None);
         assert_eq!(vpn.client_expiry("a/b"), None);
+    }
+
+    #[tokio::test]
+    async fn backup_returns_newest_archive() {
+        // заглушка создаёт файл в clients_dir/backups/
+        let (dir, vpn) = vpn_with_script(
+            "#!/bin/sh\nmkdir -p \"$(dirname \"$0\")/../backups\" 2>/dev/null; true\n",
+        );
+        let bdir = dir.path().join("backups");
+        std::fs::create_dir_all(&bdir).unwrap();
+        std::fs::write(bdir.join("awg_backup_2026-01-01_00-00-00.000Z.tar.gz"), b"x").unwrap();
+        let bf = vpn.backup().await.unwrap();
+        assert!(bf.name.ends_with(".tar.gz"));
+    }
+
+    #[test]
+    fn list_backups_sorted_and_filtered() {
+        let (dir, vpn) = vpn_with_script("#!/bin/sh\n");
+        let bdir = dir.path().join("backups");
+        std::fs::create_dir_all(&bdir).unwrap();
+        std::fs::write(bdir.join("awg_backup_a.tar.gz"), b"x").unwrap();
+        std::fs::write(bdir.join("note.txt"), b"x").unwrap(); // должен быть отфильтрован
+        let list = vpn.list_backups().unwrap();
+        assert_eq!(list.len(), 1);
+        assert!(list[0].name.ends_with(".tar.gz"));
+    }
+
+    #[tokio::test]
+    async fn restore_rejects_out_of_range() {
+        let (_d, vpn) = vpn_with_script("#!/bin/sh\n");
+        assert!(matches!(vpn.restore(999).await, Err(crate::error::Error::Parse(_))));
+    }
+
+    #[tokio::test]
+    async fn check_returns_output_even_on_problems() {
+        let (_d, vpn) = vpn_with_script("#!/bin/sh\necho 'ПРОБЛЕМЫ'\nexit 1\n");
+        let out = vpn.check().await.unwrap();
+        assert!(out.contains("ПРОБЛЕМЫ"));
     }
 }

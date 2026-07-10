@@ -1,5 +1,7 @@
 use serde::Deserialize;
 
+use crate::i18n::Lang;
+
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct Client {
     pub name: String,
@@ -54,38 +56,53 @@ pub fn human_bytes(n: u64) -> String {
 
 /// Человекочитаемое «сколько назад» для last_handshake (epoch, сек).
 /// `now` — текущее время (epoch, сек), передаётся явно ради тестируемости.
-pub fn format_handshake(now: i64, hs: i64) -> String {
+pub fn format_handshake(lang: Lang, now: i64, hs: i64) -> String {
     if hs <= 0 {
-        return "никогда".to_string();
+        return match lang { Lang::Ru => "никогда", Lang::En => "never" }.to_string();
     }
     let d = now - hs;
     if d < 0 {
-        return "только что".to_string();
+        return match lang { Lang::Ru => "только что", Lang::En => "just now" }.to_string();
     }
     if d < 60 {
-        "только что".to_string()
+        match lang { Lang::Ru => "только что", Lang::En => "just now" }.to_string()
     } else if d < 3600 {
-        format!("{} мин назад", d / 60)
+        match lang {
+            Lang::Ru => format!("{} мин назад", d / 60),
+            Lang::En => format!("{} min ago", d / 60),
+        }
     } else if d < 86400 {
-        format!("{} ч назад", d / 3600)
+        match lang {
+            Lang::Ru => format!("{} ч назад", d / 3600),
+            Lang::En => format!("{} h ago", d / 3600),
+        }
     } else {
-        format!("{} дн назад", d / 86400)
+        match lang {
+            Lang::Ru => format!("{} дн назад", d / 86400),
+            Lang::En => format!("{} d ago", d / 86400),
+        }
     }
 }
 
 /// Человекочитаемый срок действия. None → бессрочно.
-pub fn format_expiry(now: i64, exp: Option<i64>) -> String {
+pub fn format_expiry(lang: Lang, now: i64, exp: Option<i64>) -> String {
     match exp {
-        None => "бессрочно".to_string(),
-        Some(e) if e <= now => "истёк".to_string(),
+        None => match lang { Lang::Ru => "бессрочно", Lang::En => "no expiry" }.to_string(),
+        Some(e) if e <= now => match lang { Lang::Ru => "истёк", Lang::En => "expired" }.to_string(),
         Some(e) => {
             let d = e - now;
             if d >= 86400 {
-                format!("ещё {} дн", d / 86400)
+                match lang {
+                    Lang::Ru => format!("ещё {} дн", d / 86400),
+                    Lang::En => format!("{} d left", d / 86400),
+                }
             } else if d >= 3600 {
-                format!("ещё {} ч", d / 3600)
+                match lang {
+                    Lang::Ru => format!("ещё {} ч", d / 3600),
+                    Lang::En => format!("{} h left", d / 3600),
+                }
             } else {
-                "< 1 ч".to_string()
+                match lang { Lang::Ru => "< 1 ч", Lang::En => "< 1 h" }.to_string()
             }
         }
     }
@@ -156,101 +173,159 @@ mod tests {
 
     #[test]
     fn format_handshake_never() {
-        assert_eq!(format_handshake(1_700_000_000, 0), "никогда");
+        assert_eq!(format_handshake(Lang::Ru, 1_700_000_000, 0), "никогда");
+    }
+
+    #[test]
+    fn format_handshake_never_en() {
+        assert_eq!(format_handshake(Lang::En, 2_000_000, 0), "never");
     }
 
     #[test]
     fn format_handshake_just_now() {
         let now = 1_700_000_000;
-        assert_eq!(format_handshake(now, now - 30), "только что");
+        assert_eq!(format_handshake(Lang::Ru, now, now - 30), "только что");
+    }
+
+    #[test]
+    fn format_handshake_just_now_en() {
+        assert_eq!(format_handshake(Lang::En, 1_700_000_000, 1_700_000_100), "just now");
     }
 
     #[test]
     fn format_handshake_minutes_ago() {
         let now = 1_700_000_000;
-        assert_eq!(format_handshake(now, now - 600), "10 мин назад");
+        assert_eq!(format_handshake(Lang::Ru, now, now - 600), "10 мин назад");
+    }
+
+    #[test]
+    fn format_handshake_minutes_ago_en() {
+        let now = 1_700_000_000;
+        assert_eq!(format_handshake(Lang::En, now, now - 600), "10 min ago");
     }
 
     #[test]
     fn format_handshake_hours_ago() {
         let now = 1_700_000_000;
-        assert_eq!(format_handshake(now, now - 7200), "2 ч назад");
+        assert_eq!(format_handshake(Lang::Ru, now, now - 7200), "2 ч назад");
+    }
+
+    #[test]
+    fn format_handshake_hours_ago_en() {
+        let now = 1_700_000_000;
+        assert_eq!(format_handshake(Lang::En, now, now - 7200), "2 h ago");
     }
 
     #[test]
     fn format_handshake_days_ago() {
         let now = 1_700_000_000;
-        assert_eq!(format_handshake(now, now - 172800), "2 дн назад");
+        assert_eq!(format_handshake(Lang::Ru, now, now - 172800), "2 дн назад");
+    }
+
+    #[test]
+    fn format_handshake_days_ago_en() {
+        let now = 1_700_000_000;
+        assert_eq!(format_handshake(Lang::En, now, now - 172800), "2 d ago");
     }
 
     #[test]
     fn format_expiry_none_is_unlimited() {
-        assert_eq!(format_expiry(1_700_000_000, None), "бессрочно");
+        assert_eq!(format_expiry(Lang::Ru, 1_700_000_000, None), "бессрочно");
+    }
+
+    #[test]
+    fn format_expiry_none_is_unlimited_en() {
+        assert_eq!(format_expiry(Lang::En, 1_700_000_000, None), "no expiry");
     }
 
     #[test]
     fn format_expiry_past_is_expired() {
         let now = 1_700_000_000;
-        assert_eq!(format_expiry(now, Some(now - 1)), "истёк");
-        assert_eq!(format_expiry(now, Some(now)), "истёк");
+        assert_eq!(format_expiry(Lang::Ru, now, Some(now - 1)), "истёк");
+        assert_eq!(format_expiry(Lang::Ru, now, Some(now)), "истёк");
+    }
+
+    #[test]
+    fn format_expiry_past_is_expired_en() {
+        let now = 1_700_000_000;
+        assert_eq!(format_expiry(Lang::En, now, Some(now - 1)), "expired");
+        assert_eq!(format_expiry(Lang::En, now, Some(now)), "expired");
     }
 
     #[test]
     fn format_expiry_days_remaining() {
         let now = 1_700_000_000;
-        assert_eq!(format_expiry(now, Some(now + 172800)), "ещё 2 дн");
+        assert_eq!(format_expiry(Lang::Ru, now, Some(now + 172800)), "ещё 2 дн");
+    }
+
+    #[test]
+    fn format_expiry_days_remaining_en() {
+        let now = 1_700_000_000;
+        assert_eq!(format_expiry(Lang::En, now, Some(now + 86400)), "1 d left");
     }
 
     #[test]
     fn format_expiry_hours_remaining() {
         let now = 1_700_000_000;
-        assert_eq!(format_expiry(now, Some(now + 7200)), "ещё 2 ч");
+        assert_eq!(format_expiry(Lang::Ru, now, Some(now + 7200)), "ещё 2 ч");
+    }
+
+    #[test]
+    fn format_expiry_hours_remaining_en() {
+        let now = 1_700_000_000;
+        assert_eq!(format_expiry(Lang::En, now, Some(now + 7200)), "2 h left");
     }
 
     #[test]
     fn format_expiry_under_an_hour_remaining() {
         let now = 1_700_000_000;
-        assert_eq!(format_expiry(now, Some(now + 600)), "< 1 ч");
+        assert_eq!(format_expiry(Lang::Ru, now, Some(now + 600)), "< 1 ч");
+    }
+
+    #[test]
+    fn format_expiry_under_an_hour_remaining_en() {
+        let now = 1_700_000_000;
+        assert_eq!(format_expiry(Lang::En, now, Some(now + 600)), "< 1 h");
     }
 
     #[test]
     fn format_handshake_future_reads_just_now() {
-        assert_eq!(format_handshake(1_700_000_000, 1_700_000_100), "только что");
+        assert_eq!(format_handshake(Lang::Ru, 1_700_000_000, 1_700_000_100), "только что");
     }
 
     #[test]
     fn format_handshake_boundary_60_seconds() {
         let now = 2_000_000;
-        assert_eq!(format_handshake(now, now - 60), "1 мин назад");
+        assert_eq!(format_handshake(Lang::Ru, now, now - 60), "1 мин назад");
     }
 
     #[test]
     fn format_handshake_boundary_3600_seconds() {
         let now = 2_000_000;
-        assert_eq!(format_handshake(now, now - 3600), "1 ч назад");
+        assert_eq!(format_handshake(Lang::Ru, now, now - 3600), "1 ч назад");
     }
 
     #[test]
     fn format_handshake_boundary_86400_seconds() {
         let now = 2_000_000;
-        assert_eq!(format_handshake(now, now - 86400), "1 дн назад");
+        assert_eq!(format_handshake(Lang::Ru, now, now - 86400), "1 дн назад");
     }
 
     #[test]
     fn format_expiry_boundary_1_hour() {
         let now = 2_000_000;
-        assert_eq!(format_expiry(now, Some(now + 3600)), "ещё 1 ч");
+        assert_eq!(format_expiry(Lang::Ru, now, Some(now + 3600)), "ещё 1 ч");
     }
 
     #[test]
     fn format_expiry_boundary_1_day() {
         let now = 2_000_000;
-        assert_eq!(format_expiry(now, Some(now + 86400)), "ещё 1 дн");
+        assert_eq!(format_expiry(Lang::Ru, now, Some(now + 86400)), "ещё 1 дн");
     }
 
     #[test]
     fn format_expiry_boundary_exactly_now() {
         let now = 2_000_000;
-        assert_eq!(format_expiry(now, Some(now)), "истёк");
+        assert_eq!(format_expiry(Lang::Ru, now, Some(now)), "истёк");
     }
 }

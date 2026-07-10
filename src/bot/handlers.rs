@@ -3,13 +3,15 @@ use std::sync::Arc;
 use teloxide::dispatching::dialogue::InMemStorage;
 use teloxide::dispatching::{HandlerExt, UpdateFilterExt};
 use teloxide::prelude::*;
-use teloxide::types::CallbackQuery;
+use teloxide::types::{CallbackQuery, InputFile, ParseMode};
 
 use crate::auth::is_admin;
 use crate::bot::menu;
 use crate::bot::render::{self, format_client_card, format_stats};
 use crate::bot::State;
 use crate::config::Config;
+use crate::i18n::{self, Lang};
+use crate::settings::SettingsStore;
 use crate::vpn::Vpn;
 
 #[derive(Debug, PartialEq)]
@@ -24,6 +26,19 @@ pub enum Action {
     AskDelete(String),
     ConfirmDelete(String),
     Expiry(String), // "none" | "1d" | ... | "custom"
+    Lang(String),   // "ru" | "en" — язык-гейт при первом /start
+    Settings,
+    SetLang(String), // "ru" | "en" — смена языка из экрана настроек
+    SetPsk(bool),
+    AddPsk(bool),
+    Backup,
+    BackupNew,
+    BackupList,
+    BackupCard(usize),
+    BackupDownload(usize),
+    Restore(usize),
+    RestoreYes(usize),
+    Check,
     Unknown,
 }
 
@@ -33,6 +48,11 @@ fn parse_callback(data: &str) -> Action {
         "list" => Action::List,
         "add" => Action::Add,
         "stats" => Action::Stats,
+        "settings" => Action::Settings,
+        "backup" => Action::Backup,
+        "bk:new" => Action::BackupNew,
+        "bk:list" => Action::BackupList,
+        "check" => Action::Check,
         _ => {
             if let Some(v) = data.strip_prefix("page:") {
                 v.parse().map(Action::Page).unwrap_or(Action::Unknown)
@@ -48,6 +68,31 @@ fn parse_callback(data: &str) -> Action {
                 Action::AskDelete(v.to_string())
             } else if let Some(v) = data.strip_prefix("exp:") {
                 Action::Expiry(v.to_string())
+            } else if let Some(v) = data.strip_prefix("add:psk:") {
+                // No collision with the exact-match "add" arm above (that's a
+                // full-string match, not a prefix), but kept ahead of any
+                // future generic "add:" prefix for the same reason as
+                // delyes:/del: and set:lang:/lang: below.
+                Action::AddPsk(v == "on")
+            } else if let Some(v) = data.strip_prefix("set:lang:") {
+                // Must be checked before the general "lang:" prefix — same reason
+                // as delyes:/del: above ("set:lang:ru" also starts with "set:").
+                Action::SetLang(v.to_string())
+            } else if let Some(v) = data.strip_prefix("set:psk:") {
+                Action::SetPsk(v == "on")
+            } else if let Some(v) = data.strip_prefix("lang:") {
+                Action::Lang(v.to_string())
+            } else if let Some(v) = data.strip_prefix("bk:restore_yes:") {
+                // Must be checked before "bk:restore:" — otherwise "bk:restore:"
+                // prefix-matches "bk:restore_yes:..." and confirmed restores get
+                // misparsed as restore-asks (same pattern as delyes:/del:).
+                v.parse().map(Action::RestoreYes).unwrap_or(Action::Unknown)
+            } else if let Some(v) = data.strip_prefix("bk:restore:") {
+                v.parse().map(Action::Restore).unwrap_or(Action::Unknown)
+            } else if let Some(v) = data.strip_prefix("bk:card:") {
+                v.parse().map(Action::BackupCard).unwrap_or(Action::Unknown)
+            } else if let Some(v) = data.strip_prefix("bk:dl:") {
+                v.parse().map(Action::BackupDownload).unwrap_or(Action::Unknown)
             } else {
                 Action::Unknown
             }
@@ -66,19 +111,47 @@ fn user_id_of_cb(q: &CallbackQuery) -> i64 {
     q.from.id.0 as i64
 }
 
+/// Локальный текст сессии-таймаута: не входит в каталог `i18n` (см. brief
+/// задачи 5 — новые фичи в других задачах), но всё равно локализуется, чтобы
+/// не оставлять непереведённых строк в слое `bot/`.
+fn session_expired_text(lang: Lang) -> &'static str {
+    match lang {
+        Lang::Ru => "Сессия устарела. Начните заново.",
+        Lang::En => "Session expired. Start again.",
+    }
+}
+
+fn unknown_action_text(lang: Lang) -> &'static str {
+    match lang {
+        Lang::Ru => "Неизвестное действие.",
+        Lang::En => "Unknown action.",
+    }
+}
+
 async fn message_handler(
     bot: Bot,
     dialogue: MyDialogue,
     msg: Message,
     cfg: Arc<Config>,
-    vpn: Arc<Vpn>,
+    _vpn: Arc<Vpn>,
+    settings: Arc<SettingsStore>,
 ) -> HandlerResult {
+    if !msg.chat.is_private() {
+        // Бот доставляет секреты (конфиги, QR, ссылки, бэкапы, диагностику) в чат
+        // апдейта, а авторизует по user_id — в группе это грозит утечкой всем
+        // участникам. Отклоняем до auth-гейта, чтобы вообще не трогать VPN/settings.
+        bot.send_message(msg.chat.id, i18n::private_only()).await?;
+        return Ok(());
+    }
+
     let uid = user_id_of_msg(&msg).unwrap_or(0);
     if !is_admin(uid, &cfg.admin_ids) {
         tracing::warn!(user_id = uid, "отклонён доступ (message)");
-        bot.send_message(msg.chat.id, "⛔ Доступ запрещён.").await?;
+        let lang = settings.lang(uid);
+        bot.send_message(msg.chat.id, i18n::access_denied(lang)).await?;
         return Ok(());
     }
+    let lang = settings.lang(uid);
 
     let state = dialogue.get().await?.unwrap_or_default();
     match state {
@@ -86,13 +159,17 @@ async fn message_handler(
             let name = msg.text().unwrap_or_default().to_string();
             match crate::vpn::validate::validate_name(&name) {
                 Ok(valid) => {
-                    bot.send_message(msg.chat.id, format!("Клиент: {valid}\nВыберите срок действия:"))
-                        .reply_markup(menu::expiry_menu())
+                    let confirm_line = match lang {
+                        Lang::Ru => format!("Клиент: {valid}"),
+                        Lang::En => format!("Client: {valid}"),
+                    };
+                    bot.send_message(msg.chat.id, format!("{confirm_line}\n{}", i18n::ask_expiry(lang)))
+                        .reply_markup(menu::expiry_menu(lang))
                         .await?;
                     dialogue.update(State::AwaitingExpiry { name: valid }).await?;
                 }
-                Err(e) => {
-                    bot.send_message(msg.chat.id, format!("⚠️ {e}\nВведите имя ещё раз:")).await?;
+                Err(_e) => {
+                    bot.send_message(msg.chat.id, i18n::bad_name(lang)).await?;
                 }
             }
         }
@@ -100,43 +177,59 @@ async fn message_handler(
             let raw = msg.text().unwrap_or_default().to_string();
             match crate::vpn::validate::validate_expiry(&raw) {
                 Ok(exp) => {
-                    finish_add(&bot, msg.chat.id, &vpn, &name, Some(&exp)).await;
-                    dialogue.exit().await?;
+                    bot.send_message(msg.chat.id, i18n::psk_step(lang, settings.psk_default()))
+                        .reply_markup(menu::psk_step(lang, settings.psk_default()))
+                        .parse_mode(ParseMode::Html)
+                        .await?;
+                    dialogue.update(State::AwaitingPsk { name, expires: Some(exp) }).await?;
                 }
-                Err(e) => {
-                    bot.send_message(msg.chat.id, format!("⚠️ {e}")).await?;
+                Err(_e) => {
+                    bot.send_message(msg.chat.id, i18n::bad_expiry(lang)).await?;
                 }
             }
         }
         _ => {
-            // /start и всё прочее — показать меню
-            bot.send_message(msg.chat.id, "🔐 AmneziaWG — управление VPN")
-                .reply_markup(menu::main_menu())
-                .await?;
+            // /start и всё прочее.
+            if !settings.has_lang(uid) {
+                // Язык-гейт: пользователь ещё не выбрал язык — показать выбор
+                // без parse_mode (choose_language() не содержит HTML-разметки).
+                bot.send_message(msg.chat.id, i18n::choose_language())
+                    .reply_markup(menu::language_select())
+                    .await?;
+            } else {
+                bot.send_message(msg.chat.id, i18n::menu_title(lang))
+                    .reply_markup(menu::main_menu(lang))
+                    .parse_mode(ParseMode::Html)
+                    .await?;
+            }
             dialogue.update(State::Idle).await?;
         }
     }
     Ok(())
 }
 
-async fn finish_add(bot: &Bot, chat: ChatId, vpn: &Vpn, name: &str, expires: Option<&str>) {
-    let waiting = bot.send_message(chat, "⏳ Создаю клиента…").await.ok();
-    match vpn.add(name, expires).await {
+async fn finish_add(bot: &Bot, chat: ChatId, vpn: &Vpn, lang: Lang, name: &str, expires: Option<&str>, psk: bool) {
+    let waiting = bot.send_message(chat, i18n::creating(lang)).await.ok();
+    match vpn.add(name, expires, psk).await {
         Ok(res) => {
-            if let Err(e) = render::send_client_files(bot, chat, &res).await {
+            if let Err(e) = render::send_client_files(bot, chat, lang, &res).await {
                 tracing::error!(error = %e, "не удалось отправить файлы клиента");
-                let _ = bot.send_message(chat, e.user_message()).await;
+                let _ = bot.send_message(chat, i18n::error_text(lang, &e)).await;
             }
         }
         Err(e) => {
             tracing::error!(error = %e, "add провалился");
-            let _ = bot.send_message(chat, e.user_message()).await;
+            let _ = bot.send_message(chat, i18n::error_text(lang, &e)).await;
         }
     }
     if let Some(m) = waiting {
         let _ = bot.delete_message(chat, m.id).await;
     }
-    let _ = bot.send_message(chat, "Готово.").reply_markup(menu::main_menu()).await;
+    let _ = bot
+        .send_message(chat, i18n::done(lang))
+        .reply_markup(menu::main_menu(lang))
+        .parse_mode(ParseMode::Html)
+        .await;
 }
 
 async fn callback_handler(
@@ -145,58 +238,75 @@ async fn callback_handler(
     q: CallbackQuery,
     cfg: Arc<Config>,
     vpn: Arc<Vpn>,
+    settings: Arc<SettingsStore>,
 ) -> HandlerResult {
     bot.answer_callback_query(q.id.clone()).await.ok();
+
+    let chat = match &q.message {
+        Some(m) => m.chat(),
+        None => return Ok(()),
+    };
+    if !chat.is_private() {
+        // Секреты (конфиги, QR, ссылки, бэкапы, диагностика) уходят в чат
+        // апдейта — в группе они утекли бы всем участникам. Callback уже
+        // отвечен выше, тут просто молча отказываем без запуска VPN-действий.
+        return Ok(());
+    }
+    let chat = chat.id;
 
     let uid = user_id_of_cb(&q);
     if !is_admin(uid, &cfg.admin_ids) {
         tracing::warn!(user_id = uid, "отклонён доступ (callback)");
         return Ok(());
     }
-
-    let chat = match &q.message {
-        Some(m) => m.chat().id,
-        None => return Ok(()),
-    };
+    let lang = settings.lang(uid);
 
     let data = q.data.clone().unwrap_or_default();
     match parse_callback(&data) {
         Action::Menu => {
             dialogue.update(State::Idle).await?;
-            bot.send_message(chat, "🔐 AmneziaWG").reply_markup(menu::main_menu()).await?;
+            bot.send_message(chat, i18n::menu_title(lang))
+                .reply_markup(menu::main_menu(lang))
+                .parse_mode(ParseMode::Html)
+                .await?;
         }
         Action::List => match vpn.list().await {
             Ok(clients) if clients.is_empty() => {
-                bot.send_message(chat, "Пока нет клиентов.").reply_markup(menu::main_menu()).await?;
+                bot.send_message(chat, i18n::clients_empty(lang))
+                    .reply_markup(menu::main_menu(lang))
+                    .await?;
             }
             Ok(clients) => {
-                bot.send_message(chat, "👥 Клиенты:")
-                    .reply_markup(menu::clients_list(&clients, 0, 8))
+                bot.send_message(chat, i18n::clients_title(lang))
+                    .reply_markup(menu::clients_list(lang, &clients, 0, 8))
+                    .parse_mode(ParseMode::Html)
                     .await?;
             }
             Err(e) => {
                 tracing::error!(error = %e, "list провалился");
-                bot.send_message(chat, e.user_message()).await?;
+                bot.send_message(chat, i18n::error_text(lang, &e)).await?;
             }
         },
         Action::Page(p) => match vpn.list().await {
             Ok(clients) => {
-                bot.send_message(chat, "👥 Клиенты:")
-                    .reply_markup(menu::clients_list(&clients, p, 8))
+                bot.send_message(chat, i18n::clients_title(lang))
+                    .reply_markup(menu::clients_list(lang, &clients, p, 8))
+                    .parse_mode(ParseMode::Html)
                     .await?;
             }
             Err(e) => {
-                bot.send_message(chat, e.user_message()).await?;
+                bot.send_message(chat, i18n::error_text(lang, &e)).await?;
             }
         },
         Action::Stats => match vpn.stats().await {
             Ok(clients) => {
-                bot.send_message(chat, format_stats(&clients))
-                    .reply_markup(menu::main_menu())
+                bot.send_message(chat, format_stats(lang, &clients))
+                    .reply_markup(menu::main_menu(lang))
+                    .parse_mode(ParseMode::Html)
                     .await?;
             }
             Err(e) => {
-                bot.send_message(chat, e.user_message()).await?;
+                bot.send_message(chat, i18n::error_text(lang, &e)).await?;
             }
         },
         Action::ShowClient(name) => match vpn.stats().await {
@@ -207,79 +317,279 @@ async fn callback_handler(
                         .map(|d| d.as_secs() as i64)
                         .unwrap_or(0);
                     let expiry = vpn.client_expiry(&name);
-                    bot.send_message(chat, format_client_card(c, now, expiry))
-                        .reply_markup(menu::client_card(&name))
+                    bot.send_message(chat, format_client_card(lang, c, now, expiry))
+                        .reply_markup(menu::client_card(lang, &name))
+                        .parse_mode(ParseMode::Html)
                         .await?;
                 }
                 None => {
-                    bot.send_message(chat, "Клиент не найден.").await?;
+                    bot.send_message(chat, i18n::not_found(lang)).await?;
                 }
             },
             Err(e) => {
-                bot.send_message(chat, e.user_message()).await?;
+                bot.send_message(chat, i18n::error_text(lang, &e)).await?;
             }
         },
         Action::SendConf(name) => {
             // Повторная выдача: читаем уже существующие .conf/.png/.vpnuri из clients_dir.
             match vpn.existing_files(&name) {
                 Ok(res) => {
-                    if let Err(e) = render::send_client_files(&bot, chat, &res).await {
-                        bot.send_message(chat, e.user_message()).await?;
+                    if let Err(e) = render::send_client_files(&bot, chat, lang, &res).await {
+                        bot.send_message(chat, i18n::error_text(lang, &e)).await?;
                     }
                 }
                 Err(e) => {
-                    bot.send_message(chat, e.user_message()).await?;
+                    bot.send_message(chat, i18n::error_text(lang, &e)).await?;
                 }
             }
         }
         Action::AskDelete(name) => {
-            bot.send_message(chat, format!("Точно удалить {name}?"))
-                .reply_markup(menu::confirm_delete(&name))
+            bot.send_message(chat, i18n::confirm_delete(lang, &name))
+                .reply_markup(menu::confirm_delete(lang, &name))
+                .parse_mode(ParseMode::Html)
                 .await?;
         }
         Action::ConfirmDelete(name) => match vpn.remove(&name).await {
             Ok(()) => {
-                bot.send_message(chat, format!("🗑 Клиент {name} удалён."))
-                    .reply_markup(menu::main_menu())
+                bot.send_message(chat, i18n::deleted(lang, &name))
+                    .reply_markup(menu::main_menu(lang))
+                    .parse_mode(ParseMode::Html)
                     .await?;
             }
             Err(e) => {
                 tracing::error!(error = %e, "remove провалился");
-                bot.send_message(chat, e.user_message()).await?;
+                bot.send_message(chat, i18n::error_text(lang, &e)).await?;
             }
         },
         Action::Add => {
-            bot.send_message(chat, "Введите имя клиента:").await?;
+            bot.send_message(chat, i18n::ask_client_name(lang)).await?;
             dialogue.update(State::AwaitingName).await?;
         }
         Action::Expiry(kind) => {
             let name = match dialogue.get().await?.unwrap_or_default() {
                 State::AwaitingExpiry { name } => name,
                 _ => {
-                    bot.send_message(chat, "Сессия устарела. Начните заново.")
-                        .reply_markup(menu::main_menu())
+                    bot.send_message(chat, session_expired_text(lang))
+                        .reply_markup(menu::main_menu(lang))
+                        .parse_mode(ParseMode::Html)
                         .await?;
                     return Ok(());
                 }
             };
             if kind == "custom" {
-                bot.send_message(chat, "Введите срок (например 10d, 12h, 3w):").await?;
+                bot.send_message(chat, i18n::ask_custom_expiry(lang)).await?;
                 dialogue.update(State::AwaitingCustomExpiry { name }).await?;
             } else {
-                let expires = if kind == "none" { None } else { Some(kind.as_str()) };
-                finish_add(&bot, chat, &vpn, &name, expires).await;
-                dialogue.exit().await?;
+                let expires = if kind == "none" { None } else { Some(kind.clone()) };
+                bot.send_message(chat, i18n::psk_step(lang, settings.psk_default()))
+                    .reply_markup(menu::psk_step(lang, settings.psk_default()))
+                    .parse_mode(ParseMode::Html)
+                    .await?;
+                dialogue.update(State::AwaitingPsk { name, expires }).await?;
+            }
+        }
+        Action::AddPsk(psk) => {
+            let (name, expires) = match dialogue.get().await?.unwrap_or_default() {
+                State::AwaitingPsk { name, expires } => (name, expires),
+                _ => {
+                    bot.send_message(chat, session_expired_text(lang))
+                        .reply_markup(menu::main_menu(lang))
+                        .parse_mode(ParseMode::Html)
+                        .await?;
+                    return Ok(());
+                }
+            };
+            finish_add(&bot, chat, &vpn, lang, &name, expires.as_deref(), psk).await;
+            dialogue.exit().await?;
+        }
+        Action::Settings => {
+            bot.send_message(chat, i18n::settings_title(lang, settings.psk_default()))
+                .reply_markup(menu::settings_menu(lang, settings.psk_default()))
+                .parse_mode(ParseMode::Html)
+                .await?;
+        }
+        Action::Lang(code) => {
+            if let Some(l) = i18n::parse_lang(&code) {
+                settings.set_lang(uid, l);
+            }
+            let lang = settings.lang(uid);
+            bot.send_message(chat, i18n::menu_title(lang))
+                .reply_markup(menu::main_menu(lang))
+                .parse_mode(ParseMode::Html)
+                .await?;
+        }
+        Action::SetLang(code) => {
+            if let Some(l) = i18n::parse_lang(&code) {
+                settings.set_lang(uid, l);
+            }
+            let lang = settings.lang(uid);
+            bot.send_message(chat, i18n::settings_title(lang, settings.psk_default()))
+                .reply_markup(menu::settings_menu(lang, settings.psk_default()))
+                .parse_mode(ParseMode::Html)
+                .await?;
+        }
+        Action::SetPsk(on) => {
+            settings.set_psk_default(on);
+            bot.send_message(chat, i18n::settings_title(lang, settings.psk_default()))
+                .reply_markup(menu::settings_menu(lang, settings.psk_default()))
+                .parse_mode(ParseMode::Html)
+                .await?;
+        }
+        Action::Backup => {
+            bot.send_message(chat, i18n::backup_menu_title(lang))
+                .reply_markup(menu::backup_menu(lang))
+                .parse_mode(ParseMode::Html)
+                .await?;
+        }
+        Action::BackupNew => {
+            let waiting = bot.send_message(chat, i18n::backup_creating(lang)).await.ok();
+            match vpn.backup().await {
+                Ok(bf) => {
+                    // Свежесозданный бэкап — самый новый по mtime, т.е. индекс 0 в list_backups().
+                    bot.send_message(chat, i18n::backup_done(lang, &bf.name))
+                        .reply_markup(menu::backup_card(lang, 0))
+                        .parse_mode(ParseMode::Html)
+                        .await?;
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "backup провалился");
+                    bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                }
+            }
+            if let Some(m) = waiting {
+                let _ = bot.delete_message(chat, m.id).await;
+            }
+        }
+        Action::BackupList => match vpn.list_backups() {
+            Ok(list) if list.is_empty() => {
+                bot.send_message(chat, i18n::backups_empty(lang))
+                    .reply_markup(menu::main_menu(lang))
+                    .await?;
+            }
+            Ok(list) => {
+                bot.send_message(chat, i18n::backups_list_title(lang))
+                    .reply_markup(menu::backups_list(lang, &list))
+                    .parse_mode(ParseMode::Html)
+                    .await?;
+            }
+            Err(e) => {
+                bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+            }
+        },
+        Action::BackupCard(idx) => match vpn.list_backups() {
+            Ok(list) => match list.get(idx) {
+                Some(bf) => {
+                    let text = format!("<code>{}</code>", i18n::html_escape(&bf.name));
+                    bot.send_message(chat, text)
+                        .reply_markup(menu::backup_card(lang, idx))
+                        .parse_mode(ParseMode::Html)
+                        .await?;
+                }
+                None => {
+                    bot.send_message(chat, i18n::backup_not_found(lang))
+                        .reply_markup(menu::main_menu(lang))
+                        .await?;
+                }
+            },
+            Err(e) => {
+                bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+            }
+        },
+        Action::BackupDownload(idx) => match vpn.list_backups() {
+            Ok(list) => match list.get(idx) {
+                Some(bf) => {
+                    if let Err(e) = bot.send_document(chat, InputFile::file(&bf.path)).await {
+                        tracing::error!(error = %e, "send_document провалился");
+                        let err = crate::error::Error::Telegram(e.to_string());
+                        bot.send_message(chat, i18n::error_text(lang, &err)).await?;
+                    }
+                }
+                None => {
+                    bot.send_message(chat, i18n::backup_not_found(lang))
+                        .reply_markup(menu::main_menu(lang))
+                        .await?;
+                }
+            },
+            Err(e) => {
+                bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+            }
+        },
+        Action::Restore(idx) => match vpn.list_backups() {
+            Ok(list) => match list.get(idx) {
+                Some(bf) => {
+                    bot.send_message(chat, i18n::confirm_restore(lang, &bf.name))
+                        .reply_markup(menu::confirm_restore(lang, idx))
+                        .parse_mode(ParseMode::Html)
+                        .await?;
+                }
+                None => {
+                    bot.send_message(chat, i18n::backup_not_found(lang))
+                        .reply_markup(menu::main_menu(lang))
+                        .await?;
+                }
+            },
+            Err(e) => {
+                bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+            }
+        },
+        Action::RestoreYes(idx) => {
+            let waiting = bot.send_message(chat, i18n::restoring(lang)).await.ok();
+            match vpn.restore(idx).await {
+                Ok(()) => {
+                    bot.send_message(chat, i18n::restore_done(lang))
+                        .reply_markup(menu::main_menu(lang))
+                        .parse_mode(ParseMode::Html)
+                        .await?;
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "restore провалился");
+                    bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                }
+            }
+            if let Some(m) = waiting {
+                let _ = bot.delete_message(chat, m.id).await;
+            }
+        }
+        Action::Check => {
+            let waiting = bot.send_message(chat, i18n::check_running(lang)).await.ok();
+            match vpn.check().await {
+                Ok(body) => {
+                    let body = if body.len() > 3500 {
+                        // Байтовый индекс может попасть внутрь многобайтового UTF-8
+                        // символа (кириллица в выводе скрипта) — округляем вниз до
+                        // ближайшей границы символа, чтобы не паниковать.
+                        let mut cut = 3500;
+                        while !body.is_char_boundary(cut) {
+                            cut -= 1;
+                        }
+                        format!("{}\n…", &body[..cut])
+                    } else {
+                        body
+                    };
+                    bot.send_message(chat, i18n::check_result(lang, &body))
+                        .parse_mode(ParseMode::Html)
+                        .reply_markup(menu::main_menu(lang))
+                        .await?;
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "check провалился");
+                    bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                }
+            }
+            if let Some(m) = waiting {
+                let _ = bot.delete_message(chat, m.id).await;
             }
         }
         Action::Unknown => {
-            bot.send_message(chat, "Неизвестное действие.").await?;
+            bot.send_message(chat, unknown_action_text(lang)).await?;
         }
     }
     Ok(())
 }
 
 /// dptree-схема для `Dispatcher`. Зависимости (`Arc<Vpn>`, `Arc<Config>`,
-/// `InMemStorage<State>`) регистрируются в `main` через `dptree::deps![...]`.
+/// `Arc<SettingsStore>`, `InMemStorage<State>`) регистрируются в `main` через
+/// `dptree::deps![...]`.
 pub fn schema() -> teloxide::dispatching::UpdateHandler<Box<dyn std::error::Error + Send + Sync>> {
     dptree::entry()
         .enter_dialogue::<Update, InMemStorage<State>, State>()
@@ -304,6 +614,23 @@ mod tests {
         assert_eq!(parse_callback("delyes:alice"), Action::ConfirmDelete("alice".into()));
         assert_eq!(parse_callback("exp:30d"), Action::Expiry("30d".into()));
         assert_eq!(parse_callback("exp:custom"), Action::Expiry("custom".into()));
+        assert_eq!(parse_callback("settings"), Action::Settings);
+        assert_eq!(parse_callback("lang:ru"), Action::Lang("ru".into()));
+        assert_eq!(parse_callback("lang:en"), Action::Lang("en".into()));
+        assert_eq!(parse_callback("set:lang:ru"), Action::SetLang("ru".into()));
+        assert_eq!(parse_callback("set:lang:en"), Action::SetLang("en".into()));
+        assert_eq!(parse_callback("set:psk:on"), Action::SetPsk(true));
+        assert_eq!(parse_callback("set:psk:off"), Action::SetPsk(false));
+        assert_eq!(parse_callback("add:psk:on"), Action::AddPsk(true));
+        assert_eq!(parse_callback("add:psk:off"), Action::AddPsk(false));
+        assert_eq!(parse_callback("backup"), Action::Backup);
+        assert_eq!(parse_callback("bk:new"), Action::BackupNew);
+        assert_eq!(parse_callback("bk:list"), Action::BackupList);
+        assert_eq!(parse_callback("bk:restore_yes:2"), Action::RestoreYes(2));
+        assert_eq!(parse_callback("bk:restore:2"), Action::Restore(2));
+        assert_eq!(parse_callback("bk:dl:1"), Action::BackupDownload(1));
+        assert_eq!(parse_callback("bk:card:0"), Action::BackupCard(0));
+        assert_eq!(parse_callback("check"), Action::Check);
         assert_eq!(parse_callback("garbage"), Action::Unknown);
     }
 
@@ -339,12 +666,24 @@ mod tests {
             last_handshake: None,
         };
 
+        let sample_backup =
+            crate::vpn::BackupFile { name: "awg_backup_x.tar.gz".into(), path: "x.tar.gz".into(), size: 1, mtime: 1 };
+
         let keyboards = vec![
-            menu::main_menu(),
-            menu::expiry_menu(),
-            menu::client_card("alice"),
-            menu::confirm_delete("bob"),
-            menu::clients_list(&[sample_client], 0, 8),
+            menu::main_menu(Lang::Ru),
+            menu::expiry_menu(Lang::Ru),
+            menu::client_card(Lang::Ru, "alice"),
+            menu::confirm_delete(Lang::Ru, "bob"),
+            menu::clients_list(Lang::Ru, &[sample_client], 0, 8),
+            menu::language_select(),
+            menu::settings_menu(Lang::Ru, false),
+            menu::settings_menu(Lang::Ru, true),
+            menu::psk_step(Lang::Ru, false),
+            menu::psk_step(Lang::Ru, true),
+            menu::backup_menu(Lang::Ru),
+            menu::backups_list(Lang::Ru, &[sample_backup]),
+            menu::backup_card(Lang::Ru, 0),
+            menu::confirm_restore(Lang::Ru, 0),
         ];
 
         for kb in &keyboards {
