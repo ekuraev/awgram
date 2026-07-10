@@ -38,6 +38,7 @@ pub enum Action {
     BackupDownload(usize),
     Restore(usize),
     RestoreYes(usize),
+    Check,
     Unknown,
 }
 
@@ -51,6 +52,7 @@ fn parse_callback(data: &str) -> Action {
         "backup" => Action::Backup,
         "bk:new" => Action::BackupNew,
         "bk:list" => Action::BackupList,
+        "check" => Action::Check,
         _ => {
             if let Some(v) = data.strip_prefix("page:") {
                 v.parse().map(Action::Page).unwrap_or(Action::Unknown)
@@ -533,6 +535,36 @@ async fn callback_handler(
                 let _ = bot.delete_message(chat, m.id).await;
             }
         }
+        Action::Check => {
+            let waiting = bot.send_message(chat, i18n::check_running(lang)).await.ok();
+            match vpn.check().await {
+                Ok(body) => {
+                    let body = if body.len() > 3500 {
+                        // Байтовый индекс может попасть внутрь многобайтового UTF-8
+                        // символа (кириллица в выводе скрипта) — округляем вниз до
+                        // ближайшей границы символа, чтобы не паниковать.
+                        let mut cut = 3500;
+                        while !body.is_char_boundary(cut) {
+                            cut -= 1;
+                        }
+                        format!("{}\n…", &body[..cut])
+                    } else {
+                        body
+                    };
+                    bot.send_message(chat, i18n::check_result(lang, &body))
+                        .parse_mode(ParseMode::Html)
+                        .reply_markup(menu::main_menu(lang))
+                        .await?;
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "check провалился");
+                    bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                }
+            }
+            if let Some(m) = waiting {
+                let _ = bot.delete_message(chat, m.id).await;
+            }
+        }
         Action::Unknown => {
             bot.send_message(chat, unknown_action_text(lang)).await?;
         }
@@ -583,6 +615,7 @@ mod tests {
         assert_eq!(parse_callback("bk:restore:2"), Action::Restore(2));
         assert_eq!(parse_callback("bk:dl:1"), Action::BackupDownload(1));
         assert_eq!(parse_callback("bk:card:0"), Action::BackupCard(0));
+        assert_eq!(parse_callback("check"), Action::Check);
         assert_eq!(parse_callback("garbage"), Action::Unknown);
     }
 
@@ -640,19 +673,6 @@ mod tests {
 
         for kb in &keyboards {
             for data in all_callback_data(kb) {
-                // `check` is already emitted by `main_menu` (button shipped ahead
-                // of its handler) but its Action variant (`Action::Check`) lands
-                // in Task 8. Until then it intentionally parses to
-                // `Action::Unknown` — tapping it shows "unknown action" rather
-                // than crashing. Restore it to the assertion once Task 8 lands.
-                if data == "check" {
-                    assert_eq!(
-                        parse_callback(&data),
-                        Action::Unknown,
-                        "callback data {data:?} expected to be Unknown until Task 8"
-                    );
-                    continue;
-                }
                 assert_ne!(
                     parse_callback(&data),
                     Action::Unknown,
