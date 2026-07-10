@@ -199,7 +199,7 @@ async fn callback_handler(
                 bot.send_message(chat, e.user_message()).await?;
             }
         },
-        Action::ShowClient(name) => match vpn.list().await {
+        Action::ShowClient(name) => match vpn.stats().await {
             Ok(clients) => match clients.iter().find(|c| c.name == name) {
                 Some(c) => {
                     bot.send_message(chat, format_client_card(c))
@@ -325,10 +325,12 @@ mod tests {
 
         let sample_client = Client {
             name: "alice".into(),
-            active: true,
-            expires_at: None,
-            rx_bytes: 0,
-            tx_bytes: 0,
+            ip: String::new(),
+            client_ipv6: String::new(),
+            status: String::new(),
+            status_code: "active".into(),
+            rx: 0,
+            tx: 0,
             last_handshake: None,
         };
 
