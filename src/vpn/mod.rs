@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use crate::config::Config;
 use crate::error::Result;
 use model::{AddResult, Client};
-use runner::{run, RunSpec};
+use runner::{run, run_capture, RunSpec};
 
 pub struct Vpn {
     script: PathBuf,
@@ -88,6 +88,75 @@ impl Vpn {
         let raw = std::fs::read_to_string(path).ok()?;
         raw.trim().parse::<i64>().ok()
     }
+
+    fn backups_dir(&self) -> PathBuf {
+        self.clients_dir.join("backups")
+    }
+
+    /// Читает `clients_dir/backups/`, отбирая только `*.tar.gz`, отсортированные по mtime убыв.
+    pub fn list_backups(&self) -> Result<Vec<BackupFile>> {
+        let dir = self.backups_dir();
+        let mut out = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for e in entries.flatten() {
+                let path = e.path();
+                let name = e.file_name().to_string_lossy().into_owned();
+                if !name.ends_with(".tar.gz") {
+                    continue;
+                }
+                let meta = match e.metadata() {
+                    Ok(m) => m,
+                    Err(_) => continue,
+                };
+                let mtime = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                out.push(BackupFile { name, path, size: meta.len(), mtime });
+            }
+        }
+        out.sort_by(|a, b| b.mtime.cmp(&a.mtime));
+        Ok(out)
+    }
+
+    /// Запускает `backup` и возвращает свежесозданный архив (самый новый по mtime).
+    pub async fn backup(&self) -> Result<BackupFile> {
+        run(&self.spec(), &["backup"]).await?;
+        self.list_backups()?
+            .into_iter()
+            .next()
+            .ok_or_else(|| crate::error::Error::Parse("бэкап не найден после создания".into()))
+    }
+
+    /// Восстанавливает из бэкапа по индексу в списке `list_backups()` (0 = самый новый).
+    pub async fn restore(&self, index: usize) -> Result<()> {
+        let backups = self.list_backups()?;
+        let bf = backups.get(index).ok_or_else(|| crate::error::Error::Parse("бэкап не найден".into()))?;
+        // basename-валидация: имя без разделителей пути и по шаблону
+        if bf.name.contains('/') || !bf.name.starts_with("awg_backup_") || !bf.name.ends_with(".tar.gz") {
+            return Err(crate::error::Error::Parse("некорректное имя бэкапа".into()));
+        }
+        let path = bf.path.to_string_lossy().into_owned();
+        run(&self.spec(), &["restore", &path]).await?;
+        Ok(())
+    }
+
+    /// Запускает `check` и возвращает stdout независимо от кода выхода
+    /// (ненулевой код означает «обнаружены проблемы», а не ошибку выполнения).
+    pub async fn check(&self) -> Result<String> {
+        let (out, _code) = run_capture(&self.spec(), &["check"]).await?;
+        Ok(out)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BackupFile {
+    pub name: String,
+    pub path: PathBuf,
+    pub size: u64,
+    pub mtime: i64,
 }
 
 #[cfg(test)]
@@ -203,5 +272,43 @@ mod tests {
         let (_d, vpn) = vpn_with_script("#!/bin/sh\n");
         assert_eq!(vpn.client_expiry("../etc/passwd"), None);
         assert_eq!(vpn.client_expiry("a/b"), None);
+    }
+
+    #[tokio::test]
+    async fn backup_returns_newest_archive() {
+        // заглушка создаёт файл в clients_dir/backups/
+        let (dir, vpn) = vpn_with_script(
+            "#!/bin/sh\nmkdir -p \"$(dirname \"$0\")/../backups\" 2>/dev/null; true\n",
+        );
+        let bdir = dir.path().join("backups");
+        std::fs::create_dir_all(&bdir).unwrap();
+        std::fs::write(bdir.join("awg_backup_2026-01-01_00-00-00.000Z.tar.gz"), b"x").unwrap();
+        let bf = vpn.backup().await.unwrap();
+        assert!(bf.name.ends_with(".tar.gz"));
+    }
+
+    #[test]
+    fn list_backups_sorted_and_filtered() {
+        let (dir, vpn) = vpn_with_script("#!/bin/sh\n");
+        let bdir = dir.path().join("backups");
+        std::fs::create_dir_all(&bdir).unwrap();
+        std::fs::write(bdir.join("awg_backup_a.tar.gz"), b"x").unwrap();
+        std::fs::write(bdir.join("note.txt"), b"x").unwrap(); // должен быть отфильтрован
+        let list = vpn.list_backups().unwrap();
+        assert_eq!(list.len(), 1);
+        assert!(list[0].name.ends_with(".tar.gz"));
+    }
+
+    #[tokio::test]
+    async fn restore_rejects_out_of_range() {
+        let (_d, vpn) = vpn_with_script("#!/bin/sh\n");
+        assert!(matches!(vpn.restore(999).await, Err(crate::error::Error::Parse(_))));
+    }
+
+    #[tokio::test]
+    async fn check_returns_output_even_on_problems() {
+        let (_d, vpn) = vpn_with_script("#!/bin/sh\necho 'ПРОБЛЕМЫ'\nexit 1\n");
+        let out = vpn.check().await.unwrap();
+        assert!(out.contains("ПРОБЛЕМЫ"));
     }
 }
