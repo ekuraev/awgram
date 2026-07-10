@@ -301,4 +301,53 @@ mod tests {
         assert_eq!(parse_callback("exp:custom"), Action::Expiry("custom".into()));
         assert_eq!(parse_callback("garbage"), Action::Unknown);
     }
+
+    /// Замораживает контракт между слоем клавиатур (`menu`) и парсером
+    /// callback-данных (`parse_callback`): каждая строка, которую эмитят
+    /// клавиатуры, должна разбираться в осмысленный `Action`, а не в
+    /// `Action::Unknown`. Это защищает от расхождения префиксов при
+    /// будущих изменениях.
+    #[test]
+    fn all_menu_callback_data_parse_to_known_actions() {
+        use crate::vpn::model::Client;
+        use teloxide::types::{InlineKeyboardButtonKind, InlineKeyboardMarkup};
+
+        fn all_callback_data(kb: &InlineKeyboardMarkup) -> Vec<String> {
+            kb.inline_keyboard
+                .iter()
+                .flatten()
+                .filter_map(|b| match &b.kind {
+                    InlineKeyboardButtonKind::CallbackData(d) => Some(d.clone()),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        let sample_client = Client {
+            name: "alice".into(),
+            active: true,
+            expires_at: None,
+            rx_bytes: 0,
+            tx_bytes: 0,
+            last_handshake: None,
+        };
+
+        let keyboards = vec![
+            menu::main_menu(),
+            menu::expiry_menu(),
+            menu::client_card("alice"),
+            menu::confirm_delete("bob"),
+            menu::clients_list(&[sample_client], 0, 8),
+        ];
+
+        for kb in &keyboards {
+            for data in all_callback_data(kb) {
+                assert_ne!(
+                    parse_callback(&data),
+                    Action::Unknown,
+                    "callback data {data:?} did not parse to a known Action"
+                );
+            }
+        }
+    }
 }
