@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Config {
     pub bot_token: String,
     pub admin_ids: Vec<i64>,
@@ -8,6 +8,19 @@ pub struct Config {
     pub clients_dir: PathBuf,
     pub sudo_prefix: String,
     pub op_timeout_secs: u64,
+}
+
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Config")
+            .field("bot_token", &"<redacted>")
+            .field("admin_ids", &self.admin_ids)
+            .field("manage_script", &self.manage_script)
+            .field("clients_dir", &self.clients_dir)
+            .field("sudo_prefix", &self.sudo_prefix)
+            .field("op_timeout_secs", &self.op_timeout_secs)
+            .finish()
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -156,5 +169,25 @@ mod tests {
         let cfg = Config::load(&cfg_path).unwrap();
         std::env::remove_var("AWG_BOT_TOKEN");
         assert_eq!(cfg.bot_token, "env-token");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn debug_redacts_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = write(&dir, "manage.sh", "#!/bin/sh\n");
+        let cfg_path = write(
+            &dir,
+            "config.toml",
+            &format!(
+                "bot_token = \"super-secret-token\"\nadmin_ids = [1, 2]\nmanage_script = \"{}\"\nclients_dir = \"{}\"\nsudo_prefix = \"sudo\"\nop_timeout_secs = 60\n",
+                script.display(),
+                dir.path().display()
+            ),
+        );
+        let cfg = Config::load(&cfg_path).unwrap();
+        let debug_output = format!("{cfg:?}");
+        assert!(!debug_output.contains("super-secret-token"));
+        assert!(debug_output.contains("<redacted>"));
     }
 }
