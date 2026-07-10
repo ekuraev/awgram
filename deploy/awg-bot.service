@@ -1,0 +1,17 @@
+[Unit]
+Description=AmneziaWG Telegram Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# По умолчанию — root (простой режим). Для hardened: User=awg-bot + sudoers (см. README).
+ExecStart=/usr/local/bin/awg-bot
+Environment=AWG_BOT_CONFIG=/etc/awg-bot/config.toml
+EnvironmentFile=-/etc/awg-bot/env
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=false
+
+[Install]
+WantedBy=multi-user.target
