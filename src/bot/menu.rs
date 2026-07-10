@@ -24,6 +24,10 @@ pub fn expiry_menu() -> InlineKeyboardMarkup {
 }
 
 pub fn clients_list(clients: &[Client], page: usize, per_page: usize) -> InlineKeyboardMarkup {
+    if per_page == 0 {
+        return InlineKeyboardMarkup::new(vec![vec![cb("⬅️ В меню", "menu")]]);
+    }
+
     let start = page * per_page;
     let slice = clients.iter().skip(start).take(per_page);
     let mut rows: Vec<Vec<InlineKeyboardButton>> = slice
@@ -115,5 +119,23 @@ mod tests {
         let data = all_callback_data(&clients_list(&clients, 0, 10));
         assert!(data.contains(&"client:a".to_string()));
         assert!(data.contains(&"client:b".to_string()));
+    }
+
+    #[test]
+    fn clients_list_zero_per_page_no_panic() {
+        // Test with empty clients
+        let empty_clients: Vec<Client> = vec![];
+        let kb_empty = clients_list(&empty_clients, 0, 0);
+        let data_empty = all_callback_data(&kb_empty);
+        assert_eq!(data_empty, vec!["menu"], "empty clients with per_page=0 should have only menu callback");
+
+        // Test with non-empty clients
+        let clients = vec![
+            Client { name: "a".into(), active: true, expires_at: None, rx_bytes: 0, tx_bytes: 0, last_handshake: None },
+            Client { name: "b".into(), active: false, expires_at: None, rx_bytes: 0, tx_bytes: 0, last_handshake: None },
+        ];
+        let kb_filled = clients_list(&clients, 0, 0);
+        let data_filled = all_callback_data(&kb_filled);
+        assert_eq!(data_filled, vec!["menu"], "non-empty clients with per_page=0 should have only menu callback");
     }
 }
