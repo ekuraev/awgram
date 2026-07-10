@@ -30,6 +30,7 @@ pub enum Action {
     Settings,
     SetLang(String), // "ru" | "en" — смена языка из экрана настроек
     SetPsk(bool),
+    AddPsk(bool),
     Unknown,
 }
 
@@ -55,6 +56,12 @@ fn parse_callback(data: &str) -> Action {
                 Action::AskDelete(v.to_string())
             } else if let Some(v) = data.strip_prefix("exp:") {
                 Action::Expiry(v.to_string())
+            } else if let Some(v) = data.strip_prefix("add:psk:") {
+                // No collision with the exact-match "add" arm above (that's a
+                // full-string match, not a prefix), but kept ahead of any
+                // future generic "add:" prefix for the same reason as
+                // delyes:/del: and set:lang:/lang: below.
+                Action::AddPsk(v == "on")
             } else if let Some(v) = data.strip_prefix("set:lang:") {
                 // Must be checked before the general "lang:" prefix — same reason
                 // as delyes:/del: above ("set:lang:ru" also starts with "set:").
@@ -103,7 +110,7 @@ async fn message_handler(
     dialogue: MyDialogue,
     msg: Message,
     cfg: Arc<Config>,
-    vpn: Arc<Vpn>,
+    _vpn: Arc<Vpn>,
     settings: Arc<SettingsStore>,
 ) -> HandlerResult {
     let uid = user_id_of_msg(&msg).unwrap_or(0);
@@ -139,8 +146,11 @@ async fn message_handler(
             let raw = msg.text().unwrap_or_default().to_string();
             match crate::vpn::validate::validate_expiry(&raw) {
                 Ok(exp) => {
-                    finish_add(&bot, msg.chat.id, &vpn, lang, &name, Some(&exp)).await;
-                    dialogue.exit().await?;
+                    bot.send_message(msg.chat.id, i18n::psk_step(lang, settings.psk_default()))
+                        .reply_markup(menu::psk_step(lang, settings.psk_default()))
+                        .parse_mode(ParseMode::Html)
+                        .await?;
+                    dialogue.update(State::AwaitingPsk { name, expires: Some(exp) }).await?;
                 }
                 Err(_e) => {
                     bot.send_message(msg.chat.id, i18n::bad_expiry(lang)).await?;
@@ -167,9 +177,9 @@ async fn message_handler(
     Ok(())
 }
 
-async fn finish_add(bot: &Bot, chat: ChatId, vpn: &Vpn, lang: Lang, name: &str, expires: Option<&str>) {
+async fn finish_add(bot: &Bot, chat: ChatId, vpn: &Vpn, lang: Lang, name: &str, expires: Option<&str>, psk: bool) {
     let waiting = bot.send_message(chat, i18n::creating(lang)).await.ok();
-    match vpn.add(name, expires).await {
+    match vpn.add(name, expires, psk).await {
         Ok(res) => {
             if let Err(e) = render::send_client_files(bot, chat, lang, &res).await {
                 tracing::error!(error = %e, "не удалось отправить файлы клиента");
@@ -332,10 +342,27 @@ async fn callback_handler(
                 bot.send_message(chat, i18n::ask_custom_expiry(lang)).await?;
                 dialogue.update(State::AwaitingCustomExpiry { name }).await?;
             } else {
-                let expires = if kind == "none" { None } else { Some(kind.as_str()) };
-                finish_add(&bot, chat, &vpn, lang, &name, expires).await;
-                dialogue.exit().await?;
+                let expires = if kind == "none" { None } else { Some(kind.clone()) };
+                bot.send_message(chat, i18n::psk_step(lang, settings.psk_default()))
+                    .reply_markup(menu::psk_step(lang, settings.psk_default()))
+                    .parse_mode(ParseMode::Html)
+                    .await?;
+                dialogue.update(State::AwaitingPsk { name, expires }).await?;
             }
+        }
+        Action::AddPsk(psk) => {
+            let (name, expires) = match dialogue.get().await?.unwrap_or_default() {
+                State::AwaitingPsk { name, expires } => (name, expires),
+                _ => {
+                    bot.send_message(chat, session_expired_text(lang))
+                        .reply_markup(menu::main_menu(lang))
+                        .parse_mode(ParseMode::Html)
+                        .await?;
+                    return Ok(());
+                }
+            };
+            finish_add(&bot, chat, &vpn, lang, &name, expires.as_deref(), psk).await;
+            dialogue.exit().await?;
         }
         Action::Settings => {
             bot.send_message(chat, i18n::settings_title(lang, settings.psk_default()))
@@ -411,6 +438,8 @@ mod tests {
         assert_eq!(parse_callback("set:lang:en"), Action::SetLang("en".into()));
         assert_eq!(parse_callback("set:psk:on"), Action::SetPsk(true));
         assert_eq!(parse_callback("set:psk:off"), Action::SetPsk(false));
+        assert_eq!(parse_callback("add:psk:on"), Action::AddPsk(true));
+        assert_eq!(parse_callback("add:psk:off"), Action::AddPsk(false));
         assert_eq!(parse_callback("garbage"), Action::Unknown);
     }
 
@@ -455,6 +484,8 @@ mod tests {
             menu::language_select(),
             menu::settings_menu(Lang::Ru, false),
             menu::settings_menu(Lang::Ru, true),
+            menu::psk_step(Lang::Ru, false),
+            menu::psk_step(Lang::Ru, true),
         ];
 
         for kb in &keyboards {

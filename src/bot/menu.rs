@@ -69,6 +69,17 @@ pub fn expiry_menu(lang: Lang) -> InlineKeyboardMarkup {
     ])
 }
 
+/// Шаг выбора PSK в диалоге `add` — дефолтная опция (по настройке
+/// `settings.psk_default()`) идёт первой кнопкой.
+pub fn psk_step(lang: Lang, default_on: bool) -> InlineKeyboardMarkup {
+    let (first, second) = if default_on {
+        (cb(&i18n::btn_create_with_psk(lang), "add:psk:on"), cb(&i18n::btn_create_no_psk(lang), "add:psk:off"))
+    } else {
+        (cb(&i18n::btn_create_no_psk(lang), "add:psk:off"), cb(&i18n::btn_create_with_psk(lang), "add:psk:on"))
+    };
+    InlineKeyboardMarkup::new(vec![vec![first, second], vec![cb(&i18n::btn_back(lang), "menu")]])
+}
+
 pub fn clients_list(lang: Lang, clients: &[Client], page: usize, per_page: usize) -> InlineKeyboardMarkup {
     if per_page == 0 {
         return InlineKeyboardMarkup::new(vec![vec![cb(&i18n::btn_back(lang), "menu")]]);
@@ -208,5 +219,30 @@ mod tests {
         assert!(data_off.contains(&"set:lang:ru".to_string()));
         assert!(data_off.contains(&"set:lang:en".to_string()));
         assert!(data_off.contains(&"menu".to_string()));
+    }
+
+    #[test]
+    fn psk_step_has_both_options_and_back() {
+        let data = all_callback_data(&psk_step(Lang::Ru, false));
+        assert!(data.contains(&"add:psk:on".to_string()));
+        assert!(data.contains(&"add:psk:off".to_string()));
+        assert!(data.contains(&"menu".to_string()));
+    }
+
+    #[test]
+    fn psk_step_default_option_listed_first() {
+        let kb_off = psk_step(Lang::Ru, false);
+        let first_row_off = &kb_off.inline_keyboard[0];
+        match &first_row_off[0].kind {
+            teloxide::types::InlineKeyboardButtonKind::CallbackData(d) => assert_eq!(d, "add:psk:off"),
+            _ => panic!("expected callback data"),
+        }
+
+        let kb_on = psk_step(Lang::Ru, true);
+        let first_row_on = &kb_on.inline_keyboard[0];
+        match &first_row_on[0].kind {
+            teloxide::types::InlineKeyboardButtonKind::CallbackData(d) => assert_eq!(d, "add:psk:on"),
+            _ => panic!("expected callback data"),
+        }
     }
 }

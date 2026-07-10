@@ -9,4 +9,5 @@ pub enum State {
     AwaitingName,
     AwaitingExpiry { name: String },
     AwaitingCustomExpiry { name: String },
+    AwaitingPsk { name: String, expires: Option<String> },
 }

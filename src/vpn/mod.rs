@@ -40,12 +40,15 @@ impl Vpn {
         model::parse_client_list(&out).map_err(|e| crate::error::Error::Parse(e.to_string()))
     }
 
-    pub async fn add(&self, name: &str, expires: Option<&str>) -> Result<AddResult> {
+    pub async fn add(&self, name: &str, expires: Option<&str>, psk: bool) -> Result<AddResult> {
         let name = validate::validate_name(name).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
         let mut args: Vec<String> = vec!["add".into(), name.clone()];
         if let Some(exp) = expires {
             let exp = validate::validate_expiry(exp).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
             args.push(format!("--expires={exp}"));
+        }
+        if psk {
+            args.push("--psk".into());
         }
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         // `add` prints no JSON — just human-readable logs. The created files are
@@ -196,7 +199,7 @@ mod tests {
     #[tokio::test]
     async fn add_rejects_bad_name_before_running() {
         let (_d, vpn) = vpn_with_script("#!/bin/sh\necho should-not-run 1>&2\nexit 1\n");
-        let err = vpn.add("bad name;rm", None).await.unwrap_err();
+        let err = vpn.add("bad name;rm", None, false).await.unwrap_err();
         // Ошибка валидации, а не запуска скрипта.
         assert!(matches!(err, crate::error::Error::Parse(_)));
     }
@@ -206,7 +209,7 @@ mod tests {
         // Real `add` prints no JSON — just logs — and creates `<name>.conf` on disk.
         let (dir, vpn) = vpn_with_script("#!/bin/sh\nexit 0\n");
         std::fs::write(dir.path().join("alice.conf"), "conf").unwrap();
-        let res = vpn.add("alice", None).await.unwrap();
+        let res = vpn.add("alice", None, false).await.unwrap();
         assert!(res.conf_path.ends_with("alice.conf"));
         assert_eq!(res.uri, "");
     }
@@ -214,8 +217,25 @@ mod tests {
     #[tokio::test]
     async fn add_errors_when_script_did_not_create_conf() {
         let (_d, vpn) = vpn_with_script("#!/bin/sh\nexit 0\n");
-        let err = vpn.add("alice", None).await.unwrap_err();
+        let err = vpn.add("alice", None, false).await.unwrap_err();
         assert!(matches!(err, crate::error::Error::Parse(_)));
+    }
+
+    #[tokio::test]
+    async fn add_passes_psk_flag() {
+        // argv: $0=script, $1="add", $2=<name>, [$3.. flags]. Stub only creates
+        // `<name>.conf` when `--psk` is among the args — proves the flag
+        // actually reaches the script invocation.
+        const STUB: &str = "#!/bin/sh\nname=\"$2\"\nfor a in \"$@\"; do\n  if [ \"$a\" = \"--psk\" ]; then\n    touch \"$(dirname \"$0\")/$name.conf\"\n    exit 0\n  fi\ndone\nexit 1\n";
+
+        let (dir, vpn) = vpn_with_script(STUB);
+        let res = vpn.add("alice", None, true).await;
+        assert!(res.is_ok(), "expected Ok with --psk passed, got {res:?}");
+        drop(dir);
+
+        let (_d2, vpn2) = vpn_with_script(STUB);
+        let err = vpn2.add("bob", None, false).await;
+        assert!(err.is_err(), "expected Err without --psk, got {err:?}");
     }
 
     #[test]
