@@ -4,18 +4,28 @@ use serde::Deserialize;
 pub struct Client {
     pub name: String,
     #[serde(default)]
-    pub active: bool,
+    pub ip: String,
     #[serde(default)]
-    pub expires_at: Option<String>,
+    pub client_ipv6: String,
     #[serde(default)]
-    pub rx_bytes: u64,
+    pub status: String,
     #[serde(default)]
-    pub tx_bytes: u64,
+    pub status_code: String,
     #[serde(default)]
-    pub last_handshake: Option<String>,
+    pub rx: u64,
+    #[serde(default)]
+    pub tx: u64,
+    #[serde(default)]
+    pub last_handshake: Option<i64>,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+impl Client {
+    pub fn active(&self) -> bool {
+        self.status_code == "active"
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct AddResult {
     pub name: String,
     pub conf_path: String,
@@ -24,10 +34,6 @@ pub struct AddResult {
 }
 
 pub fn parse_client_list(json: &str) -> Result<Vec<Client>, serde_json::Error> {
-    serde_json::from_str(json)
-}
-
-pub fn parse_add_result(json: &str) -> Result<AddResult, serde_json::Error> {
     serde_json::from_str(json)
 }
 
@@ -50,31 +56,52 @@ pub fn human_bytes(n: u64) -> String {
 mod tests {
     use super::*;
 
+    // Real `list --json` shape: no traffic, no expiry.
     const LIST_JSON: &str = r#"[
-      {"name":"alice","active":true,"expires_at":"2026-08-01","rx_bytes":1288490188,"tx_bytes":356515840,"last_handshake":"2026-07-10T10:00:00Z"},
-      {"name":"bob","active":false}
+      {"name":"alice","ip":"10.0.0.2","client_ipv6":"","status":"Активен","status_code":"active"},
+      {"name":"bob","ip":"10.0.0.3","client_ipv6":"","status":"Нет данных","status_code":"no_data"}
     ]"#;
 
-    const ADD_JSON: &str = r#"{"name":"carol","conf_path":"/root/awg/carol.conf","qr_path":"/root/awg/carol.png","uri":"vpn://example"}"#;
+    // Real `stats --json` shape: traffic + last_handshake, no expiry.
+    const STATS_JSON: &str = r#"[
+      {"name":"alice","ip":"10.0.0.2","rx":1288490188,"tx":356515840,"last_handshake":1752000000,"status":"Активен","status_code":"active"},
+      {"name":"bob","ip":"10.0.0.3","rx":0,"tx":0,"last_handshake":0,"status":"Неактивен","status_code":"inactive"}
+    ]"#;
 
     #[test]
-    fn parses_client_list() {
+    fn parses_list_json() {
         let clients = parse_client_list(LIST_JSON).unwrap();
         assert_eq!(clients.len(), 2);
         assert_eq!(clients[0].name, "alice");
-        assert!(clients[0].active);
-        assert_eq!(clients[0].rx_bytes, 1288490188);
+        assert_eq!(clients[0].status_code, "active");
+        assert_eq!(clients[0].status, "Активен");
+        // list has no traffic fields — must default to 0.
+        assert_eq!(clients[0].rx, 0);
+        assert_eq!(clients[0].tx, 0);
         assert_eq!(clients[1].name, "bob");
-        assert!(!clients[1].active);
-        assert_eq!(clients[1].rx_bytes, 0);
+        assert_eq!(clients[1].status_code, "no_data");
     }
 
     #[test]
-    fn parses_add_result() {
-        let r = parse_add_result(ADD_JSON).unwrap();
-        assert_eq!(r.name, "carol");
-        assert_eq!(r.conf_path, "/root/awg/carol.conf");
-        assert_eq!(r.qr_path, "/root/awg/carol.png");
+    fn parses_stats_json() {
+        let clients = parse_client_list(STATS_JSON).unwrap();
+        assert_eq!(clients.len(), 2);
+        assert_eq!(clients[0].name, "alice");
+        assert_eq!(clients[0].rx, 1288490188);
+        assert_eq!(clients[0].tx, 356515840);
+        assert_eq!(clients[0].last_handshake, Some(1752000000));
+        assert_eq!(clients[1].last_handshake, Some(0));
+    }
+
+    #[test]
+    fn active_true_only_for_active_status_code() {
+        let clients = parse_client_list(LIST_JSON).unwrap();
+        assert!(clients[0].active());
+        assert!(!clients[1].active());
+
+        let stats = parse_client_list(STATS_JSON).unwrap();
+        assert!(stats[0].active());
+        assert!(!stats[1].active());
     }
 
     #[test]

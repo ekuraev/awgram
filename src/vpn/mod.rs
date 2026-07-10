@@ -42,30 +42,33 @@ impl Vpn {
 
     pub async fn add(&self, name: &str, expires: Option<&str>) -> Result<AddResult> {
         let name = validate::validate_name(name).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
-        let mut args: Vec<String> = vec!["add".into(), name];
+        let mut args: Vec<String> = vec!["add".into(), name.clone()];
         if let Some(exp) = expires {
             let exp = validate::validate_expiry(exp).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
             args.push(format!("--expires={exp}"));
         }
-        args.push("--json".into());
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-        let out = run(&self.spec(), &arg_refs).await?;
-        model::parse_add_result(&out).map_err(|e| crate::error::Error::Parse(e.to_string()))
+        // `add` prints no JSON — just human-readable logs. The created files are
+        // read back from `clients_dir` afterwards.
+        run(&self.spec(), &arg_refs).await?;
+        self.existing_files(&name)
     }
 
     pub async fn remove(&self, name: &str) -> Result<()> {
         let name = validate::validate_name(name).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
-        run(&self.spec(), &["remove", &name, "--json"]).await?;
+        run(&self.spec(), &["remove", &name]).await?;
         Ok(())
     }
 
-    /// Повторная выдача уже созданных файлов клиента из `clients_dir` (для кнопки «📄 Конфиг»).
+    /// Повторная выдача уже созданных файлов клиента из `clients_dir` (для кнопки «📄 Конфиг»
+    /// и как последний шаг `add`). Только `.conf` обязателен — QR (`.png`) и ссылка
+    /// (`.vpnuri`) создаются скриптом условно (например, если `qrencode` не установлен).
     pub fn existing_files(&self, name: &str) -> Result<AddResult> {
         let name = validate::validate_name(name).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
         let conf = self.clients_dir.join(format!("{name}.conf"));
         let qr = self.clients_dir.join(format!("{name}.png"));
         let uri_path = self.clients_dir.join(format!("{name}.vpnuri"));
-        if !conf.exists() || !qr.exists() {
+        if !conf.exists() {
             return Err(crate::error::Error::Parse("файлы клиента не найдены".into()));
         }
         let uri = std::fs::read_to_string(&uri_path).unwrap_or_default().trim().to_string();
@@ -104,11 +107,12 @@ mod tests {
     #[tokio::test]
     async fn list_parses_stub_output() {
         let (_d, vpn) = vpn_with_script(
-            "#!/bin/sh\necho '[{\"name\":\"alice\",\"active\":true}]'\n",
+            "#!/bin/sh\necho '[{\"name\":\"alice\",\"status_code\":\"active\"}]'\n",
         );
         let clients = vpn.list().await.unwrap();
         assert_eq!(clients.len(), 1);
         assert_eq!(clients[0].name, "alice");
+        assert!(clients[0].active());
     }
 
     #[tokio::test]
@@ -119,23 +123,42 @@ mod tests {
         assert!(matches!(err, crate::error::Error::Parse(_)));
     }
 
+    #[tokio::test]
+    async fn add_runs_script_then_reads_created_conf() {
+        // Real `add` prints no JSON — just logs — and creates `<name>.conf` on disk.
+        let (dir, vpn) = vpn_with_script("#!/bin/sh\nexit 0\n");
+        std::fs::write(dir.path().join("alice.conf"), "conf").unwrap();
+        let res = vpn.add("alice", None).await.unwrap();
+        assert!(res.conf_path.ends_with("alice.conf"));
+        assert_eq!(res.uri, "");
+    }
+
+    #[tokio::test]
+    async fn add_errors_when_script_did_not_create_conf() {
+        let (_d, vpn) = vpn_with_script("#!/bin/sh\nexit 0\n");
+        let err = vpn.add("alice", None).await.unwrap_err();
+        assert!(matches!(err, crate::error::Error::Parse(_)));
+    }
+
     #[test]
     fn existing_files_returns_paths_when_conf_present() {
+        let (dir, vpn) = vpn_with_script("#!/bin/sh\n");
+        std::fs::write(dir.path().join("alice.conf"), "conf").unwrap();
+        let res = vpn.existing_files("alice").unwrap();
+        assert!(res.conf_path.ends_with("alice.conf"));
+        assert!(res.qr_path.ends_with("alice.png"));
+        assert_eq!(res.uri, "");
+    }
+
+    #[test]
+    fn existing_files_reads_optional_qr_and_uri_when_present() {
         let (dir, vpn) = vpn_with_script("#!/bin/sh\n");
         std::fs::write(dir.path().join("alice.conf"), "conf").unwrap();
         std::fs::write(dir.path().join("alice.png"), "png").unwrap();
         std::fs::write(dir.path().join("alice.vpnuri"), "vpn://x\n").unwrap();
         let res = vpn.existing_files("alice").unwrap();
-        assert!(res.conf_path.ends_with("alice.conf"));
         assert!(res.qr_path.ends_with("alice.png"));
         assert_eq!(res.uri, "vpn://x");
-    }
-
-    #[test]
-    fn existing_files_errors_when_qr_missing() {
-        let (dir, vpn) = vpn_with_script("#!/bin/sh\n");
-        std::fs::write(dir.path().join("alice.conf"), "conf").unwrap();
-        assert!(matches!(vpn.existing_files("alice"), Err(crate::error::Error::Parse(_))));
     }
 
     #[test]

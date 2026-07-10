@@ -32,7 +32,7 @@ pub fn clients_list(clients: &[Client], page: usize, per_page: usize) -> InlineK
     let slice = clients.iter().skip(start).take(per_page);
     let mut rows: Vec<Vec<InlineKeyboardButton>> = slice
         .map(|c| {
-            let mark = if c.active { "🟢" } else { "🔴" };
+            let mark = if c.active() { "🟢" } else { "🔴" };
             vec![cb(&format!("{mark} {}", c.name), &format!("client:{}", c.name))]
         })
         .collect();
@@ -113,8 +113,8 @@ mod tests {
     #[test]
     fn clients_list_one_button_per_client() {
         let clients = vec![
-            Client { name: "a".into(), active: true, expires_at: None, rx_bytes: 0, tx_bytes: 0, last_handshake: None },
-            Client { name: "b".into(), active: false, expires_at: None, rx_bytes: 0, tx_bytes: 0, last_handshake: None },
+            Client { name: "a".into(), ip: String::new(), client_ipv6: String::new(), status: String::new(), status_code: "active".into(), rx: 0, tx: 0, last_handshake: None },
+            Client { name: "b".into(), ip: String::new(), client_ipv6: String::new(), status: String::new(), status_code: "inactive".into(), rx: 0, tx: 0, last_handshake: None },
         ];
         let data = all_callback_data(&clients_list(&clients, 0, 10));
         assert!(data.contains(&"client:a".to_string()));
@@ -131,8 +131,8 @@ mod tests {
 
         // Test with non-empty clients
         let clients = vec![
-            Client { name: "a".into(), active: true, expires_at: None, rx_bytes: 0, tx_bytes: 0, last_handshake: None },
-            Client { name: "b".into(), active: false, expires_at: None, rx_bytes: 0, tx_bytes: 0, last_handshake: None },
+            Client { name: "a".into(), ip: String::new(), client_ipv6: String::new(), status: String::new(), status_code: "active".into(), rx: 0, tx: 0, last_handshake: None },
+            Client { name: "b".into(), ip: String::new(), client_ipv6: String::new(), status: String::new(), status_code: "inactive".into(), rx: 0, tx: 0, last_handshake: None },
         ];
         let kb_filled = clients_list(&clients, 0, 0);
         let data_filled = all_callback_data(&kb_filled);
