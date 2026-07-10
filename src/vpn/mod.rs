@@ -79,6 +79,15 @@ impl Vpn {
             uri,
         })
     }
+
+    /// Читает срок действия клиента из `<clients_dir>/expiry/<name>` (epoch, сек).
+    /// None, если файла нет или содержимое не парсится (значит — бессрочно).
+    pub fn client_expiry(&self, name: &str) -> Option<i64> {
+        let name = validate::validate_name(name).ok()?;
+        let path = self.clients_dir.join("expiry").join(&name);
+        let raw = std::fs::read_to_string(path).ok()?;
+        raw.trim().parse::<i64>().ok()
+    }
 }
 
 #[cfg(test)]
@@ -165,5 +174,27 @@ mod tests {
     fn existing_files_errors_when_missing() {
         let (_d, vpn) = vpn_with_script("#!/bin/sh\n");
         assert!(matches!(vpn.existing_files("ghost"), Err(crate::error::Error::Parse(_))));
+    }
+
+    #[test]
+    fn client_expiry_reads_epoch_from_file() {
+        let (dir, vpn) = vpn_with_script("#!/bin/sh\n");
+        std::fs::create_dir_all(dir.path().join("expiry")).unwrap();
+        std::fs::write(dir.path().join("expiry").join("alice"), "1893456000").unwrap();
+        assert_eq!(vpn.client_expiry("alice"), Some(1893456000));
+    }
+
+    #[test]
+    fn client_expiry_none_when_file_missing() {
+        let (_d, vpn) = vpn_with_script("#!/bin/sh\n");
+        assert_eq!(vpn.client_expiry("bob"), None);
+    }
+
+    #[test]
+    fn client_expiry_none_when_content_unparseable() {
+        let (dir, vpn) = vpn_with_script("#!/bin/sh\n");
+        std::fs::create_dir_all(dir.path().join("expiry")).unwrap();
+        std::fs::write(dir.path().join("expiry").join("carol"), "not-a-number").unwrap();
+        assert_eq!(vpn.client_expiry("carol"), None);
     }
 }

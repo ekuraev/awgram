@@ -2,9 +2,9 @@ use teloxide::prelude::*;
 use teloxide::types::{ChatId, InputFile};
 
 use crate::error::{Error, Result};
-use crate::vpn::model::{human_bytes, AddResult, Client};
+use crate::vpn::model::{format_expiry, format_handshake, human_bytes, AddResult, Client};
 
-pub fn format_client_card(c: &Client) -> String {
+pub fn format_client_card(c: &Client, now: i64, expiry: Option<i64>) -> String {
     let status = if !c.status.is_empty() {
         c.status.clone()
     } else if c.active() {
@@ -12,11 +12,18 @@ pub fn format_client_card(c: &Client) -> String {
     } else {
         "отключён".to_string()
     };
+    let ip_line = if c.ip.is_empty() {
+        String::new()
+    } else {
+        format!("IP: {}\n", c.ip)
+    };
     format!(
-        "client: {name}\nстатус: {status}\nтрафик: ↓ {rx}  ↑ {tx}",
+        "👤 {name}\nСтатус: {status}\n{ip_line}Трафик:  ↓ {rx}   ↑ {tx}\nРукопожатие: {handshake}\nДействует: {expires}",
         name = c.name,
         rx = human_bytes(c.rx),
         tx = human_bytes(c.tx),
+        handshake = format_handshake(now, c.last_handshake.unwrap_or(0)),
+        expires = format_expiry(now, expiry),
     )
 }
 
@@ -71,10 +78,14 @@ mod tests {
 
     #[test]
     fn card_contains_name_and_traffic() {
-        let text = format_client_card(&sample());
+        let now = 1_700_000_000;
+        let expiry = Some(now + 5 * 86400);
+        let text = format_client_card(&sample(), now, expiry);
         assert!(text.contains("alice"));
         assert!(text.contains("Активен"));
         assert!(text.contains("1.2 GB"));
+        assert!(text.contains("Рукопожатие:")); // строка рукопожатия отрендерена
+        assert!(text.contains("ещё")); // истечение через 5 дней
     }
 
     #[test]

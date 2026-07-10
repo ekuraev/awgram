@@ -202,7 +202,12 @@ async fn callback_handler(
         Action::ShowClient(name) => match vpn.stats().await {
             Ok(clients) => match clients.iter().find(|c| c.name == name) {
                 Some(c) => {
-                    bot.send_message(chat, format_client_card(c))
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0);
+                    let expiry = vpn.client_expiry(&name);
+                    bot.send_message(chat, format_client_card(c, now, expiry))
                         .reply_markup(menu::client_card(&name))
                         .await?;
                 }
