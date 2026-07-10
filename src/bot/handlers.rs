@@ -469,7 +469,7 @@ async fn callback_handler(
                         .await?;
                 }
                 None => {
-                    bot.send_message(chat, i18n::not_found(lang))
+                    bot.send_message(chat, i18n::backup_not_found(lang))
                         .reply_markup(menu::main_menu(lang))
                         .await?;
                 }
@@ -488,7 +488,7 @@ async fn callback_handler(
                     }
                 }
                 None => {
-                    bot.send_message(chat, i18n::not_found(lang))
+                    bot.send_message(chat, i18n::backup_not_found(lang))
                         .reply_markup(menu::main_menu(lang))
                         .await?;
                 }
@@ -506,7 +506,7 @@ async fn callback_handler(
                         .await?;
                 }
                 None => {
-                    bot.send_message(chat, i18n::not_found(lang))
+                    bot.send_message(chat, i18n::backup_not_found(lang))
                         .reply_markup(menu::main_menu(lang))
                         .await?;
                 }

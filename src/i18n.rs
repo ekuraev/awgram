@@ -102,6 +102,9 @@ pub fn stats_summary(lang: Lang, total: usize, active: usize, rx: &str, tx: &str
 pub fn clients_empty(lang: Lang) -> String { match lang { Lang::Ru => "Пока нет клиентов.", Lang::En => "No clients yet." }.to_string() }
 pub fn clients_title(lang: Lang) -> String { match lang { Lang::Ru => "👥 <b>Клиенты</b>:", Lang::En => "👥 <b>Clients</b>:" }.to_string() }
 pub fn not_found(lang: Lang) -> String { match lang { Lang::Ru => "Клиент не найден.", Lang::En => "Client not found." }.to_string() }
+pub fn backup_not_found(lang: Lang) -> String {
+    match lang { Lang::Ru => "Бэкап не найден.", Lang::En => "Backup not found." }.to_string()
+}
 pub fn confirm_delete(lang: Lang, name: &str) -> String {
     let n = html_escape(name);
     match lang { Lang::Ru => format!("Точно удалить <b>{n}</b>?"), Lang::En => format!("Delete <b>{n}</b>?") }
@@ -273,5 +276,21 @@ mod tests {
                 assert!(!t.contains("secret")); // stderr не утекает
             }
         }
+    }
+
+    #[test]
+    fn backup_not_found_differs_from_client_not_found() {
+        let ru_backup = backup_not_found(Lang::Ru);
+        let en_backup = backup_not_found(Lang::En);
+        let ru_client = not_found(Lang::Ru);
+        let en_client = not_found(Lang::En);
+
+        assert!(!ru_backup.is_empty());
+        assert!(!en_backup.is_empty());
+        assert!(ru_backup.contains("Бэкап"));
+        assert!(en_backup.contains("Backup"));
+
+        assert_ne!(ru_backup, ru_client);
+        assert_ne!(en_backup, en_client);
     }
 }
