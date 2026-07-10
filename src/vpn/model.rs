@@ -212,4 +212,45 @@ mod tests {
         let now = 1_700_000_000;
         assert_eq!(format_expiry(now, Some(now + 600)), "< 1 ч");
     }
+
+    #[test]
+    fn format_handshake_future_reads_just_now() {
+        assert_eq!(format_handshake(1_700_000_000, 1_700_000_100), "только что");
+    }
+
+    #[test]
+    fn format_handshake_boundary_60_seconds() {
+        let now = 2_000_000;
+        assert_eq!(format_handshake(now, now - 60), "1 мин назад");
+    }
+
+    #[test]
+    fn format_handshake_boundary_3600_seconds() {
+        let now = 2_000_000;
+        assert_eq!(format_handshake(now, now - 3600), "1 ч назад");
+    }
+
+    #[test]
+    fn format_handshake_boundary_86400_seconds() {
+        let now = 2_000_000;
+        assert_eq!(format_handshake(now, now - 86400), "1 дн назад");
+    }
+
+    #[test]
+    fn format_expiry_boundary_1_hour() {
+        let now = 2_000_000;
+        assert_eq!(format_expiry(now, Some(now + 3600)), "ещё 1 ч");
+    }
+
+    #[test]
+    fn format_expiry_boundary_1_day() {
+        let now = 2_000_000;
+        assert_eq!(format_expiry(now, Some(now + 86400)), "ещё 1 дн");
+    }
+
+    #[test]
+    fn format_expiry_boundary_exactly_now() {
+        let now = 2_000_000;
+        assert_eq!(format_expiry(now, Some(now)), "истёк");
+    }
 }

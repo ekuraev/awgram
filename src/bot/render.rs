@@ -107,4 +107,23 @@ mod tests {
         assert!(text.contains("2")); // всего клиентов
         assert!(text.contains("1")); // активных
     }
+
+    #[test]
+    fn card_omits_ip_line_when_empty() {
+        let now = 1_700_000_000;
+        let client = Client {
+            name: "charlie".into(),
+            ip: String::new(),
+            client_ipv6: String::new(),
+            status: "Активен".into(),
+            status_code: "active".into(),
+            rx: 1048576,
+            tx: 524288,
+            last_handshake: Some(1700000000 - 600),
+        };
+        let text = format_client_card(&client, now, None);
+        assert!(!text.contains("IP:"));
+        assert!(text.contains("charlie"));
+        assert!(text.contains("Трафик"));
+    }
 }

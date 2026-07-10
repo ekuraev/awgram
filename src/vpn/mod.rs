@@ -197,4 +197,11 @@ mod tests {
         std::fs::write(dir.path().join("expiry").join("carol"), "not-a-number").unwrap();
         assert_eq!(vpn.client_expiry("carol"), None);
     }
+
+    #[test]
+    fn client_expiry_rejects_traversal_name() {
+        let (_d, vpn) = vpn_with_script("#!/bin/sh\n");
+        assert_eq!(vpn.client_expiry("../etc/passwd"), None);
+        assert_eq!(vpn.client_expiry("a/b"), None);
+    }
 }
