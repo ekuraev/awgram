@@ -6,13 +6,7 @@ use crate::i18n::{self, Lang};
 use crate::vpn::model::{format_expiry, format_handshake, human_bytes, AddResult, Client};
 
 pub fn format_client_card(lang: Lang, c: &Client, now: i64, expiry: Option<i64>) -> String {
-    let status = if !c.status.is_empty() {
-        c.status.clone()
-    } else if c.active() {
-        match lang { Lang::Ru => "активен", Lang::En => "active" }.to_string()
-    } else {
-        match lang { Lang::Ru => "отключён", Lang::En => "inactive" }.to_string()
-    };
+    let status = i18n::status_label(lang, &c.status_code, &c.status);
     i18n::client_card(
         lang,
         &c.name,
@@ -20,8 +14,8 @@ pub fn format_client_card(lang: Lang, c: &Client, now: i64, expiry: Option<i64>)
         &c.ip,
         &human_bytes(c.rx),
         &human_bytes(c.tx),
-        &format_handshake(now, c.last_handshake.unwrap_or(0)),
-        &format_expiry(now, expiry),
+        &format_handshake(lang, now, c.last_handshake.unwrap_or(0)),
+        &format_expiry(lang, now, expiry),
     )
 }
 
@@ -100,6 +94,14 @@ mod tests {
         assert!(text.contains("Handshake:"));
         assert!(text.contains("Expires:"));
         assert!(text.contains("1.2 GB"));
+        // translated values, not raw backend Russian text
+        assert!(text.contains("Active"));
+        assert!(text.contains("just now")); // last_handshake is close to `now`
+        assert!(text.contains("left")); // expiry is in the future
+        // no Russian leaked into the EN card
+        assert!(!text.contains("Активен"));
+        assert!(!text.contains("только что"));
+        assert!(!text.contains("ещё"));
     }
 
     #[test]

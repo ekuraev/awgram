@@ -157,6 +157,34 @@ pub fn check_result(lang: Lang, body: &str) -> String {
     match lang { Lang::Ru => format!("🩺 <b>Проверка</b>\n<pre>{b}</pre>"), Lang::En => format!("🩺 <b>Check</b>\n<pre>{b}</pre>") }
 }
 
+// --- статус клиента (по стабильному status_code) ---
+/// Возвращает локализованную метку статуса по стабильному `status_code`.
+/// Текст НЕ экранируется — вызывающий код (`client_card`) сам делает html_escape,
+/// экранировать здесь означало бы двойное экранирование.
+pub fn status_label(lang: Lang, status_code: &str, raw: &str) -> String {
+    match (lang, status_code) {
+        (Lang::Ru, "active") => "Активен",
+        (Lang::En, "active") => "Active",
+        (Lang::Ru, "recent") => "Недавно",
+        (Lang::En, "recent") => "Recently",
+        (Lang::Ru, "no_handshake") => "Нет handshake",
+        (Lang::En, "no_handshake") => "No handshake",
+        (Lang::Ru, "inactive") => "Неактивен",
+        (Lang::En, "inactive") => "Inactive",
+        (Lang::Ru, "key_error") => "Ошибка ключа",
+        (Lang::En, "key_error") => "Key error",
+        (Lang::Ru, "no_data") => "Нет данных",
+        (Lang::En, "no_data") => "No data",
+        (Lang::Ru, _) => {
+            return if raw.is_empty() { "неизвестно".to_string() } else { raw.to_string() };
+        }
+        (Lang::En, _) => {
+            return if raw.is_empty() { "unknown".to_string() } else { raw.to_string() };
+        }
+    }
+    .to_string()
+}
+
 // --- ошибки (локализованные, без утечки stderr) ---
 pub fn error_text(lang: Lang, err: &Error) -> String {
     match (lang, err) {
@@ -214,6 +242,20 @@ mod tests {
             assert!(card.contains("a&lt;b&gt;"));
             assert!(!card.contains("a<b>"));
         }
+    }
+
+    #[test]
+    fn status_label_known_codes_translated() {
+        assert_eq!(status_label(Lang::En, "active", "Активен"), "Active");
+        assert_eq!(status_label(Lang::Ru, "active", ""), "Активен");
+    }
+
+    #[test]
+    fn status_label_unknown_code_falls_back_to_raw() {
+        // status_label не экранирует — экранирование делает client_card ниже по цепочке.
+        assert_eq!(status_label(Lang::En, "weird_code", "<x>"), "<x>");
+        assert_eq!(status_label(Lang::Ru, "weird_code", ""), "неизвестно");
+        assert_eq!(status_label(Lang::En, "weird_code", ""), "unknown");
     }
 
     #[test]
