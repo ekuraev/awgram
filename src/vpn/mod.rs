@@ -40,6 +40,15 @@ impl Vpn {
         model::parse_client_list(&out).map_err(|e| crate::error::Error::Parse(e.to_string()))
     }
 
+    /// Проверяет, существует ли клиент с таким именем (через `list --json`).
+    /// Авторитетно: отражает реальное состояние WireGuard, а не только файлы на диске.
+    pub async fn exists(&self, name: &str) -> Result<bool> {
+        let name = validate::validate_name(name)
+            .map_err(|e| crate::error::Error::Parse(e.to_string()))?;
+        let clients = self.list().await?;
+        Ok(clients.iter().any(|c| c.name == name))
+    }
+
     pub async fn add(&self, name: &str, expires: Option<&str>, psk: bool) -> Result<AddResult> {
         let name = validate::validate_name(name).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
         let mut args: Vec<String> = vec!["add".into(), name.clone()];
@@ -199,6 +208,34 @@ mod tests {
         assert_eq!(clients.len(), 1);
         assert_eq!(clients[0].name, "alice");
         assert!(clients[0].active());
+    }
+
+    #[tokio::test]
+    async fn exists_returns_true_for_existing_client() {
+        let (_d, vpn) = vpn_with_script(
+            "#!/bin/sh\necho '[{\"name\":\"alice\",\"status_code\":\"active\"}]'\n",
+        );
+        assert_eq!(vpn.exists("alice").await.unwrap(), true);
+    }
+
+    #[tokio::test]
+    async fn exists_returns_false_for_missing_client() {
+        let (_d, vpn) = vpn_with_script(
+            "#!/bin/sh\necho '[{\"name\":\"alice\",\"status_code\":\"active\"}]'\n",
+        );
+        assert_eq!(vpn.exists("bob").await.unwrap(), false);
+    }
+
+    #[tokio::test]
+    async fn exists_rejects_bad_name() {
+        let (_d, vpn) = vpn_with_script("#!/bin/sh\necho '[]'\n");
+        assert!(vpn.exists("bad name;rm").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn exists_propagates_script_failure() {
+        let (_d, vpn) = vpn_with_script("#!/bin/sh\nexit 1\n");
+        assert!(vpn.exists("alice").await.is_err());
     }
 
     #[tokio::test]
