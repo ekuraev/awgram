@@ -25,6 +25,7 @@ pub enum Action {
     SendConf(String),
     AskDelete(String),
     ConfirmDelete(String),
+    Recreate(String),
     Expiry(String), // "none" | "1d" | ... | "custom"
     Lang(String),   // "ru" | "en" — язык-гейт при первом /start
     Settings,
@@ -66,6 +67,8 @@ fn parse_callback(data: &str) -> Action {
                 Action::ConfirmDelete(v.to_string())
             } else if let Some(v) = data.strip_prefix("del:") {
                 Action::AskDelete(v.to_string())
+            } else if let Some(v) = data.strip_prefix("recreate:") {
+                Action::Recreate(v.to_string())
             } else if let Some(v) = data.strip_prefix("exp:") {
                 Action::Expiry(v.to_string())
             } else if let Some(v) = data.strip_prefix("add:psk:") {
@@ -361,6 +364,13 @@ async fn callback_handler(
                 bot.send_message(chat, i18n::error_text(lang, &e)).await?;
             }
         },
+        Action::Recreate(_) => {
+            // Placeholder: real delete+re-add behaviour lands in a later task.
+            // Variant exists so the keyboard can emit `recreate:<name>` now;
+            // the parser covers it, and this arm keeps the callback match
+            // exhaustive until the full handler is implemented.
+            bot.send_message(chat, unknown_action_text(lang)).await?;
+        },
         Action::Add => {
             bot.send_message(chat, i18n::ask_client_name(lang)).await?;
             dialogue.update(State::AwaitingName).await?;
@@ -612,6 +622,7 @@ mod tests {
         assert_eq!(parse_callback("conf:alice"), Action::SendConf("alice".into()));
         assert_eq!(parse_callback("del:alice"), Action::AskDelete("alice".into()));
         assert_eq!(parse_callback("delyes:alice"), Action::ConfirmDelete("alice".into()));
+        assert_eq!(parse_callback("recreate:alice"), Action::Recreate("alice".into()));
         assert_eq!(parse_callback("exp:30d"), Action::Expiry("30d".into()));
         assert_eq!(parse_callback("exp:custom"), Action::Expiry("custom".into()));
         assert_eq!(parse_callback("settings"), Action::Settings);
