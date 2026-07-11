@@ -127,6 +127,14 @@ pub fn confirm_delete(lang: Lang, name: &str) -> InlineKeyboardMarkup {
     ]])
 }
 
+pub fn confirm_recreate(lang: Lang, name: &str) -> InlineKeyboardMarkup {
+    let yes_txt = match lang { Lang::Ru => "♻️ Пересоздать", Lang::En => "♻️ Recreate" };
+    InlineKeyboardMarkup::new(vec![vec![
+        cb(yes_txt, &format!("recreate:{name}")),
+        cb(&i18n::btn_back(lang), "menu"),
+    ]])
+}
+
 pub fn backup_menu(lang: Lang) -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![
         vec![cb(&i18n::btn_backup_new(lang), "bk:new")],
@@ -207,6 +215,13 @@ mod tests {
     fn confirm_delete_encodes_name() {
         let data = all_callback_data(&confirm_delete(Lang::Ru, "bob"));
         assert!(data.contains(&"delyes:bob".to_string()));
+    }
+
+    #[test]
+    fn confirm_recreate_encodes_name() {
+        let data = all_callback_data(&confirm_recreate(Lang::Ru, "bob"));
+        assert!(data.contains(&"recreate:bob".to_string()));
+        assert!(data.contains(&"menu".to_string()));
     }
 
     #[test]
