@@ -7,7 +7,7 @@ pub enum State {
     #[default]
     Idle,
     AwaitingName,
-    AwaitingExpiry { name: String },
-    AwaitingCustomExpiry { name: String },
-    AwaitingPsk { name: String, expires: Option<String> },
+    AwaitingExpiry { name: String, recreate: bool },
+    AwaitingCustomExpiry { name: String, recreate: bool },
+    AwaitingPsk { name: String, expires: Option<String>, recreate: bool },
 }
