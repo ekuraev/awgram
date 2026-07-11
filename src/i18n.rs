@@ -123,6 +123,13 @@ pub fn deleted(lang: Lang, name: &str) -> String {
     match lang { Lang::Ru => format!("🗑 Клиент {n} удалён."), Lang::En => format!("🗑 Client {n} removed.") }
 }
 pub fn done(lang: Lang) -> String { match lang { Lang::Ru => "Готово.", Lang::En => "Done." }.to_string() }
+pub fn client_exists(lang: Lang, name: &str) -> String {
+    let n = html_escape(name);
+    match lang {
+        Lang::Ru => format!("⚠️ Клиент <b>{n}</b> уже существует. Пересоздать? Старый конфиг будет заменён (новые ключи, новый IP)."),
+        Lang::En => format!("⚠️ Client <b>{n}</b> already exists. Recreate? The old config will be replaced (new keys, new IP)."),
+    }
+}
 
 // --- настройки ---
 pub fn settings_title(lang: Lang, psk_default: bool) -> String {
@@ -278,6 +285,23 @@ mod tests {
         assert_eq!(status_label(Lang::En, "weird_code", "<x>"), "<x>");
         assert_eq!(status_label(Lang::Ru, "weird_code", ""), "неизвестно");
         assert_eq!(status_label(Lang::En, "weird_code", ""), "unknown");
+    }
+
+    #[test]
+    fn client_exists_nonempty_both_langs() {
+        for l in [Lang::Ru, Lang::En] {
+            let msg = client_exists(l, "alice");
+            assert!(!msg.is_empty());
+            assert!(msg.contains("alice"));
+        }
+    }
+
+    #[test]
+    fn client_exists_escapes_html() {
+        // Имя проходит validate_name (без <>), но html_escape не должен
+        // давать двойное экранирование (&amp;amp;).
+        let msg = client_exists(Lang::Ru, "alice");
+        assert!(!msg.contains("&amp;amp;"));
     }
 
     #[test]
