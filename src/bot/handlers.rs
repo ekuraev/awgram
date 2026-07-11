@@ -136,7 +136,7 @@ async fn message_handler(
     dialogue: MyDialogue,
     msg: Message,
     cfg: Arc<Config>,
-    _vpn: Arc<Vpn>,
+    vpn: Arc<Vpn>,
     settings: Arc<SettingsStore>,
 ) -> HandlerResult {
     if !msg.chat.is_private() {
@@ -162,21 +162,40 @@ async fn message_handler(
             let name = msg.text().unwrap_or_default().to_string();
             match crate::vpn::validate::validate_name(&name) {
                 Ok(valid) => {
-                    let confirm_line = match lang {
-                        Lang::Ru => format!("Клиент: {valid}"),
-                        Lang::En => format!("Client: {valid}"),
-                    };
-                    bot.send_message(msg.chat.id, format!("{confirm_line}\n{}", i18n::ask_expiry(lang)))
-                        .reply_markup(menu::expiry_menu(lang))
-                        .await?;
-                    dialogue.update(State::AwaitingExpiry { name: valid }).await?;
+                    match vpn.exists(&valid).await {
+                        Ok(false) => {
+                            let confirm_line = match lang {
+                                Lang::Ru => format!("Клиент: {valid}"),
+                                Lang::En => format!("Client: {valid}"),
+                            };
+                            bot.send_message(msg.chat.id, format!("{confirm_line}\n{}", i18n::ask_expiry(lang)))
+                                .reply_markup(menu::expiry_menu(lang))
+                                .await?;
+                            dialogue.update(State::AwaitingExpiry { name: valid, recreate: false }).await?;
+                        }
+                        Ok(true) => {
+                            bot.send_message(msg.chat.id, i18n::client_exists(lang, &valid))
+                                .reply_markup(menu::confirm_recreate(lang, &valid))
+                                .parse_mode(ParseMode::Html)
+                                .await?;
+                            dialogue.update(State::Idle).await?;
+                        }
+                        Err(e) => {
+                            // list --json упал — не блокируем создание (fail-open).
+                            tracing::warn!(error = %e, "exists check failed, proceeding without duplicate guard");
+                            bot.send_message(msg.chat.id, i18n::ask_expiry(lang))
+                                .reply_markup(menu::expiry_menu(lang))
+                                .await?;
+                            dialogue.update(State::AwaitingExpiry { name: valid, recreate: false }).await?;
+                        }
+                    }
                 }
                 Err(_e) => {
                     bot.send_message(msg.chat.id, i18n::bad_name(lang)).await?;
                 }
             }
         }
-        State::AwaitingCustomExpiry { name } => {
+        State::AwaitingCustomExpiry { name, recreate } => {
             let raw = msg.text().unwrap_or_default().to_string();
             match crate::vpn::validate::validate_expiry(&raw) {
                 Ok(exp) => {
@@ -184,7 +203,7 @@ async fn message_handler(
                         .reply_markup(menu::psk_step(lang, settings.psk_default()))
                         .parse_mode(ParseMode::Html)
                         .await?;
-                    dialogue.update(State::AwaitingPsk { name, expires: Some(exp) }).await?;
+                    dialogue.update(State::AwaitingPsk { name, expires: Some(exp), recreate }).await?;
                 }
                 Err(_e) => {
                     bot.send_message(msg.chat.id, i18n::bad_expiry(lang)).await?;
@@ -211,8 +230,20 @@ async fn message_handler(
     Ok(())
 }
 
-async fn finish_add(bot: &Bot, chat: ChatId, vpn: &Vpn, lang: Lang, name: &str, expires: Option<&str>, psk: bool) {
+async fn finish_add(bot: &Bot, chat: ChatId, vpn: &Vpn, lang: Lang, name: &str, expires: Option<&str>, psk: bool, recreate: bool) {
     let waiting = bot.send_message(chat, i18n::creating(lang)).await.ok();
+    if recreate {
+        // Удаляем старого клиента перед созданием нового. Если remove упадёт —
+        // не создаём нового, показываем ошибку; старый клиент остаётся.
+        if let Err(e) = vpn.remove(name).await {
+            tracing::error!(error = %e, "remove перед recreate провалился");
+            if let Some(m) = waiting {
+                let _ = bot.delete_message(chat, m.id).await;
+            }
+            let _ = bot.send_message(chat, i18n::error_text(lang, &e)).await;
+            return;
+        }
+    }
     match vpn.add(name, expires, psk).await {
         Ok(res) => {
             if let Err(e) = render::send_client_files(bot, chat, lang, &res).await {
@@ -364,20 +395,19 @@ async fn callback_handler(
                 bot.send_message(chat, i18n::error_text(lang, &e)).await?;
             }
         },
-        Action::Recreate(_) => {
-            // Placeholder: real delete+re-add behaviour lands in a later task.
-            // Variant exists so the keyboard can emit `recreate:<name>` now;
-            // the parser covers it, and this arm keeps the callback match
-            // exhaustive until the full handler is implemented.
-            bot.send_message(chat, unknown_action_text(lang)).await?;
-        },
+        Action::Recreate(name) => {
+            bot.send_message(chat, i18n::ask_expiry(lang))
+                .reply_markup(menu::expiry_menu(lang))
+                .await?;
+            dialogue.update(State::AwaitingExpiry { name, recreate: true }).await?;
+        }
         Action::Add => {
             bot.send_message(chat, i18n::ask_client_name(lang)).await?;
             dialogue.update(State::AwaitingName).await?;
         }
         Action::Expiry(kind) => {
-            let name = match dialogue.get().await?.unwrap_or_default() {
-                State::AwaitingExpiry { name } => name,
+            let (name, recreate) = match dialogue.get().await?.unwrap_or_default() {
+                State::AwaitingExpiry { name, recreate } => (name, recreate),
                 _ => {
                     bot.send_message(chat, session_expired_text(lang))
                         .reply_markup(menu::main_menu(lang))
@@ -388,19 +418,19 @@ async fn callback_handler(
             };
             if kind == "custom" {
                 bot.send_message(chat, i18n::ask_custom_expiry(lang)).await?;
-                dialogue.update(State::AwaitingCustomExpiry { name }).await?;
+                dialogue.update(State::AwaitingCustomExpiry { name, recreate }).await?;
             } else {
                 let expires = if kind == "none" { None } else { Some(kind.clone()) };
                 bot.send_message(chat, i18n::psk_step(lang, settings.psk_default()))
                     .reply_markup(menu::psk_step(lang, settings.psk_default()))
                     .parse_mode(ParseMode::Html)
                     .await?;
-                dialogue.update(State::AwaitingPsk { name, expires }).await?;
+                dialogue.update(State::AwaitingPsk { name, expires, recreate }).await?;
             }
         }
         Action::AddPsk(psk) => {
-            let (name, expires) = match dialogue.get().await?.unwrap_or_default() {
-                State::AwaitingPsk { name, expires } => (name, expires),
+            let (name, expires, recreate) = match dialogue.get().await?.unwrap_or_default() {
+                State::AwaitingPsk { name, expires, recreate } => (name, expires, recreate),
                 _ => {
                     bot.send_message(chat, session_expired_text(lang))
                         .reply_markup(menu::main_menu(lang))
@@ -409,7 +439,7 @@ async fn callback_handler(
                     return Ok(());
                 }
             };
-            finish_add(&bot, chat, &vpn, lang, &name, expires.as_deref(), psk).await;
+            finish_add(&bot, chat, &vpn, lang, &name, expires.as_deref(), psk, recreate).await;
             dialogue.exit().await?;
         }
         Action::Settings => {
@@ -685,6 +715,7 @@ mod tests {
             menu::expiry_menu(Lang::Ru),
             menu::client_card(Lang::Ru, "alice"),
             menu::confirm_delete(Lang::Ru, "bob"),
+            menu::confirm_recreate(Lang::Ru, "alice"),
             menu::clients_list(Lang::Ru, &[sample_client], 0, 8),
             menu::language_select(),
             menu::settings_menu(Lang::Ru, false),
