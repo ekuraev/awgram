@@ -230,6 +230,7 @@ async fn message_handler(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn finish_add(bot: &Bot, chat: ChatId, vpn: &Vpn, lang: Lang, name: &str, expires: Option<&str>, psk: bool, recreate: bool) {
     let waiting = bot.send_message(chat, i18n::creating(lang)).await.ok();
     if recreate {

@@ -215,7 +215,7 @@ mod tests {
         let (_d, vpn) = vpn_with_script(
             "#!/bin/sh\necho '[{\"name\":\"alice\",\"status_code\":\"active\"}]'\n",
         );
-        assert_eq!(vpn.exists("alice").await.unwrap(), true);
+        assert!(vpn.exists("alice").await.unwrap());
     }
 
     #[tokio::test]
@@ -223,7 +223,7 @@ mod tests {
         let (_d, vpn) = vpn_with_script(
             "#!/bin/sh\necho '[{\"name\":\"alice\",\"status_code\":\"active\"}]'\n",
         );
-        assert_eq!(vpn.exists("bob").await.unwrap(), false);
+        assert!(!vpn.exists("bob").await.unwrap());
     }
 
     #[tokio::test]
