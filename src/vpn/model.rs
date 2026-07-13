@@ -108,6 +108,29 @@ pub fn format_expiry(lang: Lang, now: i64, exp: Option<i64>) -> String {
     }
 }
 
+/// Компактная метка срока для кнопки списка клиентов. None → бессрочный
+/// клиент (метка не показывается). Пороги — как у `format_expiry`.
+pub fn format_expiry_badge(lang: Lang, now: i64, exp: Option<i64>) -> Option<String> {
+    let e = exp?;
+    let d = e - now;
+    let text = if d <= 0 {
+        match lang { Lang::Ru => "⏳ истёк".to_string(), Lang::En => "⏳ expired".to_string() }
+    } else if d >= 86400 {
+        match lang {
+            Lang::Ru => format!("⏳ {}д", d / 86400),
+            Lang::En => format!("⏳ {}d", d / 86400),
+        }
+    } else if d >= 3600 {
+        match lang {
+            Lang::Ru => format!("⏳ {}ч", d / 3600),
+            Lang::En => format!("⏳ {}h", d / 3600),
+        }
+    } else {
+        match lang { Lang::Ru => "⏳ <1ч".to_string(), Lang::En => "⏳ <1h".to_string() }
+    };
+    Some(text)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -327,5 +350,62 @@ mod tests {
     fn format_expiry_boundary_exactly_now() {
         let now = 2_000_000;
         assert_eq!(format_expiry(Lang::Ru, now, Some(now)), "истёк");
+    }
+
+    #[test]
+    fn expiry_badge_none_for_permanent() {
+        assert_eq!(format_expiry_badge(Lang::Ru, 1_700_000_000, None), None);
+    }
+
+    #[test]
+    fn expiry_badge_days() {
+        let now = 1_700_000_000;
+        assert_eq!(
+            format_expiry_badge(Lang::Ru, now, Some(now + 6 * 86400)),
+            Some("⏳ 6д".to_string())
+        );
+        assert_eq!(
+            format_expiry_badge(Lang::En, now, Some(now + 6 * 86400)),
+            Some("⏳ 6d".to_string())
+        );
+    }
+
+    #[test]
+    fn expiry_badge_hours() {
+        let now = 1_700_000_000;
+        assert_eq!(
+            format_expiry_badge(Lang::Ru, now, Some(now + 5 * 3600)),
+            Some("⏳ 5ч".to_string())
+        );
+        assert_eq!(
+            format_expiry_badge(Lang::En, now, Some(now + 5 * 3600)),
+            Some("⏳ 5h".to_string())
+        );
+    }
+
+    #[test]
+    fn expiry_badge_under_hour() {
+        let now = 1_700_000_000;
+        assert_eq!(
+            format_expiry_badge(Lang::Ru, now, Some(now + 600)),
+            Some("⏳ <1ч".to_string())
+        );
+        assert_eq!(
+            format_expiry_badge(Lang::En, now, Some(now + 600)),
+            Some("⏳ <1h".to_string())
+        );
+    }
+
+    #[test]
+    fn expiry_badge_expired() {
+        let now = 1_700_000_000;
+        assert_eq!(
+            format_expiry_badge(Lang::Ru, now, Some(now)),
+            Some("⏳ истёк".to_string())
+        );
+        assert_eq!(
+            format_expiry_badge(Lang::En, now, Some(now - 1)),
+            Some("⏳ expired".to_string())
+        );
     }
 }
