@@ -252,6 +252,20 @@ async fn finish_add(bot: &Bot, chat: ChatId, vpn: &Vpn, lang: Lang, name: &str, 
                 let _ = bot.send_message(chat, i18n::error_text(lang, &e)).await;
             }
         }
+        // Гонка: клиент появился между проверкой exists() и add — скрипт молча
+        // пропустил создание (rc 0). Показываем то же предупреждение с кнопкой
+        // пересоздания, что и при обычном совпадении имени.
+        Err(crate::error::Error::ClientExists(_)) => {
+            if let Some(m) = waiting {
+                let _ = bot.delete_message(chat, m.id).await;
+            }
+            let _ = bot
+                .send_message(chat, i18n::client_exists(lang, name))
+                .reply_markup(menu::confirm_recreate(lang, name))
+                .parse_mode(ParseMode::Html)
+                .await;
+            return;
+        }
         Err(e) => {
             tracing::error!(error = %e, "add провалился");
             let _ = bot.send_message(chat, i18n::error_text(lang, &e)).await;
