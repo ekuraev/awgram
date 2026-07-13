@@ -81,17 +81,32 @@ pub fn psk_step(lang: Lang, default_on: bool) -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![vec![first, second], vec![cb(&i18n::btn_back(lang), "menu")]])
 }
 
-pub fn clients_list(lang: Lang, clients: &[Client], page: usize, per_page: usize) -> InlineKeyboardMarkup {
+pub fn clients_list(
+    lang: Lang,
+    clients: &[Client],
+    expiries: &[Option<i64>],
+    now: i64,
+    page: usize,
+    per_page: usize,
+) -> InlineKeyboardMarkup {
     if per_page == 0 {
         return InlineKeyboardMarkup::new(vec![vec![cb(&i18n::btn_back(lang), "menu")]]);
     }
 
     let start = page * per_page;
-    let slice = clients.iter().skip(start).take(per_page);
-    let mut rows: Vec<Vec<InlineKeyboardButton>> = slice
-        .map(|c| {
+    let mut rows: Vec<Vec<InlineKeyboardButton>> = clients
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(per_page)
+        .map(|(i, c)| {
             let mark = if c.active() { "🟢" } else { "🔴" };
-            vec![cb(&format!("{mark} {}", c.name), &format!("client:{}", c.name))]
+            let exp = expiries.get(i).copied().flatten();
+            let label = match crate::vpn::model::format_expiry_badge(lang, now, exp) {
+                Some(badge) => format!("{mark} {} {badge}", c.name),
+                None => format!("{mark} {}", c.name),
+            };
+            vec![cb(&label, &format!("client:{}", c.name))]
         })
         .collect();
 
@@ -224,13 +239,17 @@ mod tests {
         assert!(data.contains(&"menu".to_string()));
     }
 
+    fn all_button_texts(kb: &InlineKeyboardMarkup) -> Vec<String> {
+        kb.inline_keyboard.iter().flatten().map(|b| b.text.clone()).collect()
+    }
+
     #[test]
     fn clients_list_one_button_per_client() {
         let clients = vec![
             Client { name: "a".into(), ip: String::new(), client_ipv6: String::new(), status: String::new(), status_code: "active".into(), rx: 0, tx: 0, last_handshake: None },
             Client { name: "b".into(), ip: String::new(), client_ipv6: String::new(), status: String::new(), status_code: "inactive".into(), rx: 0, tx: 0, last_handshake: None },
         ];
-        let data = all_callback_data(&clients_list(Lang::Ru, &clients, 0, 10));
+        let data = all_callback_data(&clients_list(Lang::Ru, &clients, &[], 0, 0, 10));
         assert!(data.contains(&"client:a".to_string()));
         assert!(data.contains(&"client:b".to_string()));
     }
@@ -239,7 +258,7 @@ mod tests {
     fn clients_list_zero_per_page_no_panic() {
         // Test with empty clients
         let empty_clients: Vec<Client> = vec![];
-        let kb_empty = clients_list(Lang::Ru, &empty_clients, 0, 0);
+        let kb_empty = clients_list(Lang::Ru, &empty_clients, &[], 0, 0, 0);
         let data_empty = all_callback_data(&kb_empty);
         assert_eq!(data_empty, vec!["menu"], "empty clients with per_page=0 should have only menu callback");
 
@@ -248,9 +267,22 @@ mod tests {
             Client { name: "a".into(), ip: String::new(), client_ipv6: String::new(), status: String::new(), status_code: "active".into(), rx: 0, tx: 0, last_handshake: None },
             Client { name: "b".into(), ip: String::new(), client_ipv6: String::new(), status: String::new(), status_code: "inactive".into(), rx: 0, tx: 0, last_handshake: None },
         ];
-        let kb_filled = clients_list(Lang::Ru, &clients, 0, 0);
+        let kb_filled = clients_list(Lang::Ru, &clients, &[], 0, 0, 0);
         let data_filled = all_callback_data(&kb_filled);
         assert_eq!(data_filled, vec!["menu"], "non-empty clients with per_page=0 should have only menu callback");
+    }
+
+    #[test]
+    fn clients_list_shows_expiry_badge() {
+        let clients = vec![
+            Client { name: "temp".into(), ip: String::new(), client_ipv6: String::new(), status: String::new(), status_code: "active".into(), rx: 0, tx: 0, last_handshake: None },
+            Client { name: "perm".into(), ip: String::new(), client_ipv6: String::new(), status: String::new(), status_code: "active".into(), rx: 0, tx: 0, last_handshake: None },
+        ];
+        let now = 1_700_000_000;
+        let expiries = vec![Some(now + 6 * 86400), None];
+        let texts = all_button_texts(&clients_list(Lang::Ru, &clients, &expiries, now, 0, 10));
+        assert!(texts.iter().any(|t| t.contains("temp") && t.contains("⏳ 6д")), "temp должен иметь метку: {texts:?}");
+        assert!(texts.iter().any(|t| t.contains("perm") && !t.contains("⏳")), "perm должен быть без метки: {texts:?}");
     }
 
     #[test]

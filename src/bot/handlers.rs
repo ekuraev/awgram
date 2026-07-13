@@ -114,6 +114,13 @@ fn user_id_of_cb(q: &CallbackQuery) -> i64 {
     q.from.id.0 as i64
 }
 
+fn now_epoch() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 /// Локальный текст сессии-таймаута: не входит в каталог `i18n` (см. brief
 /// задачи 5 — новые фичи в других задачах), но всё равно локализуется, чтобы
 /// не оставлять непереведённых строк в слое `bot/`.
@@ -326,8 +333,10 @@ async fn callback_handler(
                     .await?;
             }
             Ok(clients) => {
+                let expiries: Vec<Option<i64>> =
+                    clients.iter().map(|c| vpn.client_expiry(&c.name)).collect();
                 bot.send_message(chat, i18n::clients_title(lang))
-                    .reply_markup(menu::clients_list(lang, &clients, 0, 8))
+                    .reply_markup(menu::clients_list(lang, &clients, &expiries, now_epoch(), 0, 8))
                     .parse_mode(ParseMode::Html)
                     .await?;
             }
@@ -338,8 +347,10 @@ async fn callback_handler(
         },
         Action::Page(p) => match vpn.list().await {
             Ok(clients) => {
+                let expiries: Vec<Option<i64>> =
+                    clients.iter().map(|c| vpn.client_expiry(&c.name)).collect();
                 bot.send_message(chat, i18n::clients_title(lang))
-                    .reply_markup(menu::clients_list(lang, &clients, p, 8))
+                    .reply_markup(menu::clients_list(lang, &clients, &expiries, now_epoch(), p, 8))
                     .parse_mode(ParseMode::Html)
                     .await?;
             }
@@ -361,10 +372,7 @@ async fn callback_handler(
         Action::ShowClient(name) => match vpn.stats().await {
             Ok(clients) => match clients.iter().find(|c| c.name == name) {
                 Some(c) => {
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_secs() as i64)
-                        .unwrap_or(0);
+                    let now = now_epoch();
                     let expiry = vpn.client_expiry(&name);
                     bot.send_message(chat, format_client_card(lang, c, now, expiry))
                         .reply_markup(menu::client_card(lang, &name))
@@ -731,7 +739,7 @@ mod tests {
             menu::client_card(Lang::Ru, "alice"),
             menu::confirm_delete(Lang::Ru, "bob"),
             menu::confirm_recreate(Lang::Ru, "alice"),
-            menu::clients_list(Lang::Ru, &[sample_client], 0, 8),
+            menu::clients_list(Lang::Ru, &[sample_client], &[], 0, 0, 8),
             menu::language_select(),
             menu::settings_menu(Lang::Ru, false),
             menu::settings_menu(Lang::Ru, true),
