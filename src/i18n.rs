@@ -213,6 +213,8 @@ pub fn error_text(lang: Lang, err: &Error) -> String {
         (Lang::En, Error::ScriptFailed { .. }) => "❌ Operation failed. Try again.",
         (Lang::Ru, Error::Parse(_)) => "❌ Не удалось разобрать ответ сервера.",
         (Lang::En, Error::Parse(_)) => "❌ Failed to parse server response.",
+        (Lang::Ru, Error::ClientExists(_)) => "⚠️ Клиент с таким именем уже существует — создание пропущено.",
+        (Lang::En, Error::ClientExists(_)) => "⚠️ A client with this name already exists — creation was skipped.",
         (Lang::Ru, _) => "❌ Ошибка выполнения операции.",
         (Lang::En, _) => "❌ Operation error.",
     }.to_string()
@@ -313,12 +315,21 @@ mod tests {
                 Error::Parse("x".into()),
                 Error::ScriptFailed { code: Some(1), stderr: "secret".into() },
                 Error::Telegram("x".into()),
+                Error::ClientExists("alice".into()),
             ] {
                 let t = error_text(l, &e);
                 assert!(!t.is_empty());
                 assert!(!t.contains("secret")); // stderr не утекает
             }
         }
+    }
+
+    #[test]
+    fn error_text_client_exists_is_specific() {
+        use crate::error::Error;
+        let e = Error::ClientExists("alice".into());
+        assert!(error_text(Lang::Ru, &e).contains("существует"));
+        assert!(error_text(Lang::En, &e).contains("exists"));
     }
 
     #[test]
