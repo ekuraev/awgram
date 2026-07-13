@@ -60,9 +60,17 @@ impl Vpn {
             args.push("--psk".into());
         }
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        // Upstream `manage add` при существующем имени пропускает клиента с warning,
+        // но завершается с rc 0 («тихий» no-op). Отличаем его от успеха по факту
+        // изменения `<name>.conf`: нетронутый старый файл = клиента не создали.
+        let conf = self.clients_dir.join(format!("{name}.conf"));
+        let before = conf_fingerprint(&conf);
         // `add` prints no JSON — just human-readable logs. The created files are
         // read back from `clients_dir` afterwards.
         run(&self.spec(), &arg_refs).await?;
+        if before.is_some() && conf_fingerprint(&conf) == before {
+            return Err(crate::error::Error::ClientExists(name));
+        }
         self.existing_files(&name)
     }
 
@@ -168,6 +176,15 @@ impl Vpn {
     }
 }
 
+/// Отпечаток файла для сравнения «до/после» запуска `add`: mtime + размер + inode.
+/// Скрипт пишет конфиги атомарно (rename), поэтому любое реальное создание
+/// меняет как минимум inode. None — файла нет.
+fn conf_fingerprint(path: &std::path::Path) -> Option<(std::time::SystemTime, u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    let m = std::fs::metadata(path).ok()?;
+    Some((m.modified().ok()?, m.len(), m.ino()))
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct BackupFile {
     pub name: String,
@@ -249,11 +266,39 @@ mod tests {
     #[tokio::test]
     async fn add_runs_script_then_reads_created_conf() {
         // Real `add` prints no JSON — just logs — and creates `<name>.conf` on disk.
-        let (dir, vpn) = vpn_with_script("#!/bin/sh\nexit 0\n");
-        std::fs::write(dir.path().join("alice.conf"), "conf").unwrap();
+        let (dir, vpn) = vpn_with_script(
+            "#!/bin/sh\necho conf > \"$(dirname \"$0\")/alice.conf\"\nexit 0\n",
+        );
         let res = vpn.add("alice", None, false).await.unwrap();
         assert!(res.conf_path.ends_with("alice.conf"));
         assert_eq!(res.uri, "");
+        drop(dir);
+    }
+
+    #[tokio::test]
+    async fn add_errors_when_script_silently_skips_existing_client() {
+        // Upstream `manage add` при существующем имени пишет warning, делает
+        // `continue` и завершается с rc 0, ничего не создав. Старый `.conf`
+        // остаётся на диске нетронутым — add() обязан отличить этот «тихий
+        // пропуск» от успешного создания, иначе бот отправит чужой старый конфиг.
+        let (dir, vpn) = vpn_with_script("#!/bin/sh\nexit 0\n");
+        std::fs::write(dir.path().join("alice.conf"), "old conf").unwrap();
+        let err = vpn.add("alice", None, false).await.unwrap_err();
+        assert!(matches!(err, crate::error::Error::ClientExists(_)), "got {err:?}");
+        drop(dir);
+    }
+
+    #[tokio::test]
+    async fn add_succeeds_when_script_rewrites_preexisting_conf() {
+        // Осиротевший `.conf` на диске при отсутствии клиента в awg0.conf:
+        // скрипт создаёт клиента и перезаписывает файл — это успех, не пропуск.
+        let (dir, vpn) = vpn_with_script(
+            "#!/bin/sh\necho 'fresh new conf' > \"$(dirname \"$0\")/alice.conf\"\nexit 0\n",
+        );
+        std::fs::write(dir.path().join("alice.conf"), "stale").unwrap();
+        let res = vpn.add("alice", None, false).await.unwrap();
+        assert!(res.conf_path.ends_with("alice.conf"));
+        drop(dir);
     }
 
     #[tokio::test]
