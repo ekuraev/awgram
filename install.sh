@@ -46,6 +46,14 @@ MSG_RU[err_deps]="Без этих пакетов установка невозм
 MSG_EN[err_deps]="Cannot continue without these packages"
 MSG_RU[yn]="[y/N]"
 MSG_EN[yn]="[y/N]"
+MSG_RU[err_latest]="Не удалось получить последний релиз %s (репо публичный? есть релизы?)"
+MSG_EN[err_latest]="Failed to fetch the latest release of %s (is the repo public? any releases?)"
+MSG_RU[dl_binary]="Скачиваю %s"
+MSG_EN[dl_binary]="Downloading %s"
+MSG_RU[err_sha]="Контрольная сумма sha256 не совпала — файл повреждён или подменён"
+MSG_EN[err_sha]="sha256 checksum mismatch — the file is corrupted or tampered with"
+MSG_RU[err_no_file]="Файл не найден: %s"
+MSG_EN[err_no_file]="File not found: %s"
 
 msg() {
   local key="$1"; shift || true
@@ -169,6 +177,37 @@ ensure_deps() {
     dnf) dnf install -y -q "${pkgs[@]}" >&2 ;;
     yum) yum install -y -q "${pkgs[@]}" >&2 ;;
   esac
+}
+
+# ---------- релизы ----------
+fetch_latest_tag() {
+  local tag
+  tag="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null \
+        | grep -o '"tag_name": *"[^"]*"' | head -1 | cut -d'"' -f4)" || true
+  [ -n "$tag" ] || die err_latest "$REPO"
+  printf '%s\n' "$tag"
+}
+
+fetch_binary() { # $1=tag; stdout=путь staged-файла
+  local tag="$1" tmpd url
+  tmpd="$(mktemp -d)"
+  if [ -n "$BINARY_FILE" ]; then
+    [ -f "$BINARY_FILE" ] || die err_no_file "$BINARY_FILE"
+    cp "$BINARY_FILE" "$tmpd/awgram-linux-$ARCH"
+  else
+    url="https://github.com/$REPO/releases/download/$tag/awgram-linux-$ARCH"
+    info dl_binary "$url"
+    curl -fSL --progress-bar -o "$tmpd/awgram-linux-$ARCH" "$url" >&2
+    curl -fsSL -o "$tmpd/awgram-linux-$ARCH.sha256" "$url.sha256"
+    (cd "$tmpd" && sha256sum -c "awgram-linux-$ARCH.sha256" >/dev/null 2>&1) || die err_sha
+  fi
+  printf '%s\n' "$tmpd/awgram-linux-$ARCH"
+}
+
+install_binary() { # $1=staged
+  [ -f "$BIN_PATH" ] && cp -f "$BIN_PATH" "$BIN_PATH.bak"
+  install -m 755 "$1" "$BIN_PATH.new"
+  mv -f "$BIN_PATH.new" "$BIN_PATH"
 }
 
 # ---------- help ----------
