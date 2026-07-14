@@ -100,6 +100,18 @@ MSG_RU[rollback]="Откатываюсь на предыдущий бинарн�
 MSG_EN[rollback]="Rolling back to the previous binary"
 MSG_RU[err_update]="Обновление не удалось — сервис не запустился (выполнен откат)"
 MSG_EN[err_update]="Update failed — service did not start (rolled back)"
+MSG_RU[cfg_menu]="Что изменить: 1) токен  2) admin_ids  3) путь manage-скрипта  4) показать текущие  5) выход"
+MSG_EN[cfg_menu]="What to change: 1) token  2) admin_ids  3) manage-script path  4) show current  5) exit"
+MSG_RU[cfg_saved]="Сохранено"
+MSG_EN[cfg_saved]="Saved"
+MSG_RU[q_restart]="Перезапустить сервис, чтобы применить изменения?"
+MSG_EN[q_restart]="Restart the service to apply changes?"
+MSG_RU[cfg_current]="Текущие настройки (%s):"
+MSG_EN[cfg_current]="Current settings (%s):"
+MSG_RU[token_set]="задан"
+MSG_EN[token_set]="set"
+MSG_RU[token_unset]="не задан"
+MSG_EN[token_unset]="not set"
 
 msg() {
   local key="$1"; shift || true
@@ -495,8 +507,6 @@ cmd_update() {
   fi
   staged="$(fetch_binary "$tag")"
   install_binary "$staged"
-  INSTALLED_VERSION="$tag"
-  save_setup_conf
   if is_systemd; then
     systemctl restart awgram 2>/dev/null || true
     if ! wait_active; then
@@ -510,13 +520,69 @@ cmd_update() {
       die err_update
     fi
   fi
+  INSTALLED_VERSION="$tag"
+  save_setup_conf
   info updated "$tag"
   # самообновление awgram-setup (не критично при отказе)
   curl -fsSL "https://raw.githubusercontent.com/$REPO/main/install.sh" -o "$SETUP_PATH.new" 2>/dev/null \
     && install -m 755 "$SETUP_PATH.new" "$SETUP_PATH" && rm -f "$SETUP_PATH.new" \
     || rm -f "$SETUP_PATH.new" 2>/dev/null || true
 }
-cmd_config()    { die err_not_implemented; }
+set_toml() { # $1=ключ, $2=готовое toml-значение (без экранирования | в значении)
+  cp -f "$CFG_FILE" "$CFG_FILE.bak"
+  sed -i "s|^\($1[[:space:]]*=\).*|\1 $2|" "$CFG_FILE"
+}
+
+show_current() {
+  msg cfg_current "$CFG_FILE" >&2
+  grep -E '^(admin_ids|manage_script|clients_dir|sudo_prefix)' "$CFG_FILE" >&2 || true
+  if [ -s "$ENV_FILE" ]; then printf 'token: %s\n' "$(msg token_set)" >&2
+  else printf 'token: %s\n' "$(msg token_unset)" >&2; fi
+}
+
+maybe_restart() {
+  is_systemd || return 0
+  confirm q_restart || return 0
+  systemctl restart awgram 2>/dev/null || true
+  wait_active && info svc_ok || { warn svc_failed; journalctl -u awgram -n 20 --no-pager >&2 || true; }
+}
+
+cmd_config() {
+  ensure_root; init_tty; load_setup_conf; choose_language
+  [ -f "$CFG_FILE" ] || die err_not_installed
+  local changed=0
+  if [ -n "$TOKEN" ]; then write_env_token; changed=1; fi
+  if [ -n "$ADMINS" ]; then
+    validate_admins || die err_admins
+    set_toml admin_ids "[${ADMINS//,/, }]"; changed=1
+  fi
+  if [ -n "$MANAGE_SCRIPT" ]; then
+    [ -f "$MANAGE_SCRIPT" ] || warn warn_no_script "$MANAGE_SCRIPT"
+    set_toml manage_script "\"$MANAGE_SCRIPT\""
+    save_setup_conf; changed=1
+  fi
+  if [ "$changed" = 0 ]; then
+    [ -n "$TTY_IN" ] || die err_no_tty
+    while true; do
+      local c; c="$(ask cfg_menu "5")"
+      case "$c" in
+        1) TOKEN="$(ask_secret q_token)"; [ -n "$TOKEN" ] && { write_env_token; changed=1; info cfg_saved; } ;;
+        2) ADMINS="$(ask q_admins "")"; validate_admins || { warn err_admins; continue; }
+           set_toml admin_ids "[${ADMINS//,/, }]"; changed=1; info cfg_saved ;;
+        3) MANAGE_SCRIPT="$(ask q_script "")"; [ -n "$MANAGE_SCRIPT" ] || continue
+           [ -f "$MANAGE_SCRIPT" ] || warn warn_no_script "$MANAGE_SCRIPT"
+           set_toml manage_script "\"$MANAGE_SCRIPT\""; save_setup_conf; changed=1; info cfg_saved ;;
+        4) show_current ;;
+        *) break ;;
+      esac
+    done
+  else
+    info cfg_saved
+  fi
+  [ "$changed" = 1 ] && maybe_restart
+  return 0
+}
+
 cmd_status()    { die err_not_implemented; }
 cmd_uninstall() { die err_not_implemented; }
 

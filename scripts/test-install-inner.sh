@@ -54,4 +54,13 @@ printf '#!/bin/sh\necho v2\n' > /tmp/fakebin2; chmod +x /tmp/fakebin2
 [ -f /usr/local/bin/awgram.bak ] || fail "update backup"
 [ "$(sha256sum < /usr/local/bin/awgram.bak)" = "$(sha256sum < /tmp/fakebin)" ] || fail "backup is previous binary"
 
+# --- сценарий 4: config флагами ---
+/usr/local/bin/awgram-setup config --admins 3 --yes --no-systemd
+grep -q '^admin_ids     = \[3\]$' /etc/awgram/config.toml || fail "config admins"
+[ -f /etc/awgram/config.toml.bak ] || fail "config backup"
+/usr/local/bin/awgram-setup config --token NEWTOKEN --yes --no-systemd
+grep -q '^AWGRAM_TOKEN=NEWTOKEN$' /etc/awgram/env || fail "config token"
+/usr/local/bin/awgram-setup config --script-path /root/awg/manage_amneziawg.sh --yes --no-systemd
+grep -q '^manage_script = "/root/awg/manage_amneziawg.sh"$' /etc/awgram/config.toml || fail "config script"
+
 echo "OK: all scenarios passed"
