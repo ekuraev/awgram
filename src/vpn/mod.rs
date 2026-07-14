@@ -174,6 +174,17 @@ impl Vpn {
         let (out, _code) = run_capture(&self.spec(), &["check"]).await?;
         Ok(out)
     }
+
+    /// Запускает `diagnose` и возвращает stdout независимо от кода выхода
+    /// (как `check`: ненулевой код — «найдены проблемы», а не ошибка).
+    /// Пустой вывод — ошибка: диагностика всегда что-то печатает.
+    pub async fn diagnose(&self) -> Result<String> {
+        let (out, _code) = run_capture(&self.spec(), &["diagnose"]).await?;
+        if out.trim().is_empty() {
+            return Err(crate::error::Error::Parse("пустой вывод diagnose".into()));
+        }
+        Ok(out)
+    }
 }
 
 /// Отпечаток файла для сравнения «до/после» запуска `add`: mtime + размер + inode.
@@ -417,5 +428,18 @@ mod tests {
         let (_d, vpn) = vpn_with_script("#!/bin/sh\necho 'ПРОБЛЕМЫ'\nexit 1\n");
         let out = vpn.check().await.unwrap();
         assert!(out.contains("ПРОБЛЕМЫ"));
+    }
+
+    #[tokio::test]
+    async fn diagnose_returns_output_even_on_problems() {
+        let (_d, vpn) = vpn_with_script("#!/bin/sh\necho 'DIAG REPORT'\nexit 1\n");
+        let out = vpn.diagnose().await.unwrap();
+        assert!(out.contains("DIAG REPORT"));
+    }
+
+    #[tokio::test]
+    async fn diagnose_errors_on_empty_output() {
+        let (_d, vpn) = vpn_with_script("#!/bin/sh\nexit 0\n");
+        assert!(matches!(vpn.diagnose().await, Err(crate::error::Error::Parse(_))));
     }
 }
