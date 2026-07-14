@@ -34,7 +34,7 @@ jobs:
           cd dist
           sha256sum "awgram-linux-${{ matrix.arch }}" > "awgram-linux-${{ matrix.arch }}.sha256"
           file "awgram-linux-${{ matrix.arch }}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: awgram-linux-${{ matrix.arch }}
           path: dist/
