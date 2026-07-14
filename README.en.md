@@ -10,6 +10,24 @@ A Rust Telegram bot for managing [AmneziaWG](https://amnezia.org/) clients
 straight from your phone: add/remove a client, view the list and traffic —
 no SSH required.
 
+## Quick start
+
+1. Get a bot token from [@BotFather](https://t.me/BotFather) (`/newbot`)
+   and your numeric ID from [@userinfobot](https://t.me/userinfobot).
+2. On a VPS with the
+   [AmneziaWG installer](https://github.com/bivlked/amneziawg-installer) set up, run:
+
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/ekuraev/awgram/main/install.sh | bash
+   ```
+
+3. Answer the installer's questions (language, mode, token, admin IDs) —
+   done: open your bot in Telegram and press `/start`.
+
+Details, fully automated flag-driven install and the manual path are in the
+[Installation](#installation) section. Post-install management:
+`awgram-setup update | config | status | uninstall`.
+
 ## What it is and how it works
 
 `awgram` is a single binary (`tokio` + `teloxide 0.17`, long polling, no
