@@ -10,6 +10,14 @@ A Rust Telegram bot for managing [AmneziaWG](https://amnezia.org/) clients
 straight from your phone: add/remove a client, view the list and traffic —
 no SSH required.
 
+**awgram manages native AmneziaWG** — the Linux kernel module (set up by the
+[installer](https://github.com/bivlked/amneziawg-installer)) — entirely from
+Telegram: once installed, no console or terminal is ever needed. In
+convenience it comes close to the Amnezia VPN ecosystem, where the server
+side runs in Docker containers — but native AWG is noticeably faster and
+lighter on resources (a kernel module versus a container layer), which is
+especially tangible on budget VPS hosts.
+
 ## Quick start
 
 1. Get a bot token from [@BotFather](https://t.me/BotFather) (`/newbot`)
