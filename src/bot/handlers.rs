@@ -26,6 +26,7 @@ pub enum Action {
     AskDelete(String),
     ConfirmDelete(String),
     Recreate(String),
+    Regen(String),
     Expiry(String), // "none" | "1d" | ... | "custom"
     Lang(String),   // "ru" | "en" — язык-гейт при первом /start
     Settings,
@@ -71,6 +72,8 @@ fn parse_callback(data: &str) -> Action {
                 Action::AskDelete(v.to_string())
             } else if let Some(v) = data.strip_prefix("recreate:") {
                 Action::Recreate(v.to_string())
+            } else if let Some(v) = data.strip_prefix("regen:") {
+                Action::Regen(v.to_string())
             } else if let Some(v) = data.strip_prefix("exp:") {
                 Action::Expiry(v.to_string())
             } else if let Some(v) = data.strip_prefix("add:psk:") {
@@ -440,6 +443,29 @@ async fn callback_handler(
                 .await?;
             dialogue.update(State::AwaitingExpiry { name, recreate: true }).await?;
         }
+        Action::Regen(name) => {
+            let waiting = bot.send_message(chat, i18n::regen_running(lang)).await.ok();
+            match vpn.regen_client(&name).await {
+                Ok(res) => {
+                    if let Err(e) = render::send_client_files(&bot, chat, lang, &res).await {
+                        tracing::error!(error = %e, "не удалось отправить файлы после regen");
+                        bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                    } else {
+                        bot.send_message(chat, i18n::done(lang))
+                            .reply_markup(menu::main_menu(lang))
+                            .parse_mode(ParseMode::Html)
+                            .await?;
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "regen провалился");
+                    bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                }
+            }
+            if let Some(m) = waiting {
+                let _ = bot.delete_message(chat, m.id).await;
+            }
+        }
         Action::Add => {
             bot.send_message(chat, i18n::ask_client_name(lang)).await?;
             dialogue.update(State::AwaitingName).await?;
@@ -725,6 +751,11 @@ mod tests {
     #[test]
     fn parse_callback_diagnose() {
         assert_eq!(parse_callback("diagnose"), Action::Diagnose);
+    }
+
+    #[test]
+    fn parse_callback_regen_client() {
+        assert_eq!(parse_callback("regen:alice"), Action::Regen("alice".into()));
     }
 
     #[test]

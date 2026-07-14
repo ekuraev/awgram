@@ -123,6 +123,12 @@ pub fn deleted(lang: Lang, name: &str) -> String {
     match lang { Lang::Ru => format!("🗑 Клиент {n} удалён."), Lang::En => format!("🗑 Client {n} removed.") }
 }
 pub fn done(lang: Lang) -> String { match lang { Lang::Ru => "Готово.", Lang::En => "Done." }.to_string() }
+pub fn btn_regen(lang: Lang) -> String {
+    match lang { Lang::Ru => "🔄 Перевыпустить", Lang::En => "🔄 Reissue" }.to_string()
+}
+pub fn regen_running(lang: Lang) -> String {
+    match lang { Lang::Ru => "⏳ Перевыпускаю…", Lang::En => "⏳ Reissuing…" }.to_string()
+}
 pub fn client_exists(lang: Lang, name: &str) -> String {
     let n = html_escape(name);
     match lang {
@@ -354,6 +360,14 @@ mod tests {
             let r = diagnose_result(l, "body <x>");
             assert!(r.contains("<pre>"));
             assert!(r.contains("&lt;x&gt;")); // вывод экранируется
+        }
+    }
+
+    #[test]
+    fn regen_strings_nonempty_both_langs() {
+        for l in [Lang::Ru, Lang::En] {
+            assert!(!btn_regen(l).is_empty());
+            assert!(!regen_running(l).is_empty());
         }
     }
 

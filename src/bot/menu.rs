@@ -130,6 +130,7 @@ pub fn client_card(lang: Lang, name: &str) -> InlineKeyboardMarkup {
     let del_txt = match lang { Lang::Ru => "🗑 Удалить", Lang::En => "🗑 Delete" };
     InlineKeyboardMarkup::new(vec![
         vec![cb(conf_txt, &format!("conf:{name}")), cb(del_txt, &format!("del:{name}"))],
+        vec![cb(&i18n::btn_regen(lang), &format!("regen:{name}"))],
         vec![cb(&i18n::btn_back(lang), "menu")],
     ])
 }
@@ -224,6 +225,7 @@ mod tests {
         let data = all_callback_data(&client_card(Lang::Ru, "alice"));
         assert!(data.contains(&"conf:alice".to_string()));
         assert!(data.contains(&"del:alice".to_string()));
+        assert!(data.contains(&"regen:alice".to_string()));
     }
 
     #[test]
