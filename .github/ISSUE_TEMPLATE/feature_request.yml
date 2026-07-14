@@ -1,0 +1,23 @@
+name: "💡 Предложение / Feature request"
+description: "Идея или улучшение / An idea or improvement"
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: "Проблема / Problem"
+      description: "Какую задачу это решает? / What problem does it solve?"
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: "Желаемое поведение / Desired behavior"
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: "Альтернативы / Alternatives considered"
+    validations:
+      required: false

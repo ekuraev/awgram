@@ -1,0 +1,8 @@
+target/
+*.log
+.env
+.superpowers/
+dist/
+docs/superpowers/
+.serena/
+.claude/

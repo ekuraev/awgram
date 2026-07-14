@@ -1,0 +1,17 @@
+[Unit]
+Description=awgram — Telegram bot for AmneziaWG
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# По умолчанию — root (простой режим). Для hardened: User=awgram + sudoers (см. README).
+ExecStart=/usr/local/bin/awgram
+Environment=AWGRAM_CONFIG=/etc/awgram/config.toml
+EnvironmentFile=-/etc/awgram/env
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=false
+
+[Install]
+WantedBy=multi-user.target
