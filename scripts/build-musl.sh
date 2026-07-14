@@ -30,6 +30,9 @@ build_one() {
       export $cc_var=musl-gcc
       export $linker_var=musl-gcc
       cargo build --release --target $target
+      # сборка идёт от root — возвращаем target/ владельцу репозитория,
+      # иначе на Linux-хосте локальный cargo спотыкается о root-owned файлы
+      chown -R \"\$(stat -c '%u:%g' /app)\" /app/target
     "
 
   mkdir -p dist
