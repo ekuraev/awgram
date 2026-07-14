@@ -27,6 +27,8 @@ pub enum Action {
     ConfirmDelete(String),
     Recreate(String),
     Regen(String),
+    RegenAll,
+    RegenAllRun(bool), // true = --reset-routes
     Expiry(String), // "none" | "1d" | ... | "custom"
     Lang(String),   // "ru" | "en" — язык-гейт при первом /start
     Settings,
@@ -57,6 +59,9 @@ fn parse_callback(data: &str) -> Action {
         "bk:list" => Action::BackupList,
         "check" => Action::Check,
         "diagnose" => Action::Diagnose,
+        "regen_all" => Action::RegenAll,
+        "regen_all_go" => Action::RegenAllRun(false),
+        "regen_all_routes" => Action::RegenAllRun(true),
         _ => {
             if let Some(v) = data.strip_prefix("page:") {
                 v.parse().map(Action::Page).unwrap_or(Action::Unknown)
@@ -466,6 +471,36 @@ async fn callback_handler(
                 let _ = bot.delete_message(chat, m.id).await;
             }
         }
+        Action::RegenAll => {
+            bot.send_message(chat, i18n::confirm_regen_all(lang))
+                .reply_markup(menu::confirm_regen_all(lang))
+                .parse_mode(ParseMode::Html)
+                .await?;
+        }
+        Action::RegenAllRun(reset_routes) => {
+            let waiting = bot.send_message(chat, i18n::regen_all_running(lang)).await.ok();
+            match vpn.regen_all(reset_routes).await {
+                Ok(true) => {
+                    bot.send_message(chat, i18n::regen_all_done(lang))
+                        .reply_markup(menu::main_menu(lang))
+                        .parse_mode(ParseMode::Html)
+                        .await?;
+                }
+                Ok(false) => {
+                    bot.send_message(chat, i18n::regen_all_partial(lang))
+                        .reply_markup(menu::main_menu(lang))
+                        .parse_mode(ParseMode::Html)
+                        .await?;
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "массовый regen провалился");
+                    bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                }
+            }
+            if let Some(m) = waiting {
+                let _ = bot.delete_message(chat, m.id).await;
+            }
+        }
         Action::Add => {
             bot.send_message(chat, i18n::ask_client_name(lang)).await?;
             dialogue.update(State::AwaitingName).await?;
@@ -755,6 +790,15 @@ mod tests {
 
     #[test]
     fn parse_callback_regen_client() {
+        assert_eq!(parse_callback("regen:alice"), Action::Regen("alice".into()));
+    }
+
+    #[test]
+    fn parse_callback_regen_all_variants() {
+        assert_eq!(parse_callback("regen_all"), Action::RegenAll);
+        assert_eq!(parse_callback("regen_all_go"), Action::RegenAllRun(false));
+        assert_eq!(parse_callback("regen_all_routes"), Action::RegenAllRun(true));
+        // "regen_all…" не должен съедаться префиксом "regen:" (там двоеточие).
         assert_eq!(parse_callback("regen:alice"), Action::Regen("alice".into()));
     }
 

@@ -129,6 +129,33 @@ pub fn btn_regen(lang: Lang) -> String {
 pub fn regen_running(lang: Lang) -> String {
     match lang { Lang::Ru => "⏳ Перевыпускаю…", Lang::En => "⏳ Reissuing…" }.to_string()
 }
+pub fn btn_regen_all(lang: Lang) -> String {
+    match lang { Lang::Ru => "🔄 Перевыпустить всех", Lang::En => "🔄 Reissue all" }.to_string()
+}
+pub fn confirm_regen_all(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "🔄 <b>Перевыпустить конфиги всех клиентов?</b>\nФайлы и QR будут перегенерированы, ключи и IP сохранятся — существующие подключения продолжат работать.\n\n🔀 <b>+ сброс маршрутов</b>: дополнительно заменит индивидуальные AllowedIPs клиентов глобальным режимом маршрутизации сервера (нужно после смены режима).",
+        Lang::En => "🔄 <b>Reissue configs for all clients?</b>\nFiles and QR codes will be regenerated; keys and IPs are preserved — existing connections keep working.\n\n🔀 <b>+ reset routes</b>: additionally replaces per-client AllowedIPs with the server's global routing mode (needed after a mode change).",
+    }.to_string()
+}
+pub fn btn_regen_all_go(lang: Lang) -> String {
+    match lang { Lang::Ru => "✅ Перевыпустить", Lang::En => "✅ Reissue" }.to_string()
+}
+pub fn btn_regen_all_routes(lang: Lang) -> String {
+    match lang { Lang::Ru => "🔀 + сброс маршрутов", Lang::En => "🔀 + reset routes" }.to_string()
+}
+pub fn regen_all_running(lang: Lang) -> String {
+    match lang { Lang::Ru => "⏳ Перевыпускаю всех…", Lang::En => "⏳ Reissuing all…" }.to_string()
+}
+pub fn regen_all_done(lang: Lang) -> String {
+    match lang { Lang::Ru => "✅ Все конфиги перевыпущены.", Lang::En => "✅ All client configs reissued." }.to_string()
+}
+pub fn regen_all_partial(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "⚠️ Завершено, но с ошибками у части клиентов — проверьте логи сервера.",
+        Lang::En => "⚠️ Completed, but with errors for some clients — check the server logs.",
+    }.to_string()
+}
 pub fn client_exists(lang: Lang, name: &str) -> String {
     let n = html_escape(name);
     match lang {
@@ -368,6 +395,19 @@ mod tests {
         for l in [Lang::Ru, Lang::En] {
             assert!(!btn_regen(l).is_empty());
             assert!(!regen_running(l).is_empty());
+        }
+    }
+
+    #[test]
+    fn regen_all_strings_nonempty_both_langs() {
+        for l in [Lang::Ru, Lang::En] {
+            assert!(!btn_regen_all(l).is_empty());
+            assert!(!confirm_regen_all(l).is_empty());
+            assert!(!btn_regen_all_go(l).is_empty());
+            assert!(!btn_regen_all_routes(l).is_empty());
+            assert!(!regen_all_running(l).is_empty());
+            assert!(!regen_all_done(l).is_empty());
+            assert!(!regen_all_partial(l).is_empty());
         }
     }
 

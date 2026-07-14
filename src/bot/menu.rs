@@ -121,6 +121,7 @@ pub fn clients_list(
     if !nav.is_empty() {
         rows.push(nav);
     }
+    rows.push(vec![cb(&i18n::btn_regen_all(lang), "regen_all")]);
     rows.push(vec![cb(&i18n::btn_back(lang), "menu")]);
     InlineKeyboardMarkup::new(rows)
 }
@@ -149,6 +150,14 @@ pub fn confirm_recreate(lang: Lang, name: &str) -> InlineKeyboardMarkup {
         cb(yes_txt, &format!("recreate:{name}")),
         cb(&i18n::btn_back(lang), "menu"),
     ]])
+}
+
+pub fn confirm_regen_all(lang: Lang) -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![
+        vec![cb(&i18n::btn_regen_all_go(lang), "regen_all_go")],
+        vec![cb(&i18n::btn_regen_all_routes(lang), "regen_all_routes")],
+        vec![cb(&i18n::btn_back(lang), "menu")],
+    ])
 }
 
 pub fn backup_menu(lang: Lang) -> InlineKeyboardMarkup {
@@ -238,6 +247,23 @@ mod tests {
     fn confirm_recreate_encodes_name() {
         let data = all_callback_data(&confirm_recreate(Lang::Ru, "bob"));
         assert!(data.contains(&"recreate:bob".to_string()));
+        assert!(data.contains(&"menu".to_string()));
+    }
+
+    #[test]
+    fn clients_list_has_regen_all_button() {
+        let clients = vec![
+            Client { name: "a".into(), ip: String::new(), client_ipv6: String::new(), status: String::new(), status_code: "active".into(), rx: 0, tx: 0, last_handshake: None },
+        ];
+        let data = all_callback_data(&clients_list(Lang::Ru, &clients, &[], 0, 0, 10));
+        assert!(data.contains(&"regen_all".to_string()));
+    }
+
+    #[test]
+    fn confirm_regen_all_has_three_actions() {
+        let data = all_callback_data(&confirm_regen_all(Lang::Ru));
+        assert!(data.contains(&"regen_all_go".to_string()));
+        assert!(data.contains(&"regen_all_routes".to_string()));
         assert!(data.contains(&"menu".to_string()));
     }
 
