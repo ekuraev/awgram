@@ -82,6 +82,28 @@ This assumes `manage_amneziawg.sh` is already installed and working (see the
 AmneziaWG installer's own documentation), usually at
 `/root/awg/manage_amneziawg.sh`.
 
+### Quick install (recommended)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ekuraev/awgram/main/install.sh | bash
+```
+
+The interactive installer asks for the language (RU/EN), mode (root or
+hardened), token and admin IDs, downloads the binary for your architecture
+(amd64/arm64) from the latest release with sha256 verification and starts
+the service. Fully automated install — via flags:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ekuraev/awgram/main/install.sh \
+  | bash -s -- install --lang en --mode root --token 'TOKEN' --admins 111111111 --yes
+```
+
+After installation the `awgram-setup` command is available:
+`update` (upgrade to the latest release), `config` (token/admins/paths),
+`status`, `uninstall`, `help`.
+
+### Manual installation
+
 1. Copy the binary:
 
    ```bash

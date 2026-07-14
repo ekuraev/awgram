@@ -64,8 +64,14 @@ grep -q '^AWGRAM_TOKEN=NEWTOKEN$' /etc/awgram/env || fail "config token"
 grep -q '^manage_script = "/root/awg/manage_amneziawg.sh"$' /etc/awgram/config.toml || fail "config script"
 
 # --- сценарий 5: status (без сети → latest unknown, не падает) ---
-/usr/local/bin/awgram-setup status --no-systemd 2>&1 | grep -qi 'Installed:' || fail "status output"
-/usr/local/bin/awgram-setup status --no-systemd 2>&1 | grep -qi 'hardened' || fail "status mode"
+# Вывод сначала захватывается в переменную, а не грепается напрямую из пайпа:
+# `grep -q` завершается по первому совпадению и закрывает читающий конец, из-за
+# чего awgram-setup может словить SIGPIPE на последующей записи (гонка,
+# зависящая от буферизации/планировщика) и pipefail пометит шаг как упавший,
+# даже если само совпадение было найдено.
+status_out="$(/usr/local/bin/awgram-setup status --no-systemd 2>&1)"
+grep -qi 'Installed:' <<<"$status_out" || fail "status output"
+grep -qi 'hardened' <<<"$status_out" || fail "status mode"
 
 # --- сценарий 6: uninstall --purge ---
 /usr/local/bin/awgram-setup uninstall --yes --purge --no-systemd

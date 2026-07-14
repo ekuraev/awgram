@@ -7,6 +7,9 @@
 
 ### Added
 
+- Установщик `install.sh` / `awgram-setup`: установка одной командой
+  (интерактивно или флагами `--yes`), режимы root/hardened, RU/EN,
+  команды update/config/status/uninstall, sha256-проверка релиза.
 - Релизная сборка **arm64** (`awgram-linux-arm64`): матрица в `release.yml`
   через [cross](https://github.com/cross-rs/cross); `scripts/build-musl.sh`
   принимает `amd64|arm64|all`; флаги статической сборки вынесены в

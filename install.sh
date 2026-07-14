@@ -5,6 +5,7 @@
 # После установки доступен как awgram-setup (install|update|config|status|uninstall|help).
 set -euo pipefail
 
+# shellcheck disable=SC2034  # версия скрипта, зарезервирована для будущего использования (self-update/--version)
 SCRIPT_VERSION="1.0.0"
 REPO="ekuraev/awgram"
 BIN_PATH="/usr/local/bin/awgram"
@@ -337,8 +338,7 @@ EOF
 }
 
 wait_active() {
-  local i
-  for i in 1 2 3 4 5; do
+  for _ in 1 2 3 4 5; do
     sleep 1
     systemctl is-active --quiet awgram && return 0
   done
@@ -360,9 +360,15 @@ self_install() {
   if [ -n "$src" ] && [ -f "$src" ]; then
     [ "$src" -ef "$SETUP_PATH" ] 2>/dev/null || install -m 755 "$src" "$SETUP_PATH"
   else
-    curl -fsSL "https://raw.githubusercontent.com/$REPO/main/install.sh" -o "$SETUP_PATH.new" 2>/dev/null \
-      && install -m 755 "$SETUP_PATH.new" "$SETUP_PATH" && rm -f "$SETUP_PATH.new" \
-      || warn warn_self
+    if curl -fsSL "https://raw.githubusercontent.com/$REPO/main/install.sh" -o "$SETUP_PATH.new" 2>/dev/null; then
+      if install -m 755 "$SETUP_PATH.new" "$SETUP_PATH"; then
+        rm -f "$SETUP_PATH.new"
+      else
+        warn warn_self
+      fi
+    else
+      warn warn_self
+    fi
   fi
 }
 
@@ -566,7 +572,12 @@ maybe_restart() {
   is_systemd || return 0
   confirm q_restart || return 0
   systemctl restart awgram 2>/dev/null || true
-  wait_active && info svc_ok || { warn svc_failed; journalctl -u awgram -n 20 --no-pager >&2 || true; }
+  if wait_active; then
+    info svc_ok
+  else
+    warn svc_failed
+    journalctl -u awgram -n 20 --no-pager >&2 || true
+  fi
 }
 
 cmd_config() {
@@ -656,7 +667,9 @@ main() {
       --purge)       PURGE=1; shift ;;
       -h|--help)     COMMAND="help"; shift ;;
       install|update|config|status|uninstall) COMMAND="$1"; shift ;;
-      help)          COMMAND="help"; shift; HELP_TOPIC="${1:-}"; [ $# -gt 0 ] && shift ;;
+      help)          COMMAND="help"; shift
+                     # shellcheck disable=SC2034  # зарезервировано под тематическую help-справку (help <topic>)
+                     HELP_TOPIC="${1:-}"; [ $# -gt 0 ] && shift ;;
       *)             die err_unknown_arg "$1" "$1" ;;
     esac
   done

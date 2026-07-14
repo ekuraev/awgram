@@ -79,6 +79,28 @@ ssh root@SERVER chmod +x /usr/local/bin/awgram
 документацию самого AmneziaWG-инсталлятора), обычно по пути
 `/root/awg/manage_amneziawg.sh`.
 
+### Быстрая установка (рекомендуется)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ekuraev/awgram/main/install.sh | bash
+```
+
+Интерактивный установщик спросит язык (RU/EN), режим (root или hardened),
+токен и ID администраторов, скачает бинарник под вашу архитектуру
+(amd64/arm64) из последнего релиза с проверкой sha256 и запустит сервис.
+Полностью автоматическая установка — флагами:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ekuraev/awgram/main/install.sh \
+  | bash -s -- install --lang ru --mode root --token 'ТОКЕН' --admins 111111111 --yes
+```
+
+После установки доступна команда `awgram-setup`:
+`update` (обновление до последнего релиза), `config` (токен/админы/пути),
+`status`, `uninstall`, `help`.
+
+### Ручная установка
+
 1. Скопируйте бинарник:
 
    ```bash
