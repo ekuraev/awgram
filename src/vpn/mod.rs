@@ -258,6 +258,7 @@ pub struct BackupFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
 
@@ -279,6 +280,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial] // гонка ETXTBSY: параллельный fork удерживает write-fd чужого fake-скрипта до execve
     async fn list_parses_stub_output() {
         let (_d, vpn) = vpn_with_script(
             "#!/bin/sh\necho '[{\"name\":\"alice\",\"status_code\":\"active\"}]'\n",
@@ -290,6 +292,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial] // гонка ETXTBSY: параллельный fork удерживает write-fd чужого fake-скрипта до execve
     async fn exists_returns_true_for_existing_client() {
         let (_d, vpn) = vpn_with_script(
             "#!/bin/sh\necho '[{\"name\":\"alice\",\"status_code\":\"active\"}]'\n",
@@ -298,6 +301,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial] // гонка ETXTBSY: параллельный fork удерживает write-fd чужого fake-скрипта до execve
     async fn exists_returns_false_for_missing_client() {
         let (_d, vpn) = vpn_with_script(
             "#!/bin/sh\necho '[{\"name\":\"alice\",\"status_code\":\"active\"}]'\n",
@@ -306,18 +310,21 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial] // гонка ETXTBSY: параллельный fork удерживает write-fd чужого fake-скрипта до execve
     async fn exists_rejects_bad_name() {
         let (_d, vpn) = vpn_with_script("#!/bin/sh\necho '[]'\n");
         assert!(vpn.exists("bad name;rm").await.is_err());
     }
 
     #[tokio::test]
+    #[serial] // гонка ETXTBSY: параллельный fork удерживает write-fd чужого fake-скрипта до execve
     async fn exists_propagates_script_failure() {
         let (_d, vpn) = vpn_with_script("#!/bin/sh\nexit 1\n");
         assert!(vpn.exists("alice").await.is_err());
     }
 
     #[tokio::test]
+    #[serial] // гонка ETXTBSY: параллельный fork удерживает write-fd чужого fake-скрипта до execve
     async fn add_rejects_bad_name_before_running() {
         let (_d, vpn) = vpn_with_script("#!/bin/sh\necho should-not-run 1>&2\nexit 1\n");
         let err = vpn.add("bad name;rm", None, false).await.unwrap_err();
@@ -326,6 +333,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial] // гонка ETXTBSY: параллельный fork удерживает write-fd чужого fake-скрипта до execve
     async fn add_runs_script_then_reads_created_conf() {
         // Real `add` prints no JSON — just logs — and creates `<name>.conf` on disk.
         let (dir, vpn) =
@@ -337,6 +345,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial] // гонка ETXTBSY: параллельный fork удерживает write-fd чужого fake-скрипта до execve
     async fn add_errors_when_script_silently_skips_existing_client() {
         // Upstream `manage add` при существующем имени пишет warning, делает
         // `continue` и завершается с rc 0, ничего не создав. Старый `.conf`
@@ -353,6 +362,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial] // гонка ETXTBSY: параллельный fork удерживает write-fd чужого fake-скрипта до execve
     async fn add_succeeds_when_script_rewrites_preexisting_conf() {
         // Осиротевший `.conf` на диске при отсутствии клиента в awg0.conf:
         // скрипт создаёт клиента и перезаписывает файл — это успех, не пропуск.
@@ -366,6 +376,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial] // гонка ETXTBSY: параллельный fork удерживает write-fd чужого fake-скрипта до execve
     async fn add_errors_when_script_did_not_create_conf() {
         let (_d, vpn) = vpn_with_script("#!/bin/sh\nexit 0\n");
         let err = vpn.add("alice", None, false).await.unwrap_err();
@@ -373,6 +384,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial] // гонка ETXTBSY: параллельный fork удерживает write-fd чужого fake-скрипта до execve
     async fn add_passes_psk_flag() {
         // argv: $0=script, $1="add", $2=<name>, [$3.. flags]. Stub only creates
         // `<name>.conf` when `--psk` is among the args — proves the flag
@@ -449,6 +461,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial] // гонка ETXTBSY: параллельный fork удерживает write-fd чужого fake-скрипта до execve
     async fn backup_returns_newest_archive() {
         // заглушка создаёт файл в clients_dir/backups/
         let (dir, vpn) = vpn_with_script(
@@ -478,6 +491,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial] // гонка ETXTBSY: параллельный fork удерживает write-fd чужого fake-скрипта до execve
     async fn restore_rejects_out_of_range() {
         let (_d, vpn) = vpn_with_script("#!/bin/sh\n");
         assert!(matches!(
@@ -487,6 +501,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial] // гонка ETXTBSY: параллельный fork удерживает write-fd чужого fake-скрипта до execve
     async fn check_returns_output_even_on_problems() {
         let (_d, vpn) = vpn_with_script("#!/bin/sh\necho 'ПРОБЛЕМЫ'\nexit 1\n");
         let out = vpn.check().await.unwrap();
@@ -494,6 +509,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial] // гонка ETXTBSY: параллельный fork удерживает write-fd чужого fake-скрипта до execve
     async fn diagnose_returns_output_even_on_problems() {
         let (_d, vpn) = vpn_with_script("#!/bin/sh\necho 'DIAG REPORT'\nexit 1\n");
         let out = vpn.diagnose().await.unwrap();
@@ -501,6 +517,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial] // гонка ETXTBSY: параллельный fork удерживает write-fd чужого fake-скрипта до execve
     async fn diagnose_errors_on_empty_output() {
         let (_d, vpn) = vpn_with_script("#!/bin/sh\nexit 0\n");
         assert!(matches!(
@@ -510,6 +527,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial] // гонка ETXTBSY: параллельный fork удерживает write-fd чужого fake-скрипта до execve
     async fn regen_client_runs_script_and_reads_files() {
         // Стаб создаёт conf только при argv "regen <name>" — проверяем и команду, и чтение файлов.
         let (dir, vpn) = vpn_with_script(
@@ -521,12 +539,14 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial] // гонка ETXTBSY: параллельный fork удерживает write-fd чужого fake-скрипта до execve
     async fn regen_client_rejects_bad_name() {
         let (_d, vpn) = vpn_with_script("#!/bin/sh\nexit 0\n");
         assert!(vpn.regen_client("bad name;rm").await.is_err());
     }
 
     #[tokio::test]
+    #[serial] // гонка ETXTBSY: параллельный fork удерживает write-fd чужого fake-скрипта до execve
     async fn regen_all_true_on_success_false_on_partial() {
         let (_d, vpn) = vpn_with_script("#!/bin/sh\nexit 0\n");
         assert!(vpn.regen_all(false).await.unwrap());
@@ -536,6 +556,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial] // гонка ETXTBSY: параллельный fork удерживает write-fd чужого fake-скрипта до execve
     async fn regen_all_passes_reset_routes_flag() {
         // Стаб успешен ТОЛЬКО при наличии --reset-routes среди аргументов.
         const STUB: &str = "#!/bin/sh\nfor a in \"$@\"; do\n  [ \"$a\" = \"--reset-routes\" ] && exit 0\ndone\nexit 1\n";
