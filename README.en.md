@@ -518,5 +518,5 @@ Before deploying to production, run:
 ```bash
 cargo test
 cargo build --release
-cargo clippy -- -D warnings   # if clippy is installed
+cargo clippy --all-targets -- -D warnings   # if clippy is installed
 ```
