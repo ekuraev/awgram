@@ -61,7 +61,7 @@ ssh root@SERVER chmod +x /usr/local/bin/awgram
 
 > На хосте с Apple Silicon сборка идёт под эмуляцией amd64 (qemu) — это
 > медленнее, но результат корректный. Кэш cargo хранится в docker-volume
-> `awgbot-cargo-registry`, поэтому повторные сборки быстрее.
+> `awgram-cargo-registry`, поэтому повторные сборки быстрее.
 
 ## Установка
 
