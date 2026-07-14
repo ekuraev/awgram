@@ -1,0 +1,53 @@
+name: "🐞 Баг / Bug report"
+description: "Что-то работает не так / Something is broken"
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ⚠️ **Не вставляйте токен бота, содержимое `.conf`-файлов и QR-коды клиентов.**
+        ⚠️ **Never paste your bot token, client `.conf` files or QR codes.**
+  - type: input
+    id: version
+    attributes:
+      label: "Версия awgram / awgram version"
+      placeholder: "v0.1.0 или commit hash"
+    validations:
+      required: true
+  - type: input
+    id: server-os
+    attributes:
+      label: "ОС сервера / Server OS"
+      placeholder: "Ubuntu 24.04"
+    validations:
+      required: true
+  - type: input
+    id: awg-setup
+    attributes:
+      label: "Как установлен AmneziaWG / AmneziaWG setup"
+      placeholder: "manage_amneziawg.sh на VPS / docker / другое"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: "Шаги воспроизведения / Steps to reproduce"
+      placeholder: |
+        1. Открыть меню «Клиенты»
+        2. …
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: "Ожидаемое поведение / Expected behavior"
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: "Логи / Logs"
+      description: "`journalctl -u awgram` — уберите чувствительные данные / redact secrets"
+      render: shell
+    validations:
+      required: false
