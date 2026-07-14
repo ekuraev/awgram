@@ -627,7 +627,9 @@ cmd_status() {
   if is_systemd; then svc="$(systemctl is-active awgram 2>/dev/null || true)"; else svc="$(msg unknown)"; fi
   msg st_installed "${INSTALLED_VERSION:-$(msg unknown)}" "$latest" >&2
   msg st_service "${svc:-$(msg unknown)}" "${MODE:-$(msg unknown)}" >&2
-  [ -r "$CFG_FILE" ] && show_current || true
+  if [ -r "$CFG_FILE" ]; then
+    show_current || true
+  fi
 }
 
 cmd_uninstall() {
@@ -637,8 +639,12 @@ cmd_uninstall() {
     systemctl disable --now awgram >/dev/null 2>&1 || true
   fi
   rm -f "$UNIT_FILE" "$SUDOERS_FILE" "$BIN_PATH" "$BIN_PATH.bak"
-  is_systemd && systemctl daemon-reload || true
-  id -u "$SVC_USER" >/dev/null 2>&1 && userdel "$SVC_USER" 2>/dev/null || true
+  if is_systemd; then
+    systemctl daemon-reload || true
+  fi
+  if id -u "$SVC_USER" >/dev/null 2>&1; then
+    userdel "$SVC_USER" 2>/dev/null || true
+  fi
   if [ "$PURGE" = 1 ]; then
     rm -rf "$CFG_DIR"
   elif [ "$ASSUME_YES" != 1 ] && confirm q_purge "$CFG_DIR"; then
