@@ -47,4 +47,11 @@ grep -q '^MODE=hardened$' /etc/awgram/setup.conf || fail "mode lost on --yes rei
 grep -q '^User=awgram$' /etc/systemd/system/awgram.service || fail "unit user lost"
 grep -q '^sudo_prefix   = "sudo"$' /etc/awgram/config.toml || fail "sudo_prefix lost"
 
+# --- сценарий 3: update локальным файлом ---
+printf '#!/bin/sh\necho v2\n' > /tmp/fakebin2; chmod +x /tmp/fakebin2
+/usr/local/bin/awgram-setup update --binary-file /tmp/fakebin2 --yes --no-systemd
+[ "$(sha256sum < /usr/local/bin/awgram)" = "$(sha256sum < /tmp/fakebin2)" ] || fail "update binary content"
+[ -f /usr/local/bin/awgram.bak ] || fail "update backup"
+[ "$(sha256sum < /usr/local/bin/awgram.bak)" = "$(sha256sum < /tmp/fakebin)" ] || fail "backup is previous binary"
+
 echo "OK: all scenarios passed"

@@ -88,6 +88,18 @@ MSG_RU[err_sudoers]="Сгенерированный sudoers не прошёл vi
 MSG_EN[err_sudoers]="Generated sudoers failed visudo -c — file not installed"
 MSG_RU[warn_no_cdir]="Каталог %s не существует — ACL не выставлен; после появления каталога: setfacl -R -m u:awgram:rx %s"
 MSG_EN[warn_no_cdir]="Directory %s does not exist — ACL not set; once it exists run: setfacl -R -m u:awgram:rx %s"
+MSG_RU[warn_acl_failed]="Не удалось выставить ACL на %s (ФС без поддержки ACL?) — выдайте пользователю awgram доступ на чтение вручную: setfacl -R -m u:awgram:rx %s"
+MSG_EN[warn_acl_failed]="Failed to set ACL on %s (filesystem without ACL support?) — grant the awgram user read access manually: setfacl -R -m u:awgram:rx %s"
+MSG_RU[err_not_installed]="awgram не установлен — сначала выполните install"
+MSG_EN[err_not_installed]="awgram is not installed — run install first"
+MSG_RU[up_to_date]="Уже последняя версия: %s"
+MSG_EN[up_to_date]="Already up to date: %s"
+MSG_RU[updated]="Обновлено до %s"
+MSG_EN[updated]="Updated to %s"
+MSG_RU[rollback]="Откатываюсь на предыдущий бинарник"
+MSG_EN[rollback]="Rolling back to the previous binary"
+MSG_RU[err_update]="Обновление не удалось — сервис не запустился (выполнен откат)"
+MSG_EN[err_update]="Update failed — service did not start (rolled back)"
 
 msg() {
   local key="$1"; shift || true
@@ -462,15 +474,48 @@ setup_hardened() {
   visudo -c -f "$tmp" >/dev/null 2>&1 || { rm -f "$tmp"; die err_sudoers; }
   mv -f "$tmp" "$SUDOERS_FILE"
   if [ -d "$CLIENTS_DIR" ]; then
-    setfacl -R  -m "u:$SVC_USER:rx" "$CLIENTS_DIR"
-    setfacl -R -d -m "u:$SVC_USER:rx" "$CLIENTS_DIR"
+    { setfacl -R -m "u:$SVC_USER:rx" "$CLIENTS_DIR" \
+        && setfacl -R -d -m "u:$SVC_USER:rx" "$CLIENTS_DIR"; } 2>/dev/null \
+      || warn warn_acl_failed "$CLIENTS_DIR" "$CLIENTS_DIR"
   else
     warn warn_no_cdir "$CLIENTS_DIR" "$CLIENTS_DIR"
   fi
 }
 
 # ---------- заглушки (заменяются задачами 6-8) ----------
-cmd_update()    { die err_not_implemented; }
+cmd_update() {
+  ensure_root; init_tty; load_setup_conf; choose_language; detect_os; detect_arch
+  [ -x "$BIN_PATH" ] || die err_not_installed
+  local tag staged
+  if [ -n "$PIN_VERSION" ]; then tag="$PIN_VERSION"
+  elif [ -n "$BINARY_FILE" ]; then tag="local"
+  else tag="$(fetch_latest_tag)"; fi
+  if [ "$tag" = "$INSTALLED_VERSION" ] && [ -z "$BINARY_FILE" ] && [ -z "$PIN_VERSION" ]; then
+    info up_to_date "$tag"; return 0
+  fi
+  staged="$(fetch_binary "$tag")"
+  install_binary "$staged"
+  INSTALLED_VERSION="$tag"
+  save_setup_conf
+  if is_systemd; then
+    systemctl restart awgram 2>/dev/null || true
+    if ! wait_active; then
+      warn svc_failed
+      journalctl -u awgram -n 20 --no-pager >&2 || true
+      if [ -f "$BIN_PATH.bak" ]; then
+        warn rollback
+        mv -f "$BIN_PATH.bak" "$BIN_PATH"
+        systemctl restart awgram 2>/dev/null || true
+      fi
+      die err_update
+    fi
+  fi
+  info updated "$tag"
+  # самообновление awgram-setup (не критично при отказе)
+  curl -fsSL "https://raw.githubusercontent.com/$REPO/main/install.sh" -o "$SETUP_PATH.new" 2>/dev/null \
+    && install -m 755 "$SETUP_PATH.new" "$SETUP_PATH" && rm -f "$SETUP_PATH.new" \
+    || rm -f "$SETUP_PATH.new" 2>/dev/null || true
+}
 cmd_config()    { die err_not_implemented; }
 cmd_status()    { die err_not_implemented; }
 cmd_uninstall() { die err_not_implemented; }
