@@ -1,5 +1,7 @@
 # awgram
 
+🇷🇺 Русский · [🇬🇧 English](README.en.md)
+
 Telegram-бот на Rust для управления клиентами [AmneziaWG](https://amnezia.org/) прямо
 с телефона: добавить/удалить клиента, посмотреть список и трафик — без SSH.
 
