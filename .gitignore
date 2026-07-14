@@ -3,3 +3,6 @@ target/
 .env
 .superpowers/
 dist/
+docs/superpowers/
+.serena/
+.claude/
