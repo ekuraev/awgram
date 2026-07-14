@@ -40,6 +40,7 @@ pub enum Action {
     Restore(usize),
     RestoreYes(usize),
     Check,
+    Diagnose,
     Unknown,
 }
 
@@ -54,6 +55,7 @@ fn parse_callback(data: &str) -> Action {
         "bk:new" => Action::BackupNew,
         "bk:list" => Action::BackupList,
         "check" => Action::Check,
+        "diagnose" => Action::Diagnose,
         _ => {
             if let Some(v) = data.strip_prefix("page:") {
                 v.parse().map(Action::Page).unwrap_or(Action::Unknown)
@@ -119,6 +121,20 @@ fn now_epoch() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+/// Обрезает вывод скрипта до лимита Telegram-сообщения (3500 байт, с запасом
+/// на HTML-обёртку), округляя вниз до границы UTF-8-символа — байтовый индекс
+/// может попасть внутрь многобайтового символа (кириллица в выводе скрипта).
+fn truncate_for_message(body: String) -> String {
+    if body.len() <= 3500 {
+        return body;
+    }
+    let mut cut = 3500;
+    while !body.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    format!("{}\n…", &body[..cut])
 }
 
 /// Локальный текст сессии-таймаута: не входит в каталог `i18n` (см. brief
@@ -617,18 +633,7 @@ async fn callback_handler(
             let waiting = bot.send_message(chat, i18n::check_running(lang)).await.ok();
             match vpn.check().await {
                 Ok(body) => {
-                    let body = if body.len() > 3500 {
-                        // Байтовый индекс может попасть внутрь многобайтового UTF-8
-                        // символа (кириллица в выводе скрипта) — округляем вниз до
-                        // ближайшей границы символа, чтобы не паниковать.
-                        let mut cut = 3500;
-                        while !body.is_char_boundary(cut) {
-                            cut -= 1;
-                        }
-                        format!("{}\n…", &body[..cut])
-                    } else {
-                        body
-                    };
+                    let body = truncate_for_message(body);
                     bot.send_message(chat, i18n::check_result(lang, &body))
                         .parse_mode(ParseMode::Html)
                         .reply_markup(menu::main_menu(lang))
@@ -636,6 +641,25 @@ async fn callback_handler(
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "check провалился");
+                    bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                }
+            }
+            if let Some(m) = waiting {
+                let _ = bot.delete_message(chat, m.id).await;
+            }
+        }
+        Action::Diagnose => {
+            let waiting = bot.send_message(chat, i18n::diagnose_running(lang)).await.ok();
+            match vpn.diagnose().await {
+                Ok(body) => {
+                    let body = truncate_for_message(body);
+                    bot.send_message(chat, i18n::diagnose_result(lang, &body))
+                        .reply_markup(menu::main_menu(lang))
+                        .parse_mode(ParseMode::Html)
+                        .await?;
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "diagnose провалился");
                     bot.send_message(chat, i18n::error_text(lang, &e)).await?;
                 }
             }
@@ -696,6 +720,23 @@ mod tests {
         assert_eq!(parse_callback("bk:card:0"), Action::BackupCard(0));
         assert_eq!(parse_callback("check"), Action::Check);
         assert_eq!(parse_callback("garbage"), Action::Unknown);
+    }
+
+    #[test]
+    fn parse_callback_diagnose() {
+        assert_eq!(parse_callback("diagnose"), Action::Diagnose);
+    }
+
+    #[test]
+    fn truncate_for_message_respects_char_boundary() {
+        // Трёхбайтовый символ: 3500 не кратно 3 → индекс попадает внутрь
+        // символа, обрезка должна откатиться к границе, а не паниковать.
+        let long = "€".repeat(1500); // 4500 байт
+        let cut = truncate_for_message(long);
+        assert!(cut.ends_with('…'));
+        assert!(cut.len() <= 3504); // ≤3500 (до границы символа) + "\n…" (4 байта)
+        let short = "ok".to_string();
+        assert_eq!(truncate_for_message(short), "ok");
     }
 
     /// Замораживает контракт между слоем клавиатур (`menu`) и парсером

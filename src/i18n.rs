@@ -176,6 +176,20 @@ pub fn check_result(lang: Lang, body: &str) -> String {
     match lang { Lang::Ru => format!("🩺 <b>Проверка</b>\n<pre>{b}</pre>"), Lang::En => format!("🩺 <b>Check</b>\n<pre>{b}</pre>") }
 }
 
+pub fn btn_diagnose(lang: Lang) -> String {
+    match lang { Lang::Ru => "🔬 Диагностика", Lang::En => "🔬 Diagnostics" }.to_string()
+}
+pub fn diagnose_running(lang: Lang) -> String {
+    match lang { Lang::Ru => "⏳ Диагностирую…", Lang::En => "⏳ Running diagnostics…" }.to_string()
+}
+pub fn diagnose_result(lang: Lang, body: &str) -> String {
+    let b = html_escape(body);
+    match lang {
+        Lang::Ru => format!("🔬 <b>Диагностика</b>\n<pre>{b}</pre>"),
+        Lang::En => format!("🔬 <b>Diagnostics</b>\n<pre>{b}</pre>"),
+    }
+}
+
 // --- статус клиента (по стабильному status_code) ---
 /// Возвращает локализованную метку статуса по стабильному `status_code`.
 /// Текст НЕ экранируется — вызывающий код (`client_card`) сам делает html_escape,
@@ -330,6 +344,17 @@ mod tests {
         let e = Error::ClientExists("alice".into());
         assert!(error_text(Lang::Ru, &e).contains("существует"));
         assert!(error_text(Lang::En, &e).contains("exists"));
+    }
+
+    #[test]
+    fn diagnose_strings_nonempty_both_langs() {
+        for l in [Lang::Ru, Lang::En] {
+            assert!(!btn_diagnose(l).is_empty());
+            assert!(!diagnose_running(l).is_empty());
+            let r = diagnose_result(l, "body <x>");
+            assert!(r.contains("<pre>"));
+            assert!(r.contains("&lt;x&gt;")); // вывод экранируется
+        }
     }
 
     #[test]

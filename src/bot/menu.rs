@@ -14,7 +14,7 @@ pub fn main_menu(lang: Lang) -> InlineKeyboardMarkup {
         vec![cb(&i18n::btn_add(lang), "add")],
         vec![cb(&i18n::btn_stats(lang), "stats")],
         vec![cb(&i18n::btn_backup(lang), "backup")],
-        vec![cb(&i18n::btn_check(lang), "check")],
+        vec![cb(&i18n::btn_check(lang), "check"), cb(&i18n::btn_diagnose(lang), "diagnose")],
         vec![cb(&i18n::btn_settings(lang), "settings")],
     ])
 }
@@ -206,7 +206,7 @@ mod tests {
     #[test]
     fn main_menu_has_expected_actions() {
         let data = all_callback_data(&main_menu(Lang::Ru));
-        for expected in ["list", "add", "stats", "backup", "check", "settings"] {
+        for expected in ["list", "add", "stats", "backup", "check", "diagnose", "settings"] {
             assert!(data.contains(&expected.to_string()), "missing {expected}");
         }
     }
