@@ -27,4 +27,24 @@ grep -q '^VERSION=local$' /etc/awgram/setup.conf || fail "version persisted"
 [ -f /etc/systemd/system/awgram.service ] || fail "unit file"
 grep -q '^User=' /etc/systemd/system/awgram.service && fail "root unit must not have User="
 
+# --- сценарий 2: hardened reinstall поверх root-установки ---
+bash /repo/install.sh install --yes --lang en --mode hardened \
+  --token T2 --admins 5 --binary-file /tmp/fakebin --no-systemd
+id awgram >/dev/null 2>&1 || fail "hardened user"
+[ -f /etc/sudoers.d/awgram ] || fail "sudoers file"
+visudo -c -f /etc/sudoers.d/awgram >/dev/null || fail "sudoers invalid"
+grep -q 'awgram ALL=(root) NOPASSWD: /root/awg/manage_amneziawg.sh' /etc/sudoers.d/awgram || fail "sudoers content"
+[ "$(stat -c %a /etc/sudoers.d/awgram)" = "440" ] || fail "sudoers perms"
+grep -q '^User=awgram$' /etc/systemd/system/awgram.service || fail "unit User="
+grep -q '^sudo_prefix   = "sudo"$' /etc/awgram/config.toml || fail "sudo_prefix hardened"
+grep -q '^AWGRAM_TOKEN=T2$' /etc/awgram/env || fail "token updated"
+getfacl /root/awg 2>/dev/null | grep -q '^user:awgram:r-x' || fail "acl"
+getfacl /root/awg 2>/dev/null | grep -q '^default:user:awgram:r-x' || fail "default acl"
+# --yes-переустановка без --mode не должна терять hardened
+bash /repo/install.sh install --yes \
+  --token T3 --admins 7 --binary-file /tmp/fakebin --no-systemd
+grep -q '^MODE=hardened$' /etc/awgram/setup.conf || fail "mode lost on --yes reinstall"
+grep -q '^User=awgram$' /etc/systemd/system/awgram.service || fail "unit user lost"
+grep -q '^sudo_prefix   = "sudo"$' /etc/awgram/config.toml || fail "sudo_prefix lost"
+
 echo "OK: all scenarios passed"

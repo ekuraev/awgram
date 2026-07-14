@@ -84,6 +84,10 @@ MSG_RU[done_install]="Готово! Установлен awgram %s (режим: 
 MSG_EN[done_install]="Done! Installed awgram %s (mode: %s)"
 MSG_RU[sum_paths]="Конфиг: %s | Токен: %s | Логи: journalctl -u awgram -f | Управление: awgram-setup help"
 MSG_EN[sum_paths]="Config: %s | Token: %s | Logs: journalctl -u awgram -f | Manage: awgram-setup help"
+MSG_RU[err_sudoers]="Сгенерированный sudoers не прошёл visudo -c — файл не установлен"
+MSG_EN[err_sudoers]="Generated sudoers failed visudo -c — file not installed"
+MSG_RU[warn_no_cdir]="Каталог %s не существует — ACL не выставлен; после появления каталога: setfacl -R -m u:awgram:rx %s"
+MSG_EN[warn_no_cdir]="Directory %s does not exist — ACL not set; once it exists run: setfacl -R -m u:awgram:rx %s"
 
 msg() {
   local key="$1"; shift || true
@@ -326,14 +330,18 @@ summary() {
 cmd_install() {
   ensure_root; init_tty; choose_language; detect_os; detect_arch
   # повторная установка
-  if [ -f "$SETUP_CONF" ] && [ -x "$BIN_PATH" ] && [ "$ASSUME_YES" != 1 ] && [ -n "$TTY_IN" ]; then
-    msg q_existing >&2; printf '  [1/2/3]: ' >&2
-    local a=""; IFS= read -r a <"$TTY_IN" || true
-    case "$a" in
-      1) cmd_update; return 0 ;;
-      2) load_setup_conf ;;
-      *) return 0 ;;
-    esac
+  if [ -f "$SETUP_CONF" ] && [ -x "$BIN_PATH" ]; then
+    if [ "$ASSUME_YES" != 1 ] && [ -n "$TTY_IN" ]; then
+      msg q_existing >&2; printf '  [1/2/3]: ' >&2
+      local a=""; IFS= read -r a <"$TTY_IN" || true
+      case "$a" in
+        1) cmd_update; return 0 ;;
+        2) load_setup_conf ;;
+        *) return 0 ;;
+      esac
+    else
+      load_setup_conf
+    fi
   fi
   # параметры
   if [ -z "$MODE" ]; then
@@ -442,8 +450,26 @@ cmd_help() {
   esac
 }
 
-# ---------- заглушки (заменяются задачами 5-8) ----------
-setup_hardened() { die err_not_implemented; }
+# ---------- hardened mode setup ----------
+setup_hardened() {
+  if ! id -u "$SVC_USER" >/dev/null 2>&1; then
+    useradd --system --no-create-home --shell /usr/sbin/nologin "$SVC_USER" 2>/dev/null \
+      || useradd --system --no-create-home --shell /sbin/nologin "$SVC_USER"
+  fi
+  local tmp; tmp="$(mktemp)"
+  printf '%s ALL=(root) NOPASSWD: %s\n' "$SVC_USER" "$MANAGE_SCRIPT" > "$tmp"
+  chmod 440 "$tmp"
+  visudo -c -f "$tmp" >/dev/null 2>&1 || { rm -f "$tmp"; die err_sudoers; }
+  mv -f "$tmp" "$SUDOERS_FILE"
+  if [ -d "$CLIENTS_DIR" ]; then
+    setfacl -R  -m "u:$SVC_USER:rx" "$CLIENTS_DIR"
+    setfacl -R -d -m "u:$SVC_USER:rx" "$CLIENTS_DIR"
+  else
+    warn warn_no_cdir "$CLIENTS_DIR" "$CLIENTS_DIR"
+  fi
+}
+
+# ---------- заглушки (заменяются задачами 6-8) ----------
 cmd_update()    { die err_not_implemented; }
 cmd_config()    { die err_not_implemented; }
 cmd_status()    { die err_not_implemented; }
