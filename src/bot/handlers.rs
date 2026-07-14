@@ -357,6 +357,9 @@ async fn callback_handler(
                     .await?;
             }
             Ok(clients) => {
+                // Полный вектор (не только текущая страница): clients_list
+                // индексирует expiries[i] по глобальному i, срез по странице
+                // дал бы сдвиг меток на страницах > 0.
                 let expiries: Vec<Option<i64>> =
                     clients.iter().map(|c| vpn.client_expiry(&c.name)).collect();
                 bot.send_message(chat, i18n::clients_title(lang))
@@ -371,6 +374,7 @@ async fn callback_handler(
         },
         Action::Page(p) => match vpn.list().await {
             Ok(clients) => {
+                // См. комментарий в Action::List: вектор обязан быть полным.
                 let expiries: Vec<Option<i64>> =
                     clients.iter().map(|c| vpn.client_expiry(&c.name)).collect();
                 bot.send_message(chat, i18n::clients_title(lang))
