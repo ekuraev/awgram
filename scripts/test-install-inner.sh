@@ -63,4 +63,17 @@ grep -q '^AWGRAM_TOKEN=NEWTOKEN$' /etc/awgram/env || fail "config token"
 /usr/local/bin/awgram-setup config --script-path /root/awg/manage_amneziawg.sh --yes --no-systemd
 grep -q '^manage_script = "/root/awg/manage_amneziawg.sh"$' /etc/awgram/config.toml || fail "config script"
 
+# --- сценарий 5: status (без сети → latest unknown, не падает) ---
+/usr/local/bin/awgram-setup status --no-systemd 2>&1 | grep -qi 'Installed:' || fail "status output"
+/usr/local/bin/awgram-setup status --no-systemd 2>&1 | grep -qi 'hardened' || fail "status mode"
+
+# --- сценарий 6: uninstall --purge ---
+/usr/local/bin/awgram-setup uninstall --yes --purge --no-systemd
+[ ! -e /usr/local/bin/awgram ] || fail "binary not removed"
+[ ! -e /etc/awgram ] || fail "cfg dir not purged"
+[ ! -e /etc/sudoers.d/awgram ] || fail "sudoers not removed"
+[ ! -e /etc/systemd/system/awgram.service ] || fail "unit not removed"
+[ ! -e /usr/local/bin/awgram-setup ] || fail "setup not removed"
+id awgram >/dev/null 2>&1 && fail "user not removed"
+
 echo "OK: all scenarios passed"

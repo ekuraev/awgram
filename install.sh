@@ -112,6 +112,22 @@ MSG_RU[token_set]="задан"
 MSG_EN[token_set]="set"
 MSG_RU[token_unset]="не задан"
 MSG_EN[token_unset]="not set"
+MSG_RU[st_installed]="Установлено: %s | Последний релиз: %s"
+MSG_EN[st_installed]="Installed: %s | Latest release: %s"
+MSG_RU[st_service]="Сервис: %s | Режим: %s"
+MSG_EN[st_service]="Service: %s | Mode: %s"
+MSG_RU[st_none]="awgram не установлен"
+MSG_EN[st_none]="awgram is not installed"
+MSG_RU[q_uninstall]="Удалить awgram (бинарник, сервис, sudoers, пользователь)?"
+MSG_EN[q_uninstall]="Remove awgram (binary, service, sudoers, user)?"
+MSG_RU[q_purge]="Удалить также конфиг, токен и состояние (%s)?"
+MSG_EN[q_purge]="Also remove config, token and state (%s)?"
+MSG_RU[uninstalled]="awgram удалён"
+MSG_EN[uninstalled]="awgram removed"
+MSG_RU[unknown]="неизвестно"
+MSG_EN[unknown]="unknown"
+MSG_RU[err_bad_path]="Недопустимый путь: %s (символы | и \" не поддерживаются)"
+MSG_EN[err_bad_path]="Invalid path: %s (characters | and \" are not supported)"
 
 msg() {
   local key="$1"; shift || true
@@ -198,6 +214,10 @@ confirm() { # 0=да; --yes → всегда да
 }
 
 validate_admins() { [[ "$ADMINS" =~ ^[0-9]+(,[0-9]+)*$ ]]; }
+
+validate_path() { # $1=путь; 0 если безопасен для set_toml/конфига
+  case "$1" in *'|'*|*'"'*) return 1 ;; *) return 0 ;; esac
+}
 
 load_setup_conf() {
   [ -f "$SETUP_CONF" ] || return 0
@@ -379,8 +399,10 @@ cmd_install() {
   [ -n "$ADMINS" ] || ADMINS="$(ask q_admins "")"
   validate_admins || die err_admins
   [ -n "$MANAGE_SCRIPT" ] || MANAGE_SCRIPT="$(ask q_script "/root/awg/manage_amneziawg.sh")"
+  validate_path "$MANAGE_SCRIPT" || die err_bad_path "$MANAGE_SCRIPT"
   [ -f "$MANAGE_SCRIPT" ] || warn warn_no_script "$MANAGE_SCRIPT"
   [ -n "$CLIENTS_DIR" ] || CLIENTS_DIR="$(dirname "$MANAGE_SCRIPT")"
+  validate_path "$CLIENTS_DIR" || die err_bad_path "$CLIENTS_DIR"
   # бинарник
   local tag staged
   if [ -n "$PIN_VERSION" ]; then tag="$PIN_VERSION"
@@ -557,6 +579,7 @@ cmd_config() {
     set_toml admin_ids "[${ADMINS//,/, }]"; changed=1
   fi
   if [ -n "$MANAGE_SCRIPT" ]; then
+    validate_path "$MANAGE_SCRIPT" || die err_bad_path "$MANAGE_SCRIPT"
     [ -f "$MANAGE_SCRIPT" ] || warn warn_no_script "$MANAGE_SCRIPT"
     set_toml manage_script "\"$MANAGE_SCRIPT\""
     save_setup_conf; changed=1
@@ -570,6 +593,7 @@ cmd_config() {
         2) ADMINS="$(ask q_admins "")"; validate_admins || { warn err_admins; continue; }
            set_toml admin_ids "[${ADMINS//,/, }]"; changed=1; info cfg_saved ;;
         3) MANAGE_SCRIPT="$(ask q_script "")"; [ -n "$MANAGE_SCRIPT" ] || continue
+           validate_path "$MANAGE_SCRIPT" || { warn err_bad_path "$MANAGE_SCRIPT"; continue; }
            [ -f "$MANAGE_SCRIPT" ] || warn warn_no_script "$MANAGE_SCRIPT"
            set_toml manage_script "\"$MANAGE_SCRIPT\""; save_setup_conf; changed=1; info cfg_saved ;;
         4) show_current ;;
@@ -583,8 +607,34 @@ cmd_config() {
   return 0
 }
 
-cmd_status()    { die err_not_implemented; }
-cmd_uninstall() { die err_not_implemented; }
+cmd_status() {
+  init_tty; load_setup_conf; choose_language
+  if [ ! -x "$BIN_PATH" ]; then msg st_none >&2; return 0; fi
+  local latest svc
+  latest="$(fetch_latest_tag 2>/dev/null || true)"; [ -n "$latest" ] || latest="$(msg unknown)"
+  if is_systemd; then svc="$(systemctl is-active awgram 2>/dev/null || true)"; else svc="$(msg unknown)"; fi
+  msg st_installed "${INSTALLED_VERSION:-$(msg unknown)}" "$latest" >&2
+  msg st_service "${svc:-$(msg unknown)}" "${MODE:-$(msg unknown)}" >&2
+  [ -r "$CFG_FILE" ] && show_current || true
+}
+
+cmd_uninstall() {
+  ensure_root; init_tty; load_setup_conf; choose_language
+  confirm q_uninstall || return 0
+  if is_systemd; then
+    systemctl disable --now awgram >/dev/null 2>&1 || true
+  fi
+  rm -f "$UNIT_FILE" "$SUDOERS_FILE" "$BIN_PATH" "$BIN_PATH.bak"
+  is_systemd && systemctl daemon-reload || true
+  id -u "$SVC_USER" >/dev/null 2>&1 && userdel "$SVC_USER" 2>/dev/null || true
+  if [ "$PURGE" = 1 ]; then
+    rm -rf "$CFG_DIR"
+  elif [ "$ASSUME_YES" != 1 ] && confirm q_purge "$CFG_DIR"; then
+    rm -rf "$CFG_DIR"
+  fi
+  rm -f "$SETUP_PATH"
+  info uninstalled
+}
 
 # ---------- парсинг аргументов и диспетчер ----------
 main() {
