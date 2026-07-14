@@ -2,7 +2,7 @@
 
 🇷🇺 Русский · [🇬🇧 English](README.en.md)
 
-[![CI](https://github.com/ekuraev/awgram/actions/workflows/ci.yml/badge.svg)](https://github.com/ekuraev/awgram/actions/workflows/ci.yml)
+[![CI](https://github.com/ekuraev/awgram/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ekuraev/awgram/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/ekuraev/awgram)](https://github.com/ekuraev/awgram/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
