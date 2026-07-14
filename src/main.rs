@@ -4,10 +4,10 @@ use std::sync::Arc;
 use teloxide::dispatching::dialogue::InMemStorage;
 use teloxide::prelude::*;
 
-use awg_bot::bot::{handlers, State};
-use awg_bot::config::Config;
-use awg_bot::settings::SettingsStore;
-use awg_bot::vpn::Vpn;
+use awgram::bot::{handlers, State};
+use awgram::config::Config;
+use awgram::settings::SettingsStore;
+use awgram::vpn::Vpn;
 
 #[tokio::main]
 async fn main() {
@@ -18,9 +18,9 @@ async fn main() {
         )
         .init();
 
-    let cfg_path = std::env::var("AWG_BOT_CONFIG")
+    let cfg_path = std::env::var("AWGRAM_CONFIG")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/etc/awg-bot/config.toml"));
+        .unwrap_or_else(|_| PathBuf::from("/etc/awgram/config.toml"));
 
     let cfg = match Config::load(&cfg_path) {
         Ok(c) => Arc::new(c),

@@ -1,9 +1,9 @@
-# Скопируйте в /etc/awg-bot/config.toml и заполните.
-# Токен лучше хранить в /etc/awg-bot/env (AWG_BOT_TOKEN=...), а не здесь.
-bot_token     = ""                              # или через env AWG_BOT_TOKEN
+# Скопируйте в /etc/awgram/config.toml и заполните.
+# Токен лучше хранить в /etc/awgram/env (AWGRAM_TOKEN=...), а не здесь.
+bot_token     = ""                              # или через env AWGRAM_TOKEN
 admin_ids     = [111111111]                     # ваш Telegram user ID (узнать: @userinfobot)
 manage_script = "/root/awg/manage_amneziawg.sh"
 clients_dir   = "/root/awg"
 sudo_prefix   = ""                              # "" если сервис от root; "sudo" для hardened-режима
 op_timeout_secs = 60
-state_file = "/etc/awg-bot/state.json"          # персистентное состояние бота: язык каждого админа + глобальный PSK-дефолт; переживает рестарт
+state_file = "/etc/awgram/state.json"          # персистентное состояние бота: язык каждого админа + глобальный PSK-дефолт; переживает рестарт

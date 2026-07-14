@@ -2,8 +2,8 @@ use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
-use awg_bot::error::Error;
-use awg_bot::vpn::runner::{run, run_capture, RunSpec};
+use awgram::error::Error;
+use awgram::vpn::runner::{run, run_capture, RunSpec};
 
 fn make_script(body: &str) -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().unwrap();

@@ -31,7 +31,7 @@ pub enum ConfigError {
     Read(#[from] std::io::Error),
     #[error("ошибка разбора TOML: {0}")]
     Parse(String),
-    #[error("bot_token не задан (ни в файле, ни в AWG_BOT_TOKEN)")]
+    #[error("bot_token не задан (ни в файле, ни в AWGRAM_TOKEN)")]
     MissingToken,
     #[error("admin_ids пуст — некому управлять ботом")]
     NoAdmins,
@@ -58,7 +58,7 @@ fn default_timeout() -> u64 {
 }
 
 fn default_state_file() -> PathBuf {
-    PathBuf::from("/etc/awg-bot/state.json")
+    PathBuf::from("/etc/awgram/state.json")
 }
 
 impl Config {
@@ -66,7 +66,7 @@ impl Config {
         let text = std::fs::read_to_string(path)?;
         let raw: Raw = toml::from_str(&text).map_err(|e| ConfigError::Parse(e.to_string()))?;
 
-        let bot_token = std::env::var("AWG_BOT_TOKEN")
+        let bot_token = std::env::var("AWGRAM_TOKEN")
             .ok()
             .filter(|s| !s.is_empty())
             .or_else(|| raw.bot_token.filter(|s| !s.is_empty()))
@@ -104,7 +104,7 @@ mod tests {
     }
 
     // All tests in this module are #[serial]: `Config::load` unconditionally reads
-    // `AWG_BOT_TOKEN` (a process-global env var), and `env_overrides_token` sets/removes
+    // `AWGRAM_TOKEN` (a process-global env var), and `env_overrides_token` sets/removes
     // it. Without serialization, tests racing in parallel threads can observe each
     // other's env var state (observed flake in `cargo test`, not just theoretical).
     #[test]
@@ -174,9 +174,9 @@ mod tests {
                 dir.path().display()
             ),
         );
-        std::env::set_var("AWG_BOT_TOKEN", "env-token");
+        std::env::set_var("AWGRAM_TOKEN", "env-token");
         let cfg = Config::load(&cfg_path).unwrap();
-        std::env::remove_var("AWG_BOT_TOKEN");
+        std::env::remove_var("AWGRAM_TOKEN");
         assert_eq!(cfg.bot_token, "env-token");
     }
 
@@ -195,7 +195,7 @@ mod tests {
             ),
         );
         let cfg = Config::load(&cfg_path).unwrap();
-        assert_eq!(cfg.state_file, PathBuf::from("/etc/awg-bot/state.json"));
+        assert_eq!(cfg.state_file, PathBuf::from("/etc/awgram/state.json"));
     }
 
     #[test]

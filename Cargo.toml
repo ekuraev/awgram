@@ -1,7 +1,10 @@
 [package]
-name = "awg-bot"
+name = "awgram"
 version = "0.1.0"
 edition = "2021"
+description = "Telegram bot for managing AmneziaWG VPN clients"
+license = "MIT"
+repository = "https://github.com/ekuraev/awgram"
 
 [dependencies]
 teloxide = { version = "0.17", default-features = false, features = ["macros", "ctrlc_handler", "rustls"] }
