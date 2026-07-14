@@ -611,7 +611,8 @@ cmd_status() {
   init_tty; load_setup_conf; choose_language
   if [ ! -x "$BIN_PATH" ]; then msg st_none >&2; return 0; fi
   local latest svc
-  latest="$(fetch_latest_tag 2>/dev/null || true)"; [ -n "$latest" ] || latest="$(msg unknown)"
+  latest="$(fetch_latest_tag 2>/dev/null)" || latest=""
+  [ -n "$latest" ] || latest="$(msg unknown)"
   if is_systemd; then svc="$(systemctl is-active awgram 2>/dev/null || true)"; else svc="$(msg unknown)"; fi
   msg st_installed "${INSTALLED_VERSION:-$(msg unknown)}" "$latest" >&2
   msg st_service "${svc:-$(msg unknown)}" "${MODE:-$(msg unknown)}" >&2
