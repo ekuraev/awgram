@@ -80,6 +80,30 @@ impl Vpn {
         Ok(())
     }
 
+    /// Перевыпускает файлы одного клиента (`regen <name>`): ключи и IP
+    /// сохраняются, `.conf`/QR/URI создаются заново и читаются с диска.
+    pub async fn regen_client(&self, name: &str) -> Result<AddResult> {
+        let name = validate::validate_name(name)
+            .map_err(|e| crate::error::Error::Parse(e.to_string()))?;
+        run(&self.spec(), &["regen", &name]).await?;
+        self.existing_files(&name)
+    }
+
+    /// Перевыпускает файлы всех клиентов. `Ok(false)` — скрипт завершился с
+    /// rc ≠ 0: часть клиентов могла быть перевыпущена («завершено с
+    /// предупреждениями»), а не отказ операции. Таймаут ×3 — массовый regen
+    /// пропорционален числу клиентов.
+    pub async fn regen_all(&self, reset_routes: bool) -> Result<bool> {
+        let spec = RunSpec {
+            script: &self.script,
+            sudo_prefix: &self.sudo_prefix,
+            timeout_secs: self.timeout_secs * 3,
+        };
+        let args: &[&str] = if reset_routes { &["regen", "--reset-routes"] } else { &["regen"] };
+        let (_out, code) = run_capture(&spec, args).await?;
+        Ok(code == 0)
+    }
+
     /// Повторная выдача уже созданных файлов клиента из `clients_dir` (для кнопки «📄 Конфиг»
     /// и как последний шаг `add`). Только `.conf` обязателен — QR (`.png`) и ссылка
     /// (`.vpnuri`) создаются скриптом условно (например, если `qrencode` не установлен).
@@ -441,5 +465,40 @@ mod tests {
     async fn diagnose_errors_on_empty_output() {
         let (_d, vpn) = vpn_with_script("#!/bin/sh\nexit 0\n");
         assert!(matches!(vpn.diagnose().await, Err(crate::error::Error::Parse(_))));
+    }
+
+    #[tokio::test]
+    async fn regen_client_runs_script_and_reads_files() {
+        // Стаб создаёт conf только при argv "regen <name>" — проверяем и команду, и чтение файлов.
+        let (dir, vpn) = vpn_with_script(
+            "#!/bin/sh\n[ \"$1\" = regen ] || exit 1\necho conf > \"$(dirname \"$0\")/$2.conf\"\nexit 0\n",
+        );
+        let res = vpn.regen_client("alice").await.unwrap();
+        assert!(res.conf_path.ends_with("alice.conf"));
+        drop(dir);
+    }
+
+    #[tokio::test]
+    async fn regen_client_rejects_bad_name() {
+        let (_d, vpn) = vpn_with_script("#!/bin/sh\nexit 0\n");
+        assert!(vpn.regen_client("bad name;rm").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn regen_all_true_on_success_false_on_partial() {
+        let (_d, vpn) = vpn_with_script("#!/bin/sh\nexit 0\n");
+        assert!(vpn.regen_all(false).await.unwrap());
+
+        let (_d2, vpn2) = vpn_with_script("#!/bin/sh\necho warn\nexit 1\n");
+        assert!(!vpn2.regen_all(false).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn regen_all_passes_reset_routes_flag() {
+        // Стаб успешен ТОЛЬКО при наличии --reset-routes среди аргументов.
+        const STUB: &str = "#!/bin/sh\nfor a in \"$@\"; do\n  [ \"$a\" = \"--reset-routes\" ] && exit 0\ndone\nexit 1\n";
+        let (_d, vpn) = vpn_with_script(STUB);
+        assert!(vpn.regen_all(true).await.unwrap(), "с reset_routes=true флаг должен дойти до скрипта");
+        assert!(!vpn.regen_all(false).await.unwrap(), "без reset_routes флага быть не должно");
     }
 }
