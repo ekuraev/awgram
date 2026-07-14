@@ -39,20 +39,27 @@ cargo build --release
 TLS реализован на **rustls** (без OpenSSL), поэтому у бинарника нет системной
 зависимости от `libssl`.
 
-### Статический Linux amd64 бинарник (для деплоя на VPS)
+### Статические Linux-бинарники (для деплоя на VPS)
 
 Готовый портативный бинарник собирается одной командой (нужен Docker):
 
 ```bash
-./scripts/build-musl.sh
+./scripts/build-musl.sh          # amd64 (по умолчанию)
+./scripts/build-musl.sh arm64    # aarch64
+./scripts/build-musl.sh all      # обе архитектуры
 ```
 
-Скрипт собирает в контейнере `linux/amd64` полностью статический ET_EXEC
-(`x86_64-unknown-linux-musl`, `crt-static` + `relocation-model=static`, rustls)
-и кладёт его в `dist/awgram-linux-amd64`. Такой бинарник не зависит ни от
-glibc, ни от `libssl`, ни от musl-загрузчика — запускается на любом Linux
-x86_64 (Ubuntu/Debian/Alpine). Проверка: `ldd dist/awgram-linux-amd64` →
-`not a dynamic executable`.
+Скрипт собирает в Docker-контейнере полностью статический ET_EXEC
+(`x86_64-` / `aarch64-unknown-linux-musl`; `crt-static` +
+`relocation-model=static` заданы в `.cargo/config.toml`, rustls) и кладёт его
+в `dist/awgram-linux-amd64` / `dist/awgram-linux-arm64`. Такой бинарник не
+зависит ни от glibc, ни от `libssl`, ни от musl-загрузчика — запускается на
+любом Linux своей архитектуры (Ubuntu/Debian/Alpine). Проверка:
+`ldd dist/awgram-linux-amd64` → `not a dynamic executable`.
+
+GitHub Release (по тегу `v*`) собирает оба бинарника через
+[cross](https://github.com/cross-rs/cross) и прикладывает их вместе с
+`sha256`-контрольными суммами.
 
 Перенос на сервер:
 
@@ -61,9 +68,10 @@ scp dist/awgram-linux-amd64 root@SERVER:/usr/local/bin/awgram
 ssh root@SERVER chmod +x /usr/local/bin/awgram
 ```
 
-> На хосте с Apple Silicon сборка идёт под эмуляцией amd64 (qemu) — это
-> медленнее, но результат корректный. Кэш cargo хранится в docker-volume
-> `awgram-cargo-registry`, поэтому повторные сборки быстрее.
+> Сборка «чужой» для хоста архитектуры идёт под эмуляцией qemu (на Apple
+> Silicon: arm64 — нативно, amd64 — эмуляция) — медленнее, но результат
+> корректный. Кэш cargo хранится в docker-volume
+> `awgram-cargo-registry-<arch>`, поэтому повторные сборки быстрее.
 
 ## Установка
 

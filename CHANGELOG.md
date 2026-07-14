@@ -5,6 +5,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- Релизная сборка **arm64** (`awgram-linux-arm64`): матрица в `release.yml`
+  через [cross](https://github.com/cross-rs/cross); `scripts/build-musl.sh`
+  принимает `amd64|arm64|all`; флаги статической сборки вынесены в
+  `.cargo/config.toml`, strip — в `[profile.release]`.
+
 ## [0.1.0] — 2026-07-14
 
 ### ⚠️ Переименование awg-bot → awgram (миграция действующего деплоя)

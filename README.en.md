@@ -41,22 +41,28 @@ The binary will appear at `target/release/awgram`.
 TLS is implemented with **rustls** (no OpenSSL), so the binary has no system
 dependency on `libssl`.
 
-### Static Linux amd64 binary (for VPS deployment)
+### Static Linux binaries (for VPS deployment)
 
 A ready-to-use portable binary can be built with a single command (requires
 Docker):
 
 ```bash
-./scripts/build-musl.sh
+./scripts/build-musl.sh          # amd64 (default)
+./scripts/build-musl.sh arm64    # aarch64
+./scripts/build-musl.sh all      # both architectures
 ```
 
-The script builds a fully static ET_EXEC binary for `linux/amd64` inside a
-container (`x86_64-unknown-linux-musl`, `crt-static` +
-`relocation-model=static`, rustls) and places it at
-`dist/awgram-linux-amd64`. This binary depends on neither glibc, nor
-`libssl`, nor the musl loader — it runs on any Linux x86_64 host
-(Ubuntu/Debian/Alpine). Verify with: `ldd dist/awgram-linux-amd64` →
-`not a dynamic executable`.
+The script builds a fully static ET_EXEC binary inside a Docker container
+(`x86_64-` / `aarch64-unknown-linux-musl`; `crt-static` +
+`relocation-model=static` are set in `.cargo/config.toml`, rustls) and places
+it at `dist/awgram-linux-amd64` / `dist/awgram-linux-arm64`. This binary
+depends on neither glibc, nor `libssl`, nor the musl loader — it runs on any
+Linux host of the matching architecture (Ubuntu/Debian/Alpine). Verify with:
+`ldd dist/awgram-linux-amd64` → `not a dynamic executable`.
+
+A GitHub Release (on a `v*` tag) builds both binaries via
+[cross](https://github.com/cross-rs/cross) and attaches them together with
+`sha256` checksums.
 
 Copying it to the server:
 
@@ -65,9 +71,10 @@ scp dist/awgram-linux-amd64 root@SERVER:/usr/local/bin/awgram
 ssh root@SERVER chmod +x /usr/local/bin/awgram
 ```
 
-> On an Apple Silicon host the build runs under amd64 emulation (qemu) —
-> slower, but the result is correct. The cargo cache is kept in the
-> `awgram-cargo-registry` docker volume, so subsequent builds are faster.
+> Building a non-native architecture runs under qemu emulation (on Apple
+> Silicon: arm64 is native, amd64 is emulated) — slower, but the result is
+> correct. The cargo cache is kept in per-arch `awgram-cargo-registry-<arch>`
+> docker volumes, so subsequent builds are faster.
 
 ## Installation
 

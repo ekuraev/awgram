@@ -3,23 +3,58 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # Ручной запуск собирает бинарники без публикации релиза (dry-run сборки).
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  build-and-release:
+  build:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            target: x86_64-unknown-linux-musl
+          - arch: arm64
+            target: aarch64-unknown-linux-musl
     steps:
       - uses: actions/checkout@v7
-      - name: Build static musl binary
-        run: ./scripts/build-musl.sh
-      - name: Checksum
-        run: cd dist && sha256sum awgram-linux-amd64 > awgram-linux-amd64.sha256
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+      - name: Build static musl binary (${{ matrix.arch }})
+        run: cross build --release --target ${{ matrix.target }}
+      - name: Package and checksum
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/awgram" "dist/awgram-linux-${{ matrix.arch }}"
+          cd dist
+          sha256sum "awgram-linux-${{ matrix.arch }}" > "awgram-linux-${{ matrix.arch }}.sha256"
+          file "awgram-linux-${{ matrix.arch }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: awgram-linux-${{ matrix.arch }}
+          path: dist/
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           files: |
             dist/awgram-linux-amd64
             dist/awgram-linux-amd64.sha256
+            dist/awgram-linux-arm64
+            dist/awgram-linux-arm64.sha256
           generate_release_notes: true
