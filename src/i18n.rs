@@ -23,7 +23,9 @@ pub fn lang_code(l: Lang) -> &'static str {
 }
 
 pub fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 use crate::error::Error;
@@ -35,18 +37,68 @@ pub fn choose_language() -> String {
 
 // --- меню ---
 pub fn menu_title(lang: Lang) -> String {
-    match lang { Lang::Ru => "🔐 <b>AmneziaWG</b>", Lang::En => "🔐 <b>AmneziaWG</b>" }.to_string()
+    match lang {
+        Lang::Ru => "🔐 <b>AmneziaWG</b>",
+        Lang::En => "🔐 <b>AmneziaWG</b>",
+    }
+    .to_string()
 }
-pub fn btn_clients(lang: Lang) -> String { match lang { Lang::Ru => "👥 Клиенты", Lang::En => "👥 Clients" }.to_string() }
-pub fn btn_add(lang: Lang) -> String { match lang { Lang::Ru => "➕ Добавить", Lang::En => "➕ Add" }.to_string() }
-pub fn btn_stats(lang: Lang) -> String { match lang { Lang::Ru => "📊 Статистика", Lang::En => "📊 Stats" }.to_string() }
-pub fn btn_backup(lang: Lang) -> String { match lang { Lang::Ru => "💾 Бэкап", Lang::En => "💾 Backup" }.to_string() }
-pub fn btn_check(lang: Lang) -> String { match lang { Lang::Ru => "🩺 Проверка", Lang::En => "🩺 Check" }.to_string() }
-pub fn btn_settings(lang: Lang) -> String { match lang { Lang::Ru => "⚙️ Настройки", Lang::En => "⚙️ Settings" }.to_string() }
-pub fn btn_back(lang: Lang) -> String { match lang { Lang::Ru => "⬅️ В меню", Lang::En => "⬅️ Menu" }.to_string() }
+pub fn btn_clients(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "👥 Клиенты",
+        Lang::En => "👥 Clients",
+    }
+    .to_string()
+}
+pub fn btn_add(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "➕ Добавить",
+        Lang::En => "➕ Add",
+    }
+    .to_string()
+}
+pub fn btn_stats(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "📊 Статистика",
+        Lang::En => "📊 Stats",
+    }
+    .to_string()
+}
+pub fn btn_backup(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "💾 Бэкап",
+        Lang::En => "💾 Backup",
+    }
+    .to_string()
+}
+pub fn btn_check(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "🩺 Проверка",
+        Lang::En => "🩺 Check",
+    }
+    .to_string()
+}
+pub fn btn_settings(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "⚙️ Настройки",
+        Lang::En => "⚙️ Settings",
+    }
+    .to_string()
+}
+pub fn btn_back(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "⬅️ В меню",
+        Lang::En => "⬅️ Menu",
+    }
+    .to_string()
+}
 
 pub fn access_denied(lang: Lang) -> String {
-    match lang { Lang::Ru => "⛔ Доступ запрещён.", Lang::En => "⛔ Access denied." }.to_string()
+    match lang {
+        Lang::Ru => "⛔ Доступ запрещён.",
+        Lang::En => "⛔ Access denied.",
+    }
+    .to_string()
 }
 
 /// Уведомление для не-приватных чатов (группы/супергруппы/каналы). Бот
@@ -60,30 +112,72 @@ pub fn private_only() -> String {
 
 // --- add-диалог ---
 pub fn ask_client_name(lang: Lang) -> String {
-    match lang { Lang::Ru => "Введите имя клиента:", Lang::En => "Enter client name:" }.to_string()
+    match lang {
+        Lang::Ru => "Введите имя клиента:",
+        Lang::En => "Enter client name:",
+    }
+    .to_string()
 }
 pub fn bad_name(lang: Lang) -> String {
-    match lang { Lang::Ru => "⚠️ Некорректное имя (латиница/цифры/-/_, 1–32). Введите ещё раз:", Lang::En => "⚠️ Invalid name (a-z0-9-_, 1–32). Try again:" }.to_string()
+    match lang {
+        Lang::Ru => "⚠️ Некорректное имя (латиница/цифры/-/_, 1–32). Введите ещё раз:",
+        Lang::En => "⚠️ Invalid name (a-z0-9-_, 1–32). Try again:",
+    }
+    .to_string()
 }
 pub fn ask_expiry(lang: Lang) -> String {
-    match lang { Lang::Ru => "Выберите срок действия:", Lang::En => "Choose expiry:" }.to_string()
+    match lang {
+        Lang::Ru => "Выберите срок действия:",
+        Lang::En => "Choose expiry:",
+    }
+    .to_string()
 }
 pub fn ask_custom_expiry(lang: Lang) -> String {
-    match lang { Lang::Ru => "Введите срок (например 10d, 12h, 3w):", Lang::En => "Enter duration (e.g. 10d, 12h, 3w):" }.to_string()
+    match lang {
+        Lang::Ru => "Введите срок (например 10d, 12h, 3w):",
+        Lang::En => "Enter duration (e.g. 10d, 12h, 3w):",
+    }
+    .to_string()
 }
 pub fn bad_expiry(lang: Lang) -> String {
-    match lang { Lang::Ru => "⚠️ Формат срока: Nh/Nd/Nw (например 10d).", Lang::En => "⚠️ Duration format: Nh/Nd/Nw (e.g. 10d)." }.to_string()
+    match lang {
+        Lang::Ru => "⚠️ Формат срока: Nh/Nd/Nw (например 10d).",
+        Lang::En => "⚠️ Duration format: Nh/Nd/Nw (e.g. 10d).",
+    }
+    .to_string()
 }
 pub fn psk_step(lang: Lang, default_on: bool) -> String {
-    let d = if default_on { "вкл/on" } else { "выкл/off" };
+    let d = if default_on {
+        "вкл/on"
+    } else {
+        "выкл/off"
+    };
     match lang {
         Lang::Ru => format!("PresharedKey (по умолчанию: {d}). Создать клиента:"),
         Lang::En => format!("PresharedKey (default: {d}). Create client:"),
     }
 }
-pub fn btn_create_with_psk(lang: Lang) -> String { match lang { Lang::Ru => "🔐 С PSK", Lang::En => "🔐 With PSK" }.to_string() }
-pub fn btn_create_no_psk(lang: Lang) -> String { match lang { Lang::Ru => "🔓 Без PSK", Lang::En => "🔓 No PSK" }.to_string() }
-pub fn creating(lang: Lang) -> String { match lang { Lang::Ru => "⏳ Создаю клиента…", Lang::En => "⏳ Creating client…" }.to_string() }
+pub fn btn_create_with_psk(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "🔐 С PSK",
+        Lang::En => "🔐 With PSK",
+    }
+    .to_string()
+}
+pub fn btn_create_no_psk(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "🔓 Без PSK",
+        Lang::En => "🔓 No PSK",
+    }
+    .to_string()
+}
+pub fn creating(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "⏳ Создаю клиента…",
+        Lang::En => "⏳ Creating client…",
+    }
+    .to_string()
+}
 pub fn import_link(lang: Lang, uri: &str) -> String {
     let u = html_escape(uri);
     match lang {
@@ -94,9 +188,25 @@ pub fn import_link(lang: Lang, uri: &str) -> String {
 
 // --- карточка/статистика (динамика экранируется) ---
 #[allow(clippy::too_many_arguments)]
-pub fn client_card(lang: Lang, name: &str, status: &str, ip: &str, rx: &str, tx: &str, handshake: &str, expires: &str) -> String {
+pub fn client_card(
+    lang: Lang,
+    name: &str,
+    status: &str,
+    ip: &str,
+    rx: &str,
+    tx: &str,
+    handshake: &str,
+    expires: &str,
+) -> String {
     let (name, status, ip) = (html_escape(name), html_escape(status), html_escape(ip));
-    let ip_line = if ip.is_empty() { String::new() } else { match lang { Lang::Ru => format!("IP: {ip}\n"), Lang::En => format!("IP: {ip}\n") } };
+    let ip_line = if ip.is_empty() {
+        String::new()
+    } else {
+        match lang {
+            Lang::Ru => format!("IP: {ip}\n"),
+            Lang::En => format!("IP: {ip}\n"),
+        }
+    };
     match lang {
         Lang::Ru => format!("👤 <b>{name}</b>\nСтатус: {status}\n{ip_line}Трафик:  ↓ {rx}   ↑ {tx}\nРукопожатие: {handshake}\nДействует: {expires}"),
         Lang::En => format!("👤 <b>{name}</b>\nStatus: {status}\n{ip_line}Traffic:  ↓ {rx}   ↑ {tx}\nHandshake: {handshake}\nExpires: {expires}"),
@@ -108,29 +218,75 @@ pub fn stats_summary(lang: Lang, total: usize, active: usize, rx: &str, tx: &str
         Lang::En => format!("📊 <b>Stats</b>\nTotal clients: {total}\nActive: {active}\nTotal traffic: ↓ {rx}  ↑ {tx}"),
     }
 }
-pub fn clients_empty(lang: Lang) -> String { match lang { Lang::Ru => "Пока нет клиентов.", Lang::En => "No clients yet." }.to_string() }
-pub fn clients_title(lang: Lang) -> String { match lang { Lang::Ru => "👥 <b>Клиенты</b>:", Lang::En => "👥 <b>Clients</b>:" }.to_string() }
-pub fn not_found(lang: Lang) -> String { match lang { Lang::Ru => "Клиент не найден.", Lang::En => "Client not found." }.to_string() }
+pub fn clients_empty(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "Пока нет клиентов.",
+        Lang::En => "No clients yet.",
+    }
+    .to_string()
+}
+pub fn clients_title(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "👥 <b>Клиенты</b>:",
+        Lang::En => "👥 <b>Clients</b>:",
+    }
+    .to_string()
+}
+pub fn not_found(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "Клиент не найден.",
+        Lang::En => "Client not found.",
+    }
+    .to_string()
+}
 pub fn backup_not_found(lang: Lang) -> String {
-    match lang { Lang::Ru => "Бэкап не найден.", Lang::En => "Backup not found." }.to_string()
+    match lang {
+        Lang::Ru => "Бэкап не найден.",
+        Lang::En => "Backup not found.",
+    }
+    .to_string()
 }
 pub fn confirm_delete(lang: Lang, name: &str) -> String {
     let n = html_escape(name);
-    match lang { Lang::Ru => format!("Точно удалить <b>{n}</b>?"), Lang::En => format!("Delete <b>{n}</b>?") }
+    match lang {
+        Lang::Ru => format!("Точно удалить <b>{n}</b>?"),
+        Lang::En => format!("Delete <b>{n}</b>?"),
+    }
 }
 pub fn deleted(lang: Lang, name: &str) -> String {
     let n = html_escape(name);
-    match lang { Lang::Ru => format!("🗑 Клиент {n} удалён."), Lang::En => format!("🗑 Client {n} removed.") }
+    match lang {
+        Lang::Ru => format!("🗑 Клиент {n} удалён."),
+        Lang::En => format!("🗑 Client {n} removed."),
+    }
 }
-pub fn done(lang: Lang) -> String { match lang { Lang::Ru => "Готово.", Lang::En => "Done." }.to_string() }
+pub fn done(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "Готово.",
+        Lang::En => "Done.",
+    }
+    .to_string()
+}
 pub fn btn_regen(lang: Lang) -> String {
-    match lang { Lang::Ru => "🔄 Перевыпустить", Lang::En => "🔄 Reissue" }.to_string()
+    match lang {
+        Lang::Ru => "🔄 Перевыпустить",
+        Lang::En => "🔄 Reissue",
+    }
+    .to_string()
 }
 pub fn regen_running(lang: Lang) -> String {
-    match lang { Lang::Ru => "⏳ Перевыпускаю…", Lang::En => "⏳ Reissuing…" }.to_string()
+    match lang {
+        Lang::Ru => "⏳ Перевыпускаю…",
+        Lang::En => "⏳ Reissuing…",
+    }
+    .to_string()
 }
 pub fn btn_regen_all(lang: Lang) -> String {
-    match lang { Lang::Ru => "🔄 Перевыпустить всех", Lang::En => "🔄 Reissue all" }.to_string()
+    match lang {
+        Lang::Ru => "🔄 Перевыпустить всех",
+        Lang::En => "🔄 Reissue all",
+    }
+    .to_string()
 }
 pub fn confirm_regen_all(lang: Lang) -> String {
     match lang {
@@ -139,22 +295,39 @@ pub fn confirm_regen_all(lang: Lang) -> String {
     }.to_string()
 }
 pub fn btn_regen_all_go(lang: Lang) -> String {
-    match lang { Lang::Ru => "✅ Перевыпустить", Lang::En => "✅ Reissue" }.to_string()
+    match lang {
+        Lang::Ru => "✅ Перевыпустить",
+        Lang::En => "✅ Reissue",
+    }
+    .to_string()
 }
 pub fn btn_regen_all_routes(lang: Lang) -> String {
-    match lang { Lang::Ru => "🔀 + сброс маршрутов", Lang::En => "🔀 + reset routes" }.to_string()
+    match lang {
+        Lang::Ru => "🔀 + сброс маршрутов",
+        Lang::En => "🔀 + reset routes",
+    }
+    .to_string()
 }
 pub fn regen_all_running(lang: Lang) -> String {
-    match lang { Lang::Ru => "⏳ Перевыпускаю всех…", Lang::En => "⏳ Reissuing all…" }.to_string()
+    match lang {
+        Lang::Ru => "⏳ Перевыпускаю всех…",
+        Lang::En => "⏳ Reissuing all…",
+    }
+    .to_string()
 }
 pub fn regen_all_done(lang: Lang) -> String {
-    match lang { Lang::Ru => "✅ Все конфиги перевыпущены.", Lang::En => "✅ All client configs reissued." }.to_string()
+    match lang {
+        Lang::Ru => "✅ Все конфиги перевыпущены.",
+        Lang::En => "✅ All client configs reissued.",
+    }
+    .to_string()
 }
 pub fn regen_all_partial(lang: Lang) -> String {
     match lang {
         Lang::Ru => "⚠️ Завершено, но с ошибками у части клиентов — проверьте логи сервера.",
         Lang::En => "⚠️ Completed, but with errors for some clients — check the server logs.",
-    }.to_string()
+    }
+    .to_string()
 }
 pub fn client_exists(lang: Lang, name: &str) -> String {
     let n = html_escape(name);
@@ -166,54 +339,158 @@ pub fn client_exists(lang: Lang, name: &str) -> String {
 
 // --- настройки ---
 pub fn settings_title(lang: Lang, psk_default: bool) -> String {
-    let psk = if psk_default { "вкл/on" } else { "выкл/off" };
+    let psk = if psk_default {
+        "вкл/on"
+    } else {
+        "выкл/off"
+    };
     match lang {
         Lang::Ru => format!("⚙️ <b>Настройки</b>\nЯзык: русский\nPSK по умолчанию: {psk}"),
         Lang::En => format!("⚙️ <b>Settings</b>\nLanguage: English\nDefault PSK: {psk}"),
     }
 }
-pub fn btn_lang_ru(lang: Lang) -> String { let _ = lang; "🇷🇺 Русский".to_string() }
-pub fn btn_lang_en(lang: Lang) -> String { let _ = lang; "🇬🇧 English".to_string() }
+pub fn btn_lang_ru(lang: Lang) -> String {
+    let _ = lang;
+    "🇷🇺 Русский".to_string()
+}
+pub fn btn_lang_en(lang: Lang) -> String {
+    let _ = lang;
+    "🇬🇧 English".to_string()
+}
 pub fn btn_psk_toggle(lang: Lang, on: bool) -> String {
     match (lang, on) {
-        (Lang::Ru, true) => "PSK: вкл ✅", (Lang::Ru, false) => "PSK: выкл ⬜",
-        (Lang::En, true) => "PSK: on ✅", (Lang::En, false) => "PSK: off ⬜",
-    }.to_string()
+        (Lang::Ru, true) => "PSK: вкл ✅",
+        (Lang::Ru, false) => "PSK: выкл ⬜",
+        (Lang::En, true) => "PSK: on ✅",
+        (Lang::En, false) => "PSK: off ⬜",
+    }
+    .to_string()
 }
 
 // --- backup / restore ---
-pub fn btn_backup_new(lang: Lang) -> String { match lang { Lang::Ru => "➕ Создать бэкап", Lang::En => "➕ Create backup" }.to_string() }
-pub fn btn_backup_list(lang: Lang) -> String { match lang { Lang::Ru => "📃 Список бэкапов", Lang::En => "📃 List backups" }.to_string() }
-pub fn backup_menu_title(lang: Lang) -> String { match lang { Lang::Ru => "💾 <b>Бэкап</b>", Lang::En => "💾 <b>Backup</b>" }.to_string() }
-pub fn backup_creating(lang: Lang) -> String { match lang { Lang::Ru => "⏳ Создаю бэкап…", Lang::En => "⏳ Creating backup…" }.to_string() }
+pub fn btn_backup_new(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "➕ Создать бэкап",
+        Lang::En => "➕ Create backup",
+    }
+    .to_string()
+}
+pub fn btn_backup_list(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "📃 Список бэкапов",
+        Lang::En => "📃 List backups",
+    }
+    .to_string()
+}
+pub fn backup_menu_title(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "💾 <b>Бэкап</b>",
+        Lang::En => "💾 <b>Backup</b>",
+    }
+    .to_string()
+}
+pub fn backup_creating(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "⏳ Создаю бэкап…",
+        Lang::En => "⏳ Creating backup…",
+    }
+    .to_string()
+}
 pub fn backup_done(lang: Lang, filename: &str) -> String {
     let f = html_escape(filename);
-    match lang { Lang::Ru => format!("✅ Бэкап создан:\n<code>{f}</code>"), Lang::En => format!("✅ Backup created:\n<code>{f}</code>") }
+    match lang {
+        Lang::Ru => format!("✅ Бэкап создан:\n<code>{f}</code>"),
+        Lang::En => format!("✅ Backup created:\n<code>{f}</code>"),
+    }
 }
-pub fn backups_empty(lang: Lang) -> String { match lang { Lang::Ru => "Бэкапов пока нет.", Lang::En => "No backups yet." }.to_string() }
-pub fn backups_list_title(lang: Lang) -> String { match lang { Lang::Ru => "📃 <b>Бэкапы</b>:", Lang::En => "📃 <b>Backups</b>:" }.to_string() }
-pub fn btn_download(lang: Lang) -> String { match lang { Lang::Ru => "📥 Скачать", Lang::En => "📥 Download" }.to_string() }
-pub fn btn_restore(lang: Lang) -> String { match lang { Lang::Ru => "♻️ Восстановить", Lang::En => "♻️ Restore" }.to_string() }
+pub fn backups_empty(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "Бэкапов пока нет.",
+        Lang::En => "No backups yet.",
+    }
+    .to_string()
+}
+pub fn backups_list_title(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "📃 <b>Бэкапы</b>:",
+        Lang::En => "📃 <b>Backups</b>:",
+    }
+    .to_string()
+}
+pub fn btn_download(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "📥 Скачать",
+        Lang::En => "📥 Download",
+    }
+    .to_string()
+}
+pub fn btn_restore(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "♻️ Восстановить",
+        Lang::En => "♻️ Restore",
+    }
+    .to_string()
+}
 pub fn confirm_restore(lang: Lang, filename: &str) -> String {
     let f = html_escape(filename);
-    match lang { Lang::Ru => format!("♻️ Восстановить из <code>{f}</code>? Текущее состояние будет заменено."), Lang::En => format!("♻️ Restore from <code>{f}</code>? Current state will be replaced.") }
+    match lang {
+        Lang::Ru => {
+            format!("♻️ Восстановить из <code>{f}</code>? Текущее состояние будет заменено.")
+        }
+        Lang::En => format!("♻️ Restore from <code>{f}</code>? Current state will be replaced."),
+    }
 }
-pub fn btn_confirm(lang: Lang) -> String { match lang { Lang::Ru => "✅ Да", Lang::En => "✅ Yes" }.to_string() }
-pub fn restoring(lang: Lang) -> String { match lang { Lang::Ru => "⏳ Восстанавливаю…", Lang::En => "⏳ Restoring…" }.to_string() }
-pub fn restore_done(lang: Lang) -> String { match lang { Lang::Ru => "✅ Восстановление завершено.", Lang::En => "✅ Restore complete." }.to_string() }
+pub fn btn_confirm(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "✅ Да",
+        Lang::En => "✅ Yes",
+    }
+    .to_string()
+}
+pub fn restoring(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "⏳ Восстанавливаю…",
+        Lang::En => "⏳ Restoring…",
+    }
+    .to_string()
+}
+pub fn restore_done(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "✅ Восстановление завершено.",
+        Lang::En => "✅ Restore complete.",
+    }
+    .to_string()
+}
 
 // --- check ---
-pub fn check_running(lang: Lang) -> String { match lang { Lang::Ru => "⏳ Проверяю сервер…", Lang::En => "⏳ Checking server…" }.to_string() }
+pub fn check_running(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "⏳ Проверяю сервер…",
+        Lang::En => "⏳ Checking server…",
+    }
+    .to_string()
+}
 pub fn check_result(lang: Lang, body: &str) -> String {
     let b = html_escape(body);
-    match lang { Lang::Ru => format!("🩺 <b>Проверка</b>\n<pre>{b}</pre>"), Lang::En => format!("🩺 <b>Check</b>\n<pre>{b}</pre>") }
+    match lang {
+        Lang::Ru => format!("🩺 <b>Проверка</b>\n<pre>{b}</pre>"),
+        Lang::En => format!("🩺 <b>Check</b>\n<pre>{b}</pre>"),
+    }
 }
 
 pub fn btn_diagnose(lang: Lang) -> String {
-    match lang { Lang::Ru => "🔬 Диагностика", Lang::En => "🔬 Diagnostics" }.to_string()
+    match lang {
+        Lang::Ru => "🔬 Диагностика",
+        Lang::En => "🔬 Diagnostics",
+    }
+    .to_string()
 }
 pub fn diagnose_running(lang: Lang) -> String {
-    match lang { Lang::Ru => "⏳ Диагностирую…", Lang::En => "⏳ Running diagnostics…" }.to_string()
+    match lang {
+        Lang::Ru => "⏳ Диагностирую…",
+        Lang::En => "⏳ Running diagnostics…",
+    }
+    .to_string()
 }
 pub fn diagnose_result(lang: Lang, body: &str) -> String {
     let b = html_escape(body);
@@ -242,10 +519,18 @@ pub fn status_label(lang: Lang, status_code: &str, raw: &str) -> String {
         (Lang::Ru, "no_data") => "Нет данных",
         (Lang::En, "no_data") => "No data",
         (Lang::Ru, _) => {
-            return if raw.is_empty() { "неизвестно".to_string() } else { raw.to_string() };
+            return if raw.is_empty() {
+                "неизвестно".to_string()
+            } else {
+                raw.to_string()
+            };
         }
         (Lang::En, _) => {
-            return if raw.is_empty() { "unknown".to_string() } else { raw.to_string() };
+            return if raw.is_empty() {
+                "unknown".to_string()
+            } else {
+                raw.to_string()
+            };
         }
     }
     .to_string()
@@ -260,11 +545,16 @@ pub fn error_text(lang: Lang, err: &Error) -> String {
         (Lang::En, Error::ScriptFailed { .. }) => "❌ Operation failed. Try again.",
         (Lang::Ru, Error::Parse(_)) => "❌ Не удалось разобрать ответ сервера.",
         (Lang::En, Error::Parse(_)) => "❌ Failed to parse server response.",
-        (Lang::Ru, Error::ClientExists(_)) => "⚠️ Клиент с таким именем уже существует — создание пропущено.",
-        (Lang::En, Error::ClientExists(_)) => "⚠️ A client with this name already exists — creation was skipped.",
+        (Lang::Ru, Error::ClientExists(_)) => {
+            "⚠️ Клиент с таким именем уже существует — создание пропущено."
+        }
+        (Lang::En, Error::ClientExists(_)) => {
+            "⚠️ A client with this name already exists — creation was skipped."
+        }
         (Lang::Ru, _) => "❌ Ошибка выполнения операции.",
         (Lang::En, _) => "❌ Operation error.",
-    }.to_string()
+    }
+    .to_string()
 }
 
 #[cfg(test)]
@@ -316,7 +606,16 @@ mod tests {
             assert!(!backups_empty(l).is_empty());
             assert!(!restore_done(l).is_empty());
             // карточка: имя экранируется
-            let card = client_card(l, "a<b>", "Активен", "10.0.0.2", "1 KB", "0 B", "никогда", "бессрочно");
+            let card = client_card(
+                l,
+                "a<b>",
+                "Активен",
+                "10.0.0.2",
+                "1 KB",
+                "0 B",
+                "никогда",
+                "бессрочно",
+            );
             assert!(card.contains("a&lt;b&gt;"));
             assert!(!card.contains("a<b>"));
         }
@@ -360,7 +659,10 @@ mod tests {
             for e in [
                 Error::Timeout,
                 Error::Parse("x".into()),
-                Error::ScriptFailed { code: Some(1), stderr: "secret".into() },
+                Error::ScriptFailed {
+                    code: Some(1),
+                    stderr: "secret".into(),
+                },
                 Error::Telegram("x".into()),
                 Error::ClientExists("alice".into()),
             ] {

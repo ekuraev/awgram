@@ -27,7 +27,11 @@ impl Vpn {
     }
 
     fn spec(&self) -> RunSpec<'_> {
-        RunSpec { script: &self.script, sudo_prefix: &self.sudo_prefix, timeout_secs: self.timeout_secs }
+        RunSpec {
+            script: &self.script,
+            sudo_prefix: &self.sudo_prefix,
+            timeout_secs: self.timeout_secs,
+        }
     }
 
     pub async fn list(&self) -> Result<Vec<Client>> {
@@ -43,17 +47,19 @@ impl Vpn {
     /// Проверяет, существует ли клиент с таким именем (через `list --json`).
     /// Авторитетно: отражает реальное состояние WireGuard, а не только файлы на диске.
     pub async fn exists(&self, name: &str) -> Result<bool> {
-        let name = validate::validate_name(name)
-            .map_err(|e| crate::error::Error::Parse(e.to_string()))?;
+        let name =
+            validate::validate_name(name).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
         let clients = self.list().await?;
         Ok(clients.iter().any(|c| c.name == name))
     }
 
     pub async fn add(&self, name: &str, expires: Option<&str>, psk: bool) -> Result<AddResult> {
-        let name = validate::validate_name(name).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
+        let name =
+            validate::validate_name(name).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
         let mut args: Vec<String> = vec!["add".into(), name.clone()];
         if let Some(exp) = expires {
-            let exp = validate::validate_expiry(exp).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
+            let exp = validate::validate_expiry(exp)
+                .map_err(|e| crate::error::Error::Parse(e.to_string()))?;
             args.push(format!("--expires={exp}"));
         }
         if psk {
@@ -75,7 +81,8 @@ impl Vpn {
     }
 
     pub async fn remove(&self, name: &str) -> Result<()> {
-        let name = validate::validate_name(name).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
+        let name =
+            validate::validate_name(name).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
         run(&self.spec(), &["remove", &name]).await?;
         Ok(())
     }
@@ -83,8 +90,8 @@ impl Vpn {
     /// Перевыпускает файлы одного клиента (`regen <name>`): ключи и IP
     /// сохраняются, `.conf`/QR/URI создаются заново и читаются с диска.
     pub async fn regen_client(&self, name: &str) -> Result<AddResult> {
-        let name = validate::validate_name(name)
-            .map_err(|e| crate::error::Error::Parse(e.to_string()))?;
+        let name =
+            validate::validate_name(name).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
         run(&self.spec(), &["regen", &name]).await?;
         self.existing_files(&name)
     }
@@ -99,7 +106,11 @@ impl Vpn {
             sudo_prefix: &self.sudo_prefix,
             timeout_secs: self.timeout_secs * 3,
         };
-        let args: &[&str] = if reset_routes { &["regen", "--reset-routes"] } else { &["regen"] };
+        let args: &[&str] = if reset_routes {
+            &["regen", "--reset-routes"]
+        } else {
+            &["regen"]
+        };
         let (_out, code) = run_capture(&spec, args).await?;
         Ok(code == 0)
     }
@@ -108,14 +119,20 @@ impl Vpn {
     /// и как последний шаг `add`). Только `.conf` обязателен — QR (`.png`) и ссылка
     /// (`.vpnuri`) создаются скриптом условно (например, если `qrencode` не установлен).
     pub fn existing_files(&self, name: &str) -> Result<AddResult> {
-        let name = validate::validate_name(name).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
+        let name =
+            validate::validate_name(name).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
         let conf = self.clients_dir.join(format!("{name}.conf"));
         let qr = self.clients_dir.join(format!("{name}.png"));
         let uri_path = self.clients_dir.join(format!("{name}.vpnuri"));
         if !conf.exists() {
-            return Err(crate::error::Error::Parse("файлы клиента не найдены".into()));
+            return Err(crate::error::Error::Parse(
+                "файлы клиента не найдены".into(),
+            ));
         }
-        let uri = std::fs::read_to_string(&uri_path).unwrap_or_default().trim().to_string();
+        let uri = std::fs::read_to_string(&uri_path)
+            .unwrap_or_default()
+            .trim()
+            .to_string();
         Ok(AddResult {
             name,
             conf_path: conf.to_string_lossy().into_owned(),
@@ -163,7 +180,12 @@ impl Vpn {
                     .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                     .map(|d| d.as_secs() as i64)
                     .unwrap_or(0);
-                out.push(BackupFile { name, path, size: meta.len(), mtime });
+                out.push(BackupFile {
+                    name,
+                    path,
+                    size: meta.len(),
+                    mtime,
+                });
             }
         }
         out.sort_by(|a, b| b.mtime.cmp(&a.mtime));
@@ -182,9 +204,14 @@ impl Vpn {
     /// Восстанавливает из бэкапа по индексу в списке `list_backups()` (0 = самый новый).
     pub async fn restore(&self, index: usize) -> Result<()> {
         let backups = self.list_backups()?;
-        let bf = backups.get(index).ok_or_else(|| crate::error::Error::Parse("бэкап не найден".into()))?;
+        let bf = backups
+            .get(index)
+            .ok_or_else(|| crate::error::Error::Parse("бэкап не найден".into()))?;
         // basename-валидация: имя без разделителей пути и по шаблону
-        if bf.name.contains('/') || !bf.name.starts_with("awg_backup_") || !bf.name.ends_with(".tar.gz") {
+        if bf.name.contains('/')
+            || !bf.name.starts_with("awg_backup_")
+            || !bf.name.ends_with(".tar.gz")
+        {
             return Err(crate::error::Error::Parse("некорректное имя бэкапа".into()));
         }
         let path = bf.path.to_string_lossy().into_owned();
@@ -301,9 +328,8 @@ mod tests {
     #[tokio::test]
     async fn add_runs_script_then_reads_created_conf() {
         // Real `add` prints no JSON — just logs — and creates `<name>.conf` on disk.
-        let (dir, vpn) = vpn_with_script(
-            "#!/bin/sh\necho conf > \"$(dirname \"$0\")/alice.conf\"\nexit 0\n",
-        );
+        let (dir, vpn) =
+            vpn_with_script("#!/bin/sh\necho conf > \"$(dirname \"$0\")/alice.conf\"\nexit 0\n");
         let res = vpn.add("alice", None, false).await.unwrap();
         assert!(res.conf_path.ends_with("alice.conf"));
         assert_eq!(res.uri, "");
@@ -319,7 +345,10 @@ mod tests {
         let (dir, vpn) = vpn_with_script("#!/bin/sh\nexit 0\n");
         std::fs::write(dir.path().join("alice.conf"), "old conf").unwrap();
         let err = vpn.add("alice", None, false).await.unwrap_err();
-        assert!(matches!(err, crate::error::Error::ClientExists(_)), "got {err:?}");
+        assert!(
+            matches!(err, crate::error::Error::ClientExists(_)),
+            "got {err:?}"
+        );
         drop(dir);
     }
 
@@ -384,7 +413,10 @@ mod tests {
     #[test]
     fn existing_files_errors_when_missing() {
         let (_d, vpn) = vpn_with_script("#!/bin/sh\n");
-        assert!(matches!(vpn.existing_files("ghost"), Err(crate::error::Error::Parse(_))));
+        assert!(matches!(
+            vpn.existing_files("ghost"),
+            Err(crate::error::Error::Parse(_))
+        ));
     }
 
     #[test]
@@ -424,7 +456,11 @@ mod tests {
         );
         let bdir = dir.path().join("backups");
         std::fs::create_dir_all(&bdir).unwrap();
-        std::fs::write(bdir.join("awg_backup_2026-01-01_00-00-00.000Z.tar.gz"), b"x").unwrap();
+        std::fs::write(
+            bdir.join("awg_backup_2026-01-01_00-00-00.000Z.tar.gz"),
+            b"x",
+        )
+        .unwrap();
         let bf = vpn.backup().await.unwrap();
         assert!(bf.name.ends_with(".tar.gz"));
     }
@@ -444,7 +480,10 @@ mod tests {
     #[tokio::test]
     async fn restore_rejects_out_of_range() {
         let (_d, vpn) = vpn_with_script("#!/bin/sh\n");
-        assert!(matches!(vpn.restore(999).await, Err(crate::error::Error::Parse(_))));
+        assert!(matches!(
+            vpn.restore(999).await,
+            Err(crate::error::Error::Parse(_))
+        ));
     }
 
     #[tokio::test]
@@ -464,7 +503,10 @@ mod tests {
     #[tokio::test]
     async fn diagnose_errors_on_empty_output() {
         let (_d, vpn) = vpn_with_script("#!/bin/sh\nexit 0\n");
-        assert!(matches!(vpn.diagnose().await, Err(crate::error::Error::Parse(_))));
+        assert!(matches!(
+            vpn.diagnose().await,
+            Err(crate::error::Error::Parse(_))
+        ));
     }
 
     #[tokio::test]
@@ -498,7 +540,13 @@ mod tests {
         // Стаб успешен ТОЛЬКО при наличии --reset-routes среди аргументов.
         const STUB: &str = "#!/bin/sh\nfor a in \"$@\"; do\n  [ \"$a\" = \"--reset-routes\" ] && exit 0\ndone\nexit 1\n";
         let (_d, vpn) = vpn_with_script(STUB);
-        assert!(vpn.regen_all(true).await.unwrap(), "с reset_routes=true флаг должен дойти до скрипта");
-        assert!(!vpn.regen_all(false).await.unwrap(), "без reset_routes флага быть не должно");
+        assert!(
+            vpn.regen_all(true).await.unwrap(),
+            "с reset_routes=true флаг должен дойти до скрипта"
+        );
+        assert!(
+            !vpn.regen_all(false).await.unwrap(),
+            "без reset_routes флага быть не должно"
+        );
     }
 }

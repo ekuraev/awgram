@@ -24,7 +24,9 @@ pub async fn run(spec: &RunSpec<'_>, args: &[&str]) -> Result<String> {
         c.args(args);
         c
     };
-    cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+    cmd.stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
 
     let child = cmd.spawn()?;
     let dur = Duration::from_secs(spec.timeout_secs);
@@ -57,7 +59,9 @@ pub async fn run_capture(spec: &RunSpec<'_>, args: &[&str]) -> Result<(String, i
         c.args(args);
         c
     };
-    cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+    cmd.stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
     let child = cmd.spawn()?;
     let dur = Duration::from_secs(spec.timeout_secs);
     let output = match timeout(dur, child.wait_with_output()).await {

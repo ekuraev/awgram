@@ -25,14 +25,20 @@ impl SettingsStore {
             .ok()
             .and_then(|s| serde_json::from_str::<BotState>(&s).ok())
             .unwrap_or_default();
-        SettingsStore { path, state: Mutex::new(state) }
+        SettingsStore {
+            path,
+            state: Mutex::new(state),
+        }
     }
 
     fn persist(&self, state: &BotState) {
         let tmp = self.path.with_extension("json.tmp");
         match serde_json::to_string_pretty(state) {
             Ok(json) => {
-                if std::fs::write(&tmp, json).and_then(|_| std::fs::rename(&tmp, &self.path)).is_err() {
+                if std::fs::write(&tmp, json)
+                    .and_then(|_| std::fs::rename(&tmp, &self.path))
+                    .is_err()
+                {
                     tracing::error!(path = %self.path.display(), "не удалось сохранить state.json");
                 }
             }
@@ -41,7 +47,13 @@ impl SettingsStore {
     }
 
     pub fn lang(&self, uid: i64) -> Lang {
-        self.state.lock().unwrap().langs.get(&uid).copied().unwrap_or_default()
+        self.state
+            .lock()
+            .unwrap()
+            .langs
+            .get(&uid)
+            .copied()
+            .unwrap_or_default()
     }
 
     pub fn has_lang(&self, uid: i64) -> bool {

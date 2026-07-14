@@ -58,14 +58,26 @@ pub fn human_bytes(n: u64) -> String {
 /// `now` — текущее время (epoch, сек), передаётся явно ради тестируемости.
 pub fn format_handshake(lang: Lang, now: i64, hs: i64) -> String {
     if hs <= 0 {
-        return match lang { Lang::Ru => "никогда", Lang::En => "never" }.to_string();
+        return match lang {
+            Lang::Ru => "никогда",
+            Lang::En => "never",
+        }
+        .to_string();
     }
     let d = now - hs;
     if d < 0 {
-        return match lang { Lang::Ru => "только что", Lang::En => "just now" }.to_string();
+        return match lang {
+            Lang::Ru => "только что",
+            Lang::En => "just now",
+        }
+        .to_string();
     }
     if d < 60 {
-        match lang { Lang::Ru => "только что", Lang::En => "just now" }.to_string()
+        match lang {
+            Lang::Ru => "только что",
+            Lang::En => "just now",
+        }
+        .to_string()
     } else if d < 3600 {
         match lang {
             Lang::Ru => format!("{} мин назад", d / 60),
@@ -87,8 +99,16 @@ pub fn format_handshake(lang: Lang, now: i64, hs: i64) -> String {
 /// Человекочитаемый срок действия. None → бессрочно.
 pub fn format_expiry(lang: Lang, now: i64, exp: Option<i64>) -> String {
     match exp {
-        None => match lang { Lang::Ru => "бессрочно", Lang::En => "no expiry" }.to_string(),
-        Some(e) if e <= now => match lang { Lang::Ru => "истёк", Lang::En => "expired" }.to_string(),
+        None => match lang {
+            Lang::Ru => "бессрочно",
+            Lang::En => "no expiry",
+        }
+        .to_string(),
+        Some(e) if e <= now => match lang {
+            Lang::Ru => "истёк",
+            Lang::En => "expired",
+        }
+        .to_string(),
         Some(e) => {
             let d = e - now;
             if d >= 86400 {
@@ -102,7 +122,11 @@ pub fn format_expiry(lang: Lang, now: i64, exp: Option<i64>) -> String {
                     Lang::En => format!("{} h left", d / 3600),
                 }
             } else {
-                match lang { Lang::Ru => "< 1 ч", Lang::En => "< 1 h" }.to_string()
+                match lang {
+                    Lang::Ru => "< 1 ч",
+                    Lang::En => "< 1 h",
+                }
+                .to_string()
             }
         }
     }
@@ -114,7 +138,10 @@ pub fn format_expiry_badge(lang: Lang, now: i64, exp: Option<i64>) -> Option<Str
     let e = exp?;
     let d = e - now;
     let text = if d <= 0 {
-        match lang { Lang::Ru => "⏳ истёк".to_string(), Lang::En => "⏳ expired".to_string() }
+        match lang {
+            Lang::Ru => "⏳ истёк".to_string(),
+            Lang::En => "⏳ expired".to_string(),
+        }
     } else if d >= 86400 {
         match lang {
             Lang::Ru => format!("⏳ {}д", d / 86400),
@@ -126,7 +153,10 @@ pub fn format_expiry_badge(lang: Lang, now: i64, exp: Option<i64>) -> Option<Str
             Lang::En => format!("⏳ {}h", d / 3600),
         }
     } else {
-        match lang { Lang::Ru => "⏳ <1ч".to_string(), Lang::En => "⏳ <1h".to_string() }
+        match lang {
+            Lang::Ru => "⏳ <1ч".to_string(),
+            Lang::En => "⏳ <1h".to_string(),
+        }
     };
     Some(text)
 }
@@ -212,7 +242,10 @@ mod tests {
 
     #[test]
     fn format_handshake_just_now_en() {
-        assert_eq!(format_handshake(Lang::En, 1_700_000_000, 1_700_000_100), "just now");
+        assert_eq!(
+            format_handshake(Lang::En, 1_700_000_000, 1_700_000_100),
+            "just now"
+        );
     }
 
     #[test]
@@ -313,7 +346,10 @@ mod tests {
 
     #[test]
     fn format_handshake_future_reads_just_now() {
-        assert_eq!(format_handshake(Lang::Ru, 1_700_000_000, 1_700_000_100), "только что");
+        assert_eq!(
+            format_handshake(Lang::Ru, 1_700_000_000, 1_700_000_100),
+            "только что"
+        );
     }
 
     #[test]

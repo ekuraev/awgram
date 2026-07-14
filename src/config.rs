@@ -142,7 +142,10 @@ mod tests {
                 dir.path().display()
             ),
         );
-        assert!(matches!(Config::load(&cfg_path), Err(ConfigError::NoAdmins)));
+        assert!(matches!(
+            Config::load(&cfg_path),
+            Err(ConfigError::NoAdmins)
+        ));
     }
 
     #[test]

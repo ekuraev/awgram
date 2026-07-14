@@ -40,8 +40,14 @@ mod tests {
 
     #[test]
     fn user_message_hides_stderr() {
-        let e = Error::ScriptFailed { code: Some(1), stderr: "secret-key-leak".into() };
+        let e = Error::ScriptFailed {
+            code: Some(1),
+            stderr: "secret-key-leak".into(),
+        };
         assert!(!e.user_message().contains("secret"));
-        assert_eq!(e.user_message(), "❌ Операция не удалась. Попробуйте ещё раз.");
+        assert_eq!(
+            e.user_message(),
+            "❌ Операция не удалась. Попробуйте ещё раз."
+        );
     }
 }

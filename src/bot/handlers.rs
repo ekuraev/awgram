@@ -29,8 +29,8 @@ pub enum Action {
     Regen(String),
     RegenAll,
     RegenAllRun(bool), // true = --reset-routes
-    Expiry(String), // "none" | "1d" | ... | "custom"
-    Lang(String),   // "ru" | "en" — язык-гейт при первом /start
+    Expiry(String),    // "none" | "1d" | ... | "custom"
+    Lang(String),      // "ru" | "en" — язык-гейт при первом /start
     Settings,
     SetLang(String), // "ru" | "en" — смена языка из экрана настроек
     SetPsk(bool),
@@ -105,7 +105,9 @@ fn parse_callback(data: &str) -> Action {
             } else if let Some(v) = data.strip_prefix("bk:card:") {
                 v.parse().map(Action::BackupCard).unwrap_or(Action::Unknown)
             } else if let Some(v) = data.strip_prefix("bk:dl:") {
-                v.parse().map(Action::BackupDownload).unwrap_or(Action::Unknown)
+                v.parse()
+                    .map(Action::BackupDownload)
+                    .unwrap_or(Action::Unknown)
             } else {
                 Action::Unknown
             }
@@ -182,7 +184,8 @@ async fn message_handler(
     if !is_admin(uid, &cfg.admin_ids) {
         tracing::warn!(user_id = uid, "отклонён доступ (message)");
         let lang = settings.lang(uid);
-        bot.send_message(msg.chat.id, i18n::access_denied(lang)).await?;
+        bot.send_message(msg.chat.id, i18n::access_denied(lang))
+            .await?;
         return Ok(());
     }
     let lang = settings.lang(uid);
@@ -199,10 +202,18 @@ async fn message_handler(
                                 Lang::Ru => format!("Клиент: {valid}"),
                                 Lang::En => format!("Client: {valid}"),
                             };
-                            bot.send_message(msg.chat.id, format!("{confirm_line}\n{}", i18n::ask_expiry(lang)))
-                                .reply_markup(menu::expiry_menu(lang))
+                            bot.send_message(
+                                msg.chat.id,
+                                format!("{confirm_line}\n{}", i18n::ask_expiry(lang)),
+                            )
+                            .reply_markup(menu::expiry_menu(lang))
+                            .await?;
+                            dialogue
+                                .update(State::AwaitingExpiry {
+                                    name: valid,
+                                    recreate: false,
+                                })
                                 .await?;
-                            dialogue.update(State::AwaitingExpiry { name: valid, recreate: false }).await?;
                         }
                         Ok(true) => {
                             bot.send_message(msg.chat.id, i18n::client_exists(lang, &valid))
@@ -217,7 +228,12 @@ async fn message_handler(
                             bot.send_message(msg.chat.id, i18n::ask_expiry(lang))
                                 .reply_markup(menu::expiry_menu(lang))
                                 .await?;
-                            dialogue.update(State::AwaitingExpiry { name: valid, recreate: false }).await?;
+                            dialogue
+                                .update(State::AwaitingExpiry {
+                                    name: valid,
+                                    recreate: false,
+                                })
+                                .await?;
                         }
                     }
                 }
@@ -234,10 +250,17 @@ async fn message_handler(
                         .reply_markup(menu::psk_step(lang, settings.psk_default()))
                         .parse_mode(ParseMode::Html)
                         .await?;
-                    dialogue.update(State::AwaitingPsk { name, expires: Some(exp), recreate }).await?;
+                    dialogue
+                        .update(State::AwaitingPsk {
+                            name,
+                            expires: Some(exp),
+                            recreate,
+                        })
+                        .await?;
                 }
                 Err(_e) => {
-                    bot.send_message(msg.chat.id, i18n::bad_expiry(lang)).await?;
+                    bot.send_message(msg.chat.id, i18n::bad_expiry(lang))
+                        .await?;
                 }
             }
         }
@@ -262,7 +285,16 @@ async fn message_handler(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn finish_add(bot: &Bot, chat: ChatId, vpn: &Vpn, lang: Lang, name: &str, expires: Option<&str>, psk: bool, recreate: bool) {
+async fn finish_add(
+    bot: &Bot,
+    chat: ChatId,
+    vpn: &Vpn,
+    lang: Lang,
+    name: &str,
+    expires: Option<&str>,
+    psk: bool,
+    recreate: bool,
+) {
     let waiting = bot.send_message(chat, i18n::creating(lang)).await.ok();
     if recreate {
         // Удаляем старого клиента перед созданием нового. Если remove упадёт —
@@ -363,7 +395,14 @@ async fn callback_handler(
                 let expiries: Vec<Option<i64>> =
                     clients.iter().map(|c| vpn.client_expiry(&c.name)).collect();
                 bot.send_message(chat, i18n::clients_title(lang))
-                    .reply_markup(menu::clients_list(lang, &clients, &expiries, now_epoch(), 0, 8))
+                    .reply_markup(menu::clients_list(
+                        lang,
+                        &clients,
+                        &expiries,
+                        now_epoch(),
+                        0,
+                        8,
+                    ))
                     .parse_mode(ParseMode::Html)
                     .await?;
             }
@@ -378,7 +417,14 @@ async fn callback_handler(
                 let expiries: Vec<Option<i64>> =
                     clients.iter().map(|c| vpn.client_expiry(&c.name)).collect();
                 bot.send_message(chat, i18n::clients_title(lang))
-                    .reply_markup(menu::clients_list(lang, &clients, &expiries, now_epoch(), p, 8))
+                    .reply_markup(menu::clients_list(
+                        lang,
+                        &clients,
+                        &expiries,
+                        now_epoch(),
+                        p,
+                        8,
+                    ))
                     .parse_mode(ParseMode::Html)
                     .await?;
             }
@@ -450,7 +496,12 @@ async fn callback_handler(
             bot.send_message(chat, i18n::ask_expiry(lang))
                 .reply_markup(menu::expiry_menu(lang))
                 .await?;
-            dialogue.update(State::AwaitingExpiry { name, recreate: true }).await?;
+            dialogue
+                .update(State::AwaitingExpiry {
+                    name,
+                    recreate: true,
+                })
+                .await?;
         }
         Action::Regen(name) => {
             let waiting = bot.send_message(chat, i18n::regen_running(lang)).await.ok();
@@ -482,7 +533,10 @@ async fn callback_handler(
                 .await?;
         }
         Action::RegenAllRun(reset_routes) => {
-            let waiting = bot.send_message(chat, i18n::regen_all_running(lang)).await.ok();
+            let waiting = bot
+                .send_message(chat, i18n::regen_all_running(lang))
+                .await
+                .ok();
             match vpn.regen_all(reset_routes).await {
                 Ok(true) => {
                     bot.send_message(chat, i18n::regen_all_done(lang))
@@ -521,20 +575,37 @@ async fn callback_handler(
                 }
             };
             if kind == "custom" {
-                bot.send_message(chat, i18n::ask_custom_expiry(lang)).await?;
-                dialogue.update(State::AwaitingCustomExpiry { name, recreate }).await?;
+                bot.send_message(chat, i18n::ask_custom_expiry(lang))
+                    .await?;
+                dialogue
+                    .update(State::AwaitingCustomExpiry { name, recreate })
+                    .await?;
             } else {
-                let expires = if kind == "none" { None } else { Some(kind.clone()) };
+                let expires = if kind == "none" {
+                    None
+                } else {
+                    Some(kind.clone())
+                };
                 bot.send_message(chat, i18n::psk_step(lang, settings.psk_default()))
                     .reply_markup(menu::psk_step(lang, settings.psk_default()))
                     .parse_mode(ParseMode::Html)
                     .await?;
-                dialogue.update(State::AwaitingPsk { name, expires, recreate }).await?;
+                dialogue
+                    .update(State::AwaitingPsk {
+                        name,
+                        expires,
+                        recreate,
+                    })
+                    .await?;
             }
         }
         Action::AddPsk(psk) => {
             let (name, expires, recreate) = match dialogue.get().await?.unwrap_or_default() {
-                State::AwaitingPsk { name, expires, recreate } => (name, expires, recreate),
+                State::AwaitingPsk {
+                    name,
+                    expires,
+                    recreate,
+                } => (name, expires, recreate),
                 _ => {
                     bot.send_message(chat, session_expired_text(lang))
                         .reply_markup(menu::main_menu(lang))
@@ -543,7 +614,17 @@ async fn callback_handler(
                     return Ok(());
                 }
             };
-            finish_add(&bot, chat, &vpn, lang, &name, expires.as_deref(), psk, recreate).await;
+            finish_add(
+                &bot,
+                chat,
+                &vpn,
+                lang,
+                &name,
+                expires.as_deref(),
+                psk,
+                recreate,
+            )
+            .await;
             dialogue.exit().await?;
         }
         Action::Settings => {
@@ -586,7 +667,10 @@ async fn callback_handler(
                 .await?;
         }
         Action::BackupNew => {
-            let waiting = bot.send_message(chat, i18n::backup_creating(lang)).await.ok();
+            let waiting = bot
+                .send_message(chat, i18n::backup_creating(lang))
+                .await
+                .ok();
             match vpn.backup().await {
                 Ok(bf) => {
                     // Свежесозданный бэкап — самый новый по mtime, т.е. индекс 0 в list_backups().
@@ -714,7 +798,10 @@ async fn callback_handler(
             }
         }
         Action::Diagnose => {
-            let waiting = bot.send_message(chat, i18n::diagnose_running(lang)).await.ok();
+            let waiting = bot
+                .send_message(chat, i18n::diagnose_running(lang))
+                .await
+                .ok();
             match vpn.diagnose().await {
                 Ok(body) => {
                     let body = truncate_for_message(body);
@@ -760,13 +847,31 @@ mod tests {
         assert_eq!(parse_callback("add"), Action::Add);
         assert_eq!(parse_callback("stats"), Action::Stats);
         assert_eq!(parse_callback("page:3"), Action::Page(3));
-        assert_eq!(parse_callback("client:alice"), Action::ShowClient("alice".into()));
-        assert_eq!(parse_callback("conf:alice"), Action::SendConf("alice".into()));
-        assert_eq!(parse_callback("del:alice"), Action::AskDelete("alice".into()));
-        assert_eq!(parse_callback("delyes:alice"), Action::ConfirmDelete("alice".into()));
-        assert_eq!(parse_callback("recreate:alice"), Action::Recreate("alice".into()));
+        assert_eq!(
+            parse_callback("client:alice"),
+            Action::ShowClient("alice".into())
+        );
+        assert_eq!(
+            parse_callback("conf:alice"),
+            Action::SendConf("alice".into())
+        );
+        assert_eq!(
+            parse_callback("del:alice"),
+            Action::AskDelete("alice".into())
+        );
+        assert_eq!(
+            parse_callback("delyes:alice"),
+            Action::ConfirmDelete("alice".into())
+        );
+        assert_eq!(
+            parse_callback("recreate:alice"),
+            Action::Recreate("alice".into())
+        );
         assert_eq!(parse_callback("exp:30d"), Action::Expiry("30d".into()));
-        assert_eq!(parse_callback("exp:custom"), Action::Expiry("custom".into()));
+        assert_eq!(
+            parse_callback("exp:custom"),
+            Action::Expiry("custom".into())
+        );
         assert_eq!(parse_callback("settings"), Action::Settings);
         assert_eq!(parse_callback("lang:ru"), Action::Lang("ru".into()));
         assert_eq!(parse_callback("lang:en"), Action::Lang("en".into()));
@@ -801,7 +906,10 @@ mod tests {
     fn parse_callback_regen_all_variants() {
         assert_eq!(parse_callback("regen_all"), Action::RegenAll);
         assert_eq!(parse_callback("regen_all_go"), Action::RegenAllRun(false));
-        assert_eq!(parse_callback("regen_all_routes"), Action::RegenAllRun(true));
+        assert_eq!(
+            parse_callback("regen_all_routes"),
+            Action::RegenAllRun(true)
+        );
         // "regen_all…" не должен съедаться префиксом "regen:" (там двоеточие).
         assert_eq!(parse_callback("regen:alice"), Action::Regen("alice".into()));
     }
@@ -850,8 +958,12 @@ mod tests {
             last_handshake: None,
         };
 
-        let sample_backup =
-            crate::vpn::BackupFile { name: "awg_backup_x.tar.gz".into(), path: "x.tar.gz".into(), size: 1, mtime: 1 };
+        let sample_backup = crate::vpn::BackupFile {
+            name: "awg_backup_x.tar.gz".into(),
+            path: "x.tar.gz".into(),
+            size: 1,
+            mtime: 1,
+        };
 
         let keyboards = vec![
             menu::main_menu(Lang::Ru),

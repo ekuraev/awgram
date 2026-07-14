@@ -98,7 +98,7 @@ mod tests {
         assert!(text.contains("Active"));
         assert!(text.contains("just now")); // last_handshake is close to `now`
         assert!(text.contains("left")); // expiry is in the future
-        // no Russian leaked into the EN card
+                                        // no Russian leaked into the EN card
         assert!(!text.contains("Активен"));
         assert!(!text.contains("только что"));
         assert!(!text.contains("ещё"));

@@ -1,5 +1,5 @@
-use std::sync::OnceLock;
 use regex::Regex;
+use std::sync::OnceLock;
 
 #[derive(Debug, PartialEq, thiserror::Error)]
 pub enum ValidateError {
@@ -56,8 +56,21 @@ mod tests {
 
     #[test]
     fn rejects_injection_and_bad_names() {
-        for bad in ["", "a b", "a;rm -rf /", "../etc", "имя", "a".repeat(33).as_str(), "--flag", "a/b"] {
-            assert_eq!(validate_name(bad), Err(ValidateError::BadName), "should reject {bad:?}");
+        for bad in [
+            "",
+            "a b",
+            "a;rm -rf /",
+            "../etc",
+            "имя",
+            "a".repeat(33).as_str(),
+            "--flag",
+            "a/b",
+        ] {
+            assert_eq!(
+                validate_name(bad),
+                Err(ValidateError::BadName),
+                "should reject {bad:?}"
+            );
         }
     }
 
@@ -71,7 +84,11 @@ mod tests {
     #[test]
     fn rejects_bad_expiry() {
         for bad in ["", "10", "d10", "10x", "1.5d", "10 d", "-5d", "10d;ls"] {
-            assert_eq!(validate_expiry(bad), Err(ValidateError::BadExpiry), "should reject {bad:?}");
+            assert_eq!(
+                validate_expiry(bad),
+                Err(ValidateError::BadExpiry),
+                "should reject {bad:?}"
+            );
         }
     }
 }

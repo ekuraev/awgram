@@ -14,7 +14,10 @@ pub fn main_menu(lang: Lang) -> InlineKeyboardMarkup {
         vec![cb(&i18n::btn_add(lang), "add")],
         vec![cb(&i18n::btn_stats(lang), "stats")],
         vec![cb(&i18n::btn_backup(lang), "backup")],
-        vec![cb(&i18n::btn_check(lang), "check"), cb(&i18n::btn_diagnose(lang), "diagnose")],
+        vec![
+            cb(&i18n::btn_check(lang), "check"),
+            cb(&i18n::btn_diagnose(lang), "diagnose"),
+        ],
         vec![cb(&i18n::btn_settings(lang), "settings")],
     ])
 }
@@ -36,7 +39,11 @@ pub fn settings_menu(lang: Lang, psk_default: bool) -> InlineKeyboardMarkup {
         ],
         vec![cb(
             &i18n::btn_psk_toggle(lang, psk_default),
-            if psk_default { "set:psk:off" } else { "set:psk:on" },
+            if psk_default {
+                "set:psk:off"
+            } else {
+                "set:psk:on"
+            },
         )],
         vec![cb(&i18n::btn_back(lang), "menu")],
     ])
@@ -52,8 +59,14 @@ fn day_label(lang: Lang, days: u32) -> String {
 }
 
 pub fn expiry_menu(lang: Lang) -> InlineKeyboardMarkup {
-    let none_txt = match lang { Lang::Ru => "Без срока", Lang::En => "No expiry" };
-    let custom_txt = match lang { Lang::Ru => "✏️ Свой", Lang::En => "✏️ Custom" };
+    let none_txt = match lang {
+        Lang::Ru => "Без срока",
+        Lang::En => "No expiry",
+    };
+    let custom_txt = match lang {
+        Lang::Ru => "✏️ Свой",
+        Lang::En => "✏️ Custom",
+    };
     InlineKeyboardMarkup::new(vec![
         vec![cb(none_txt, "exp:none")],
         vec![
@@ -66,7 +79,10 @@ pub fn expiry_menu(lang: Lang) -> InlineKeyboardMarkup {
             cb(&day_label(lang, 90), "exp:90d"),
             cb(&day_label(lang, 180), "exp:180d"),
         ],
-        vec![cb(&day_label(lang, 365), "exp:365d"), cb(custom_txt, "exp:custom")],
+        vec![
+            cb(&day_label(lang, 365), "exp:365d"),
+            cb(custom_txt, "exp:custom"),
+        ],
     ])
 }
 
@@ -74,11 +90,20 @@ pub fn expiry_menu(lang: Lang) -> InlineKeyboardMarkup {
 /// `settings.psk_default()`) идёт первой кнопкой.
 pub fn psk_step(lang: Lang, default_on: bool) -> InlineKeyboardMarkup {
     let (first, second) = if default_on {
-        (cb(&i18n::btn_create_with_psk(lang), "add:psk:on"), cb(&i18n::btn_create_no_psk(lang), "add:psk:off"))
+        (
+            cb(&i18n::btn_create_with_psk(lang), "add:psk:on"),
+            cb(&i18n::btn_create_no_psk(lang), "add:psk:off"),
+        )
     } else {
-        (cb(&i18n::btn_create_no_psk(lang), "add:psk:off"), cb(&i18n::btn_create_with_psk(lang), "add:psk:on"))
+        (
+            cb(&i18n::btn_create_no_psk(lang), "add:psk:off"),
+            cb(&i18n::btn_create_with_psk(lang), "add:psk:on"),
+        )
     };
-    InlineKeyboardMarkup::new(vec![vec![first, second], vec![cb(&i18n::btn_back(lang), "menu")]])
+    InlineKeyboardMarkup::new(vec![
+        vec![first, second],
+        vec![cb(&i18n::btn_back(lang), "menu")],
+    ])
 }
 
 pub fn clients_list(
@@ -127,17 +152,29 @@ pub fn clients_list(
 }
 
 pub fn client_card(lang: Lang, name: &str) -> InlineKeyboardMarkup {
-    let conf_txt = match lang { Lang::Ru => "📄 Конфиг", Lang::En => "📄 Config" };
-    let del_txt = match lang { Lang::Ru => "🗑 Удалить", Lang::En => "🗑 Delete" };
+    let conf_txt = match lang {
+        Lang::Ru => "📄 Конфиг",
+        Lang::En => "📄 Config",
+    };
+    let del_txt = match lang {
+        Lang::Ru => "🗑 Удалить",
+        Lang::En => "🗑 Delete",
+    };
     InlineKeyboardMarkup::new(vec![
-        vec![cb(conf_txt, &format!("conf:{name}")), cb(del_txt, &format!("del:{name}"))],
+        vec![
+            cb(conf_txt, &format!("conf:{name}")),
+            cb(del_txt, &format!("del:{name}")),
+        ],
         vec![cb(&i18n::btn_regen(lang), &format!("regen:{name}"))],
         vec![cb(&i18n::btn_back(lang), "menu")],
     ])
 }
 
 pub fn confirm_delete(lang: Lang, name: &str) -> InlineKeyboardMarkup {
-    let yes_txt = match lang { Lang::Ru => "✅ Да, удалить", Lang::En => "✅ Yes, delete" };
+    let yes_txt = match lang {
+        Lang::Ru => "✅ Да, удалить",
+        Lang::En => "✅ Yes, delete",
+    };
     InlineKeyboardMarkup::new(vec![vec![
         cb(yes_txt, &format!("delyes:{name}")),
         cb(&i18n::btn_back(lang), "menu"),
@@ -145,7 +182,10 @@ pub fn confirm_delete(lang: Lang, name: &str) -> InlineKeyboardMarkup {
 }
 
 pub fn confirm_recreate(lang: Lang, name: &str) -> InlineKeyboardMarkup {
-    let yes_txt = match lang { Lang::Ru => "♻️ Пересоздать", Lang::En => "♻️ Recreate" };
+    let yes_txt = match lang {
+        Lang::Ru => "♻️ Пересоздать",
+        Lang::En => "♻️ Recreate",
+    };
     InlineKeyboardMarkup::new(vec![vec![
         cb(yes_txt, &format!("recreate:{name}")),
         cb(&i18n::btn_back(lang), "menu"),
@@ -216,7 +256,9 @@ mod tests {
     #[test]
     fn main_menu_has_expected_actions() {
         let data = all_callback_data(&main_menu(Lang::Ru));
-        for expected in ["list", "add", "stats", "backup", "check", "diagnose", "settings"] {
+        for expected in [
+            "list", "add", "stats", "backup", "check", "diagnose", "settings",
+        ] {
             assert!(data.contains(&expected.to_string()), "missing {expected}");
         }
     }
@@ -252,9 +294,16 @@ mod tests {
 
     #[test]
     fn clients_list_has_regen_all_button() {
-        let clients = vec![
-            Client { name: "a".into(), ip: String::new(), client_ipv6: String::new(), status: String::new(), status_code: "active".into(), rx: 0, tx: 0, last_handshake: None },
-        ];
+        let clients = vec![Client {
+            name: "a".into(),
+            ip: String::new(),
+            client_ipv6: String::new(),
+            status: String::new(),
+            status_code: "active".into(),
+            rx: 0,
+            tx: 0,
+            last_handshake: None,
+        }];
         let data = all_callback_data(&clients_list(Lang::Ru, &clients, &[], 0, 0, 10));
         assert!(data.contains(&"regen_all".to_string()));
     }
@@ -268,14 +317,36 @@ mod tests {
     }
 
     fn all_button_texts(kb: &InlineKeyboardMarkup) -> Vec<String> {
-        kb.inline_keyboard.iter().flatten().map(|b| b.text.clone()).collect()
+        kb.inline_keyboard
+            .iter()
+            .flatten()
+            .map(|b| b.text.clone())
+            .collect()
     }
 
     #[test]
     fn clients_list_one_button_per_client() {
         let clients = vec![
-            Client { name: "a".into(), ip: String::new(), client_ipv6: String::new(), status: String::new(), status_code: "active".into(), rx: 0, tx: 0, last_handshake: None },
-            Client { name: "b".into(), ip: String::new(), client_ipv6: String::new(), status: String::new(), status_code: "inactive".into(), rx: 0, tx: 0, last_handshake: None },
+            Client {
+                name: "a".into(),
+                ip: String::new(),
+                client_ipv6: String::new(),
+                status: String::new(),
+                status_code: "active".into(),
+                rx: 0,
+                tx: 0,
+                last_handshake: None,
+            },
+            Client {
+                name: "b".into(),
+                ip: String::new(),
+                client_ipv6: String::new(),
+                status: String::new(),
+                status_code: "inactive".into(),
+                rx: 0,
+                tx: 0,
+                last_handshake: None,
+            },
         ];
         let data = all_callback_data(&clients_list(Lang::Ru, &clients, &[], 0, 0, 10));
         assert!(data.contains(&"client:a".to_string()));
@@ -288,29 +359,83 @@ mod tests {
         let empty_clients: Vec<Client> = vec![];
         let kb_empty = clients_list(Lang::Ru, &empty_clients, &[], 0, 0, 0);
         let data_empty = all_callback_data(&kb_empty);
-        assert_eq!(data_empty, vec!["menu"], "empty clients with per_page=0 should have only menu callback");
+        assert_eq!(
+            data_empty,
+            vec!["menu"],
+            "empty clients with per_page=0 should have only menu callback"
+        );
 
         // Test with non-empty clients
         let clients = vec![
-            Client { name: "a".into(), ip: String::new(), client_ipv6: String::new(), status: String::new(), status_code: "active".into(), rx: 0, tx: 0, last_handshake: None },
-            Client { name: "b".into(), ip: String::new(), client_ipv6: String::new(), status: String::new(), status_code: "inactive".into(), rx: 0, tx: 0, last_handshake: None },
+            Client {
+                name: "a".into(),
+                ip: String::new(),
+                client_ipv6: String::new(),
+                status: String::new(),
+                status_code: "active".into(),
+                rx: 0,
+                tx: 0,
+                last_handshake: None,
+            },
+            Client {
+                name: "b".into(),
+                ip: String::new(),
+                client_ipv6: String::new(),
+                status: String::new(),
+                status_code: "inactive".into(),
+                rx: 0,
+                tx: 0,
+                last_handshake: None,
+            },
         ];
         let kb_filled = clients_list(Lang::Ru, &clients, &[], 0, 0, 0);
         let data_filled = all_callback_data(&kb_filled);
-        assert_eq!(data_filled, vec!["menu"], "non-empty clients with per_page=0 should have only menu callback");
+        assert_eq!(
+            data_filled,
+            vec!["menu"],
+            "non-empty clients with per_page=0 should have only menu callback"
+        );
     }
 
     #[test]
     fn clients_list_shows_expiry_badge() {
         let clients = vec![
-            Client { name: "temp".into(), ip: String::new(), client_ipv6: String::new(), status: String::new(), status_code: "active".into(), rx: 0, tx: 0, last_handshake: None },
-            Client { name: "perm".into(), ip: String::new(), client_ipv6: String::new(), status: String::new(), status_code: "active".into(), rx: 0, tx: 0, last_handshake: None },
+            Client {
+                name: "temp".into(),
+                ip: String::new(),
+                client_ipv6: String::new(),
+                status: String::new(),
+                status_code: "active".into(),
+                rx: 0,
+                tx: 0,
+                last_handshake: None,
+            },
+            Client {
+                name: "perm".into(),
+                ip: String::new(),
+                client_ipv6: String::new(),
+                status: String::new(),
+                status_code: "active".into(),
+                rx: 0,
+                tx: 0,
+                last_handshake: None,
+            },
         ];
         let now = 1_700_000_000;
         let expiries = vec![Some(now + 6 * 86400), None];
         let texts = all_button_texts(&clients_list(Lang::Ru, &clients, &expiries, now, 0, 10));
-        assert!(texts.iter().any(|t| t.contains("temp") && t.contains("⏳ 6д")), "temp должен иметь метку: {texts:?}");
-        assert!(texts.iter().any(|t| t.contains("perm") && !t.contains("⏳")), "perm должен быть без метки: {texts:?}");
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.contains("temp") && t.contains("⏳ 6д")),
+            "temp должен иметь метку: {texts:?}"
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.contains("perm") && !t.contains("⏳")),
+            "perm должен быть без метки: {texts:?}"
+        );
     }
 
     #[test]
@@ -354,8 +479,18 @@ mod tests {
     #[test]
     fn backups_list_one_button_per_backup_by_index() {
         let backups = vec![
-            BackupFile { name: "a.tar.gz".into(), path: "a.tar.gz".into(), size: 1, mtime: 1 },
-            BackupFile { name: "b.tar.gz".into(), path: "b.tar.gz".into(), size: 2, mtime: 2 },
+            BackupFile {
+                name: "a.tar.gz".into(),
+                path: "a.tar.gz".into(),
+                size: 1,
+                mtime: 1,
+            },
+            BackupFile {
+                name: "b.tar.gz".into(),
+                path: "b.tar.gz".into(),
+                size: 2,
+                mtime: 2,
+            },
         ];
         let data = all_callback_data(&backups_list(Lang::Ru, &backups));
         assert!(data.contains(&"bk:card:0".to_string()));
@@ -383,14 +518,18 @@ mod tests {
         let kb_off = psk_step(Lang::Ru, false);
         let first_row_off = &kb_off.inline_keyboard[0];
         match &first_row_off[0].kind {
-            teloxide::types::InlineKeyboardButtonKind::CallbackData(d) => assert_eq!(d, "add:psk:off"),
+            teloxide::types::InlineKeyboardButtonKind::CallbackData(d) => {
+                assert_eq!(d, "add:psk:off")
+            }
             _ => panic!("expected callback data"),
         }
 
         let kb_on = psk_step(Lang::Ru, true);
         let first_row_on = &kb_on.inline_keyboard[0];
         match &first_row_on[0].kind {
-            teloxide::types::InlineKeyboardButtonKind::CallbackData(d) => assert_eq!(d, "add:psk:on"),
+            teloxide::types::InlineKeyboardButtonKind::CallbackData(d) => {
+                assert_eq!(d, "add:psk:on")
+            }
             _ => panic!("expected callback data"),
         }
     }

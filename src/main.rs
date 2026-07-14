@@ -37,7 +37,12 @@ async fn main() {
 
     tracing::info!("запуск long polling");
     Dispatcher::builder(bot, handlers::schema())
-        .dependencies(dptree::deps![InMemStorage::<State>::new(), cfg, vpn, settings])
+        .dependencies(dptree::deps![
+            InMemStorage::<State>::new(),
+            cfg,
+            vpn,
+            settings
+        ])
         .enable_ctrlc_handler()
         .build()
         .dispatch()
