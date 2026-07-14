@@ -30,6 +30,21 @@ AmneziaWG напрямую — он вызывает штатный скрипт
 ни одной операции над VPN. Токен бота и содержимое `.conf`/QR-кодов клиентов
 никогда не попадают в логи.
 
+## Совместимость с инсталлером AmneziaWG
+
+Бот — надстройка над скриптом `manage_amneziawg.sh` из инсталлера
+[bivlked/amneziawg-installer](https://github.com/bivlked/amneziawg-installer)
+и напрямую зависит от его интерфейса.
+
+- **Поддерживаемая версия инсталлера:
+  [v5.19.2](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.19.2)**
+  (проверено с ней; более новые версии — на свой риск до обновления этой строки).
+- Используемые подкоманды: `add`, `remove`, `list`, `stats`, `regen`,
+  `backup`, `restore`, `check`, `diagnose` — все с флагом `--json`.
+- Изменения интерфейса manage-скрипта в новых версиях инсталлера могут ломать
+  функции бота — при обновлении инсталлера сверяйтесь с этим разделом
+  (актуальная поддерживаемая версия указывается здесь и в релизах awgram).
+
 ## Сборка
 
 Нужен стабильный Rust (edition 2021) и `cargo`.
@@ -80,8 +95,8 @@ ssh root@SERVER chmod +x /usr/local/bin/awgram
 ## Установка
 
 Предполагается, что `manage_amneziawg.sh` уже установлен и рабочий (см.
-документацию самого AmneziaWG-инсталлятора), обычно по пути
-`/root/awg/manage_amneziawg.sh`.
+[bivlked/amneziawg-installer](https://github.com/bivlked/amneziawg-installer),
+раздел «Совместимость» выше), обычно по пути `/root/awg/manage_amneziawg.sh`.
 
 ### Быстрая установка (рекомендуется)
 

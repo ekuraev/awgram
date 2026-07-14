@@ -32,6 +32,21 @@ update from a user not on that list gets "⛔ Access denied" and no VPN
 operation is performed. The bot token and the contents of clients' `.conf`
 files/QR codes are never written to the logs.
 
+## AmneziaWG installer compatibility
+
+The bot is a layer on top of the `manage_amneziawg.sh` script from
+[bivlked/amneziawg-installer](https://github.com/bivlked/amneziawg-installer)
+and depends directly on its interface.
+
+- **Supported installer version:
+  [v5.19.2](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.19.2)**
+  (tested against it; newer versions are at your own risk until this line is updated).
+- Subcommands used: `add`, `remove`, `list`, `stats`, `regen`, `backup`,
+  `restore`, `check`, `diagnose` — all with the `--json` flag.
+- Interface changes in newer installer versions may break bot features — when
+  upgrading the installer, check this section (the currently supported version
+  is stated here and in awgram release notes).
+
 ## Building
 
 You need a stable Rust toolchain (edition 2021) and `cargo`.
@@ -82,8 +97,9 @@ ssh root@SERVER chmod +x /usr/local/bin/awgram
 
 ## Installation
 
-This assumes `manage_amneziawg.sh` is already installed and working (see the
-AmneziaWG installer's own documentation), usually at
+This assumes `manage_amneziawg.sh` is already installed and working (see
+[bivlked/amneziawg-installer](https://github.com/bivlked/amneziawg-installer)
+and the "Compatibility" section above), usually at
 `/root/awg/manage_amneziawg.sh`.
 
 ### Quick install (recommended)
