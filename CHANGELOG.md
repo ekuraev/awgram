@@ -1,5 +1,7 @@
 # Changelog
 
+🇷🇺 Русский · [🇬🇧 English](CHANGELOG.en.md)
+
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/),
 версионирование — [SemVer](https://semver.org/lang/ru/).
 
@@ -34,7 +36,6 @@
 - Перевыпуск конфигов: одного клиента и массовый (`--reset-routes`).
 - Диагностика окружения (кнопка 🔬), метка ⏳ срока действия клиентов.
 - Локализация RU/EN, PSK-дефолт, backup/restore, персистентное состояние.
-- Статическая musl-сборка `scripts/build-musl.sh` (linux-amd64, rustls).
 
 [Unreleased]: https://github.com/ekuraev/awgram/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/ekuraev/awgram/releases/tag/v0.1.0
