@@ -197,7 +197,12 @@ async fn message_handler(
     match state {
         State::AwaitingName => {
             let name = msg.text().unwrap_or_default().to_string();
-            match crate::vpn::validate::validate_name(&name) {
+            let slug = if settings.name_slug() {
+                Some(crate::vpn::validate::gen_slug())
+            } else {
+                None
+            };
+            match crate::vpn::validate::normalize_name(&name, slug.as_deref()) {
                 Ok(valid) => {
                     match vpn.exists(&valid).await {
                         Ok(false) => {
@@ -241,7 +246,8 @@ async fn message_handler(
                     }
                 }
                 Err(_e) => {
-                    bot.send_message(msg.chat.id, i18n::bad_name(lang)).await?;
+                    bot.send_message(msg.chat.id, i18n::bad_name(lang, settings.name_slug()))
+                        .await?;
                 }
             }
         }
@@ -563,7 +569,8 @@ async fn callback_handler(
             }
         }
         Action::Add => {
-            bot.send_message(chat, i18n::ask_client_name(lang)).await?;
+            bot.send_message(chat, i18n::ask_client_name(lang, settings.name_slug()))
+                .await?;
             dialogue.update(State::AwaitingName).await?;
         }
         Action::Expiry(kind) => {

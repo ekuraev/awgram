@@ -111,19 +111,31 @@ pub fn private_only() -> String {
 }
 
 // --- add-диалог ---
-pub fn ask_client_name(lang: Lang) -> String {
-    match lang {
-        Lang::Ru => "Введите имя клиента:",
-        Lang::En => "Enter client name:",
+pub fn ask_client_name(lang: Lang, slug_on: bool) -> String {
+    match (lang, slug_on) {
+        (Lang::Ru, true) => {
+            "Введите имя клиента.\n• пробелы будут автоматически заменены на «-»\n• ID-префикс: вкл — к имени добавится уникальный префикс (например k3x9f-name)"
+        }
+        (Lang::Ru, false) => {
+            "Введите имя клиента.\n• пробелы будут автоматически заменены на «-»\n• ID-префикс: выкл"
+        }
+        (Lang::En, true) => {
+            "Enter client name.\n• spaces are replaced with \"-\" automatically\n• ID prefix: on — a unique prefix will be added (e.g. k3x9f-name)"
+        }
+        (Lang::En, false) => {
+            "Enter client name.\n• spaces are replaced with \"-\" automatically\n• ID prefix: off"
+        }
     }
     .to_string()
 }
-pub fn bad_name(lang: Lang) -> String {
+pub fn bad_name(lang: Lang, slug_on: bool) -> String {
+    let max = if slug_on { "1–26" } else { "1–32" };
     match lang {
-        Lang::Ru => "⚠️ Некорректное имя (латиница/цифры/-/_, 1–32). Введите ещё раз:",
-        Lang::En => "⚠️ Invalid name (a-z0-9-_, 1–32). Try again:",
+        Lang::Ru => {
+            format!("⚠️ Некорректное имя (латиница/цифры/пробел/-/_, {max}). Введите ещё раз:")
+        }
+        Lang::En => format!("⚠️ Invalid name (a-z0-9 space -_, {max}). Try again:"),
     }
-    .to_string()
 }
 pub fn ask_expiry(lang: Lang) -> String {
     match lang {
@@ -590,6 +602,22 @@ mod tests {
     }
 
     #[test]
+    fn ask_client_name_mentions_spaces_and_slug_status() {
+        for l in [Lang::Ru, Lang::En] {
+            let on = ask_client_name(l, true);
+            let off = ask_client_name(l, false);
+            // промпт всегда предупреждает про замену пробелов
+            assert!(on.contains('-'));
+            assert!(off.contains('-'));
+            // и различает вкл/выкл id-префикса
+            assert_ne!(on, off);
+            // лимит в сообщении об ошибке зависит от слага
+            assert!(bad_name(l, true).contains("26"));
+            assert!(bad_name(l, false).contains("32"));
+        }
+    }
+
+    #[test]
     fn lang_roundtrip() {
         assert_eq!(parse_lang("ru"), Some(Lang::Ru));
         assert_eq!(parse_lang("en"), Some(Lang::En));
@@ -614,7 +642,7 @@ mod tests {
         for l in [Lang::Ru, Lang::En] {
             assert!(!menu_title(l).is_empty());
             assert!(!access_denied(l).is_empty());
-            assert!(!ask_client_name(l).is_empty());
+            assert!(!ask_client_name(l, true).is_empty());
             assert!(!ask_expiry(l).is_empty());
             assert!(!settings_title(l, true, true).is_empty());
             assert!(!backups_empty(l).is_empty());
