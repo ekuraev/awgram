@@ -26,7 +26,7 @@ especially tangible on budget VPS hosts.
    [AmneziaWG installer](https://github.com/bivlked/amneziawg-installer) set up, run:
 
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/ekuraev/awgram/main/install.sh | bash
+   curl -fsSL https://github.com/ekuraev/awgram/releases/latest/download/install.sh | bash
    ```
 
 3. Answer the installer's questions (language, mode, token, admin IDs) —
@@ -131,7 +131,7 @@ and the "Compatibility" section above), usually at
 ### Quick install (recommended)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ekuraev/awgram/main/install.sh | bash
+curl -fsSL https://github.com/ekuraev/awgram/releases/latest/download/install.sh | bash
 ```
 
 The interactive installer asks for the language (RU/EN), mode (root or
@@ -140,7 +140,7 @@ hardened), token and admin IDs, downloads the binary for your architecture
 the service. Fully automated install — via flags:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ekuraev/awgram/main/install.sh \
+curl -fsSL https://github.com/ekuraev/awgram/releases/latest/download/install.sh \
   | bash -s -- install --lang en --mode root --token 'TOKEN' --admins 111111111 --yes
 ```
 
@@ -151,7 +151,7 @@ variable to the second command in the pipeline:
 
 ```bash
 export AWGRAM_TOKEN='TOKEN'
-curl -fsSL https://raw.githubusercontent.com/ekuraev/awgram/main/install.sh \
+curl -fsSL https://github.com/ekuraev/awgram/releases/latest/download/install.sh \
   | bash -s -- install --lang en --mode root --admins 111111111 --yes
 ```
 

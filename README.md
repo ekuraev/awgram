@@ -25,7 +25,7 @@ Telegram-бот на Rust для управления клиентами [Amnezi
    [AmneziaWG-инсталлером](https://github.com/bivlked/amneziawg-installer) выполните:
 
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/ekuraev/awgram/main/install.sh | bash
+   curl -fsSL https://github.com/ekuraev/awgram/releases/latest/download/install.sh | bash
    ```
 
 3. Ответьте на вопросы установщика (язык, режим, токен, ID админов) —
@@ -127,7 +127,7 @@ ssh root@SERVER chmod +x /usr/local/bin/awgram
 ### Быстрая установка (рекомендуется)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ekuraev/awgram/main/install.sh | bash
+curl -fsSL https://github.com/ekuraev/awgram/releases/latest/download/install.sh | bash
 ```
 
 Интерактивный установщик спросит язык (RU/EN), режим (root или hardened),
@@ -136,7 +136,7 @@ curl -fsSL https://raw.githubusercontent.com/ekuraev/awgram/main/install.sh | ba
 Полностью автоматическая установка — флагами:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ekuraev/awgram/main/install.sh \
+curl -fsSL https://github.com/ekuraev/awgram/releases/latest/download/install.sh \
   | bash -s -- install --lang ru --mode root --token 'ТОКЕН' --admins 111111111 --yes
 ```
 
@@ -147,7 +147,7 @@ curl -fsSL https://raw.githubusercontent.com/ekuraev/awgram/main/install.sh \
 
 ```bash
 export AWGRAM_TOKEN='ТОКЕН'
-curl -fsSL https://raw.githubusercontent.com/ekuraev/awgram/main/install.sh \
+curl -fsSL https://github.com/ekuraev/awgram/releases/latest/download/install.sh \
   | bash -s -- install --lang ru --mode root --admins 111111111 --yes
 ```
 

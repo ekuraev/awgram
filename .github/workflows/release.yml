@@ -45,6 +45,10 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      # checkout нужен ради install.sh: он прикладывается к релизу, чтобы
+      # curl .../releases/latest/download/install.sh ставил скрипт той же
+      # версии, что и бинарник (main может уезжать вперёд)
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           path: dist
@@ -57,4 +61,5 @@ jobs:
             dist/awgram-linux-amd64.sha256
             dist/awgram-linux-arm64
             dist/awgram-linux-arm64.sha256
+            install.sh
           generate_release_notes: true

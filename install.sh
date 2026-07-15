@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # awgram — установщик и менеджер (https://github.com/ekuraev/awgram)
 # Установка одной командой:
-#   curl -fsSL https://raw.githubusercontent.com/ekuraev/awgram/main/install.sh | bash
+#   curl -fsSL https://github.com/ekuraev/awgram/releases/latest/download/install.sh | bash
 # После установки доступен как awgram-setup (install|update|config|status|uninstall|help).
 set -euo pipefail
 
@@ -434,6 +434,13 @@ start_service() {
 }
 
 fetch_setup_to_new() { # $1=git-ref; скачивает install.sh этой ревизии в $SETUP_PATH.new
+  # для тега сначала ассет релиза (не тратит rate-limit raw/API);
+  # raw-fallback покрывает старые релизы без ассета install.sh
+  if [ "$1" != "main" ]; then
+    curl -fsSL "${CURL_BASE[@]}" --max-time 60 \
+      "https://github.com/$REPO/releases/download/$1/install.sh" -o "$SETUP_PATH.new" 2>/dev/null \
+      && return 0
+  fi
   curl -fsSL "${CURL_BASE[@]}" --max-time 60 \
     "https://raw.githubusercontent.com/$REPO/$1/install.sh" -o "$SETUP_PATH.new" 2>/dev/null
 }
@@ -567,7 +574,7 @@ awgram-setup — установка и управление awgram (Telegram-б�
 так он не попадает в историю shell и не виден в ps.
 
 Примеры:
-  curl -fsSL https://raw.githubusercontent.com/ekuraev/awgram/main/install.sh | bash
+  curl -fsSL https://github.com/ekuraev/awgram/releases/latest/download/install.sh | bash
   curl -fsSL ... | bash -s -- install --lang ru --mode hardened --token 'X' --admins 1 --yes
   awgram-setup config --admins 1,2
 EOF
@@ -602,7 +609,7 @@ The token can be passed via the AWGRAM_TOKEN environment variable instead of
 --token — it then stays out of shell history and ps output.
 
 Examples:
-  curl -fsSL https://raw.githubusercontent.com/ekuraev/awgram/main/install.sh | bash
+  curl -fsSL https://github.com/ekuraev/awgram/releases/latest/download/install.sh | bash
   curl -fsSL ... | bash -s -- install --lang en --mode hardened --token 'X' --admins 1 --yes
   awgram-setup config --admins 1,2
 EOF
