@@ -53,13 +53,31 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      # Release notes = секция версии из CHANGELOG.md (двуязычные, ru/en).
+      # Если секции нет — fallback на автогенерацию GitHub.
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        run: |
+          awk -v ver="${GITHUB_REF_NAME#v}" '
+            $0 ~ "^## \\[" ver "\\]" {on=1; next}
+            on && /^## \[/ {exit}
+            on && /^\[[^]]+\]: / {next}   # keep-a-changelog link refs в конце файла
+            on {print}
+          ' CHANGELOG.md > release-notes.md
+          if [ -s release-notes.md ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::CHANGELOG.md has no section for ${GITHUB_REF_NAME#v} — falling back to auto-generated notes"
+          fi
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
+          body_path: ${{ steps.notes.outputs.found == 'true' && 'release-notes.md' || '' }}
+          generate_release_notes: ${{ steps.notes.outputs.found != 'true' }}
           files: |
             dist/awgram-linux-amd64
             dist/awgram-linux-amd64.sha256
             dist/awgram-linux-arm64
             dist/awgram-linux-arm64.sha256
             install.sh
-          generate_release_notes: true
