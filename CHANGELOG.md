@@ -5,6 +5,25 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
 
 ## [Unreleased]
 
+### 🇷🇺 Русский
+
+#### Добавлено
+
+- Автозамена пробелов на «-» в имени клиента при добавлении; промпт явно
+  предупреждает об этом.
+- Опциональный уникальный ID-префикс имён (5 символов a-z0-9, например
+  `k3x9f-alice`): глобальный тумблер «ID-префикс» в настройках бота,
+  по умолчанию выключен.
+
+### 🇬🇧 English
+
+#### Added
+
+- Spaces in a new client name are automatically replaced with "-";
+  the name prompt says so explicitly.
+- Optional unique name ID prefix (5 chars a-z0-9, e.g. `k3x9f-alice`):
+  global "ID prefix" toggle in bot settings, off by default.
+
 ## [0.1.0] — 2026-07-15
 
 ### 🇷🇺 Русский
