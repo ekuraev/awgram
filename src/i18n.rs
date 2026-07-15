@@ -338,15 +338,20 @@ pub fn client_exists(lang: Lang, name: &str) -> String {
 }
 
 // --- настройки ---
-pub fn settings_title(lang: Lang, psk_default: bool) -> String {
+pub fn settings_title(lang: Lang, psk_default: bool, name_slug: bool) -> String {
     let psk = if psk_default {
         "вкл/on"
     } else {
         "выкл/off"
     };
+    let slug = if name_slug { "вкл/on" } else { "выкл/off" };
     match lang {
-        Lang::Ru => format!("⚙️ <b>Настройки</b>\nЯзык: русский\nPSK по умолчанию: {psk}"),
-        Lang::En => format!("⚙️ <b>Settings</b>\nLanguage: English\nDefault PSK: {psk}"),
+        Lang::Ru => format!(
+            "⚙️ <b>Настройки</b>\nЯзык: русский\nPSK по умолчанию: {psk}\nID-префикс имён: {slug}"
+        ),
+        Lang::En => format!(
+            "⚙️ <b>Settings</b>\nLanguage: English\nDefault PSK: {psk}\nName ID prefix: {slug}"
+        ),
     }
 }
 pub fn btn_lang_ru(lang: Lang) -> String {
@@ -363,6 +368,15 @@ pub fn btn_psk_toggle(lang: Lang, on: bool) -> String {
         (Lang::Ru, false) => "PSK: выкл ⬜",
         (Lang::En, true) => "PSK: on ✅",
         (Lang::En, false) => "PSK: off ⬜",
+    }
+    .to_string()
+}
+pub fn btn_slug_toggle(lang: Lang, on: bool) -> String {
+    match (lang, on) {
+        (Lang::Ru, true) => "ID-префикс: вкл ✅",
+        (Lang::Ru, false) => "ID-префикс: выкл ⬜",
+        (Lang::En, true) => "ID prefix: on ✅",
+        (Lang::En, false) => "ID prefix: off ⬜",
     }
     .to_string()
 }
@@ -602,7 +616,7 @@ mod tests {
             assert!(!access_denied(l).is_empty());
             assert!(!ask_client_name(l).is_empty());
             assert!(!ask_expiry(l).is_empty());
-            assert!(!settings_title(l, true).is_empty());
+            assert!(!settings_title(l, true, true).is_empty());
             assert!(!backups_empty(l).is_empty());
             assert!(!restore_done(l).is_empty());
             // карточка: имя экранируется

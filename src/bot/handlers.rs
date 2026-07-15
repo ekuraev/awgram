@@ -34,6 +34,7 @@ pub enum Action {
     Settings,
     SetLang(String), // "ru" | "en" — смена языка из экрана настроек
     SetPsk(bool),
+    SetSlug(bool),
     AddPsk(bool),
     Backup,
     BackupNew,
@@ -93,6 +94,8 @@ fn parse_callback(data: &str) -> Action {
                 Action::SetLang(v.to_string())
             } else if let Some(v) = data.strip_prefix("set:psk:") {
                 Action::SetPsk(v == "on")
+            } else if let Some(v) = data.strip_prefix("set:slug:") {
+                Action::SetSlug(v == "on")
             } else if let Some(v) = data.strip_prefix("lang:") {
                 Action::Lang(v.to_string())
             } else if let Some(v) = data.strip_prefix("bk:restore_yes:") {
@@ -628,10 +631,17 @@ async fn callback_handler(
             dialogue.exit().await?;
         }
         Action::Settings => {
-            bot.send_message(chat, i18n::settings_title(lang, settings.psk_default()))
-                .reply_markup(menu::settings_menu(lang, settings.psk_default()))
-                .parse_mode(ParseMode::Html)
-                .await?;
+            bot.send_message(
+                chat,
+                i18n::settings_title(lang, settings.psk_default(), settings.name_slug()),
+            )
+            .reply_markup(menu::settings_menu(
+                lang,
+                settings.psk_default(),
+                settings.name_slug(),
+            ))
+            .parse_mode(ParseMode::Html)
+            .await?;
         }
         Action::Lang(code) => {
             if let Some(l) = i18n::parse_lang(&code) {
@@ -648,17 +658,45 @@ async fn callback_handler(
                 settings.set_lang(uid, l);
             }
             let lang = settings.lang(uid);
-            bot.send_message(chat, i18n::settings_title(lang, settings.psk_default()))
-                .reply_markup(menu::settings_menu(lang, settings.psk_default()))
-                .parse_mode(ParseMode::Html)
-                .await?;
+            bot.send_message(
+                chat,
+                i18n::settings_title(lang, settings.psk_default(), settings.name_slug()),
+            )
+            .reply_markup(menu::settings_menu(
+                lang,
+                settings.psk_default(),
+                settings.name_slug(),
+            ))
+            .parse_mode(ParseMode::Html)
+            .await?;
         }
         Action::SetPsk(on) => {
             settings.set_psk_default(on);
-            bot.send_message(chat, i18n::settings_title(lang, settings.psk_default()))
-                .reply_markup(menu::settings_menu(lang, settings.psk_default()))
-                .parse_mode(ParseMode::Html)
-                .await?;
+            bot.send_message(
+                chat,
+                i18n::settings_title(lang, settings.psk_default(), settings.name_slug()),
+            )
+            .reply_markup(menu::settings_menu(
+                lang,
+                settings.psk_default(),
+                settings.name_slug(),
+            ))
+            .parse_mode(ParseMode::Html)
+            .await?;
+        }
+        Action::SetSlug(on) => {
+            settings.set_name_slug(on);
+            bot.send_message(
+                chat,
+                i18n::settings_title(lang, settings.psk_default(), settings.name_slug()),
+            )
+            .reply_markup(menu::settings_menu(
+                lang,
+                settings.psk_default(),
+                settings.name_slug(),
+            ))
+            .parse_mode(ParseMode::Html)
+            .await?;
         }
         Action::Backup => {
             bot.send_message(chat, i18n::backup_menu_title(lang))
@@ -879,6 +917,8 @@ mod tests {
         assert_eq!(parse_callback("set:lang:en"), Action::SetLang("en".into()));
         assert_eq!(parse_callback("set:psk:on"), Action::SetPsk(true));
         assert_eq!(parse_callback("set:psk:off"), Action::SetPsk(false));
+        assert_eq!(parse_callback("set:slug:on"), Action::SetSlug(true));
+        assert_eq!(parse_callback("set:slug:off"), Action::SetSlug(false));
         assert_eq!(parse_callback("add:psk:on"), Action::AddPsk(true));
         assert_eq!(parse_callback("add:psk:off"), Action::AddPsk(false));
         assert_eq!(parse_callback("backup"), Action::Backup);
@@ -973,8 +1013,8 @@ mod tests {
             menu::confirm_recreate(Lang::Ru, "alice"),
             menu::clients_list(Lang::Ru, &[sample_client], &[], 0, 0, 8),
             menu::language_select(),
-            menu::settings_menu(Lang::Ru, false),
-            menu::settings_menu(Lang::Ru, true),
+            menu::settings_menu(Lang::Ru, false, false),
+            menu::settings_menu(Lang::Ru, true, true),
             menu::psk_step(Lang::Ru, false),
             menu::psk_step(Lang::Ru, true),
             menu::backup_menu(Lang::Ru),
