@@ -11,6 +11,8 @@ pub struct BotState {
     #[serde(default)]
     pub psk_default: bool,
     #[serde(default)]
+    pub name_slug: bool,
+    #[serde(default)]
     pub langs: HashMap<i64, Lang>,
 }
 
@@ -79,6 +81,18 @@ impl SettingsStore {
         drop(s);
         self.persist(&snapshot);
     }
+
+    pub fn name_slug(&self) -> bool {
+        self.state.lock().unwrap().name_slug
+    }
+
+    pub fn set_name_slug(&self, v: bool) {
+        let mut s = self.state.lock().unwrap();
+        s.name_slug = v;
+        let snapshot = s.clone();
+        drop(s);
+        self.persist(&snapshot);
+    }
 }
 
 #[cfg(test)]
@@ -124,5 +138,19 @@ mod tests {
         let s2 = SettingsStore::load(path);
         assert_eq!(s2.lang(42), Lang::En);
         assert!(s2.psk_default());
+    }
+
+    #[test]
+    fn name_slug_default_off_toggle_and_persist() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        {
+            let s = SettingsStore::load(path.clone());
+            assert!(!s.name_slug()); // дефолт — выключено
+            s.set_name_slug(true);
+            assert!(s.name_slug());
+        }
+        let s2 = SettingsStore::load(path);
+        assert!(s2.name_slug()); // пережил перезагрузку
     }
 }
