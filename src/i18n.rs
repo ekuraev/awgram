@@ -356,7 +356,11 @@ pub fn settings_title(lang: Lang, psk_default: bool, name_slug: bool) -> String 
     } else {
         "выкл/off"
     };
-    let slug = if name_slug { "вкл/on" } else { "выкл/off" };
+    let slug = if name_slug {
+        "вкл/on"
+    } else {
+        "выкл/off"
+    };
     match lang {
         Lang::Ru => format!(
             "⚙️ <b>Настройки</b>\nЯзык: русский\nPSK по умолчанию: {psk}\nID-префикс имён: {slug}"
