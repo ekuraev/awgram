@@ -31,7 +31,7 @@ pub fn language_select() -> InlineKeyboardMarkup {
     ]])
 }
 
-pub fn settings_menu(lang: Lang, psk_default: bool) -> InlineKeyboardMarkup {
+pub fn settings_menu(lang: Lang, psk_default: bool, name_slug: bool) -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![
         vec![
             cb(&i18n::btn_lang_ru(lang), "set:lang:ru"),
@@ -43,6 +43,14 @@ pub fn settings_menu(lang: Lang, psk_default: bool) -> InlineKeyboardMarkup {
                 "set:psk:off"
             } else {
                 "set:psk:on"
+            },
+        )],
+        vec![cb(
+            &i18n::btn_slug_toggle(lang, name_slug),
+            if name_slug {
+                "set:slug:off"
+            } else {
+                "set:slug:on"
             },
         )],
         vec![cb(&i18n::btn_back(lang), "menu")],
@@ -447,17 +455,28 @@ mod tests {
 
     #[test]
     fn settings_menu_toggles_psk_data_by_current_value() {
-        let data_off = all_callback_data(&settings_menu(Lang::Ru, false));
+        let data_off = all_callback_data(&settings_menu(Lang::Ru, false, false));
         assert!(data_off.contains(&"set:psk:on".to_string()));
         assert!(!data_off.contains(&"set:psk:off".to_string()));
 
-        let data_on = all_callback_data(&settings_menu(Lang::Ru, true));
+        let data_on = all_callback_data(&settings_menu(Lang::Ru, true, false));
         assert!(data_on.contains(&"set:psk:off".to_string()));
         assert!(!data_on.contains(&"set:psk:on".to_string()));
 
         assert!(data_off.contains(&"set:lang:ru".to_string()));
         assert!(data_off.contains(&"set:lang:en".to_string()));
         assert!(data_off.contains(&"menu".to_string()));
+    }
+
+    #[test]
+    fn settings_menu_toggles_slug_data_by_current_value() {
+        let data_off = all_callback_data(&settings_menu(Lang::Ru, false, false));
+        assert!(data_off.contains(&"set:slug:on".to_string()));
+        assert!(!data_off.contains(&"set:slug:off".to_string()));
+
+        let data_on = all_callback_data(&settings_menu(Lang::Ru, false, true));
+        assert!(data_on.contains(&"set:slug:off".to_string()));
+        assert!(!data_on.contains(&"set:slug:on".to_string()));
     }
 
     #[test]
