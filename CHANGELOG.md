@@ -3,6 +3,24 @@
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версионирование — [SemVer](https://semver.org/lang/ru/).
 Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning — [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### 🇷🇺 Русский
+
+#### Изменено
+
+- Подтверждена совместимость с инсталлером
+  [v5.20.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.20.0);
+  поддерживаемая версия в README обновлена (была v5.19.2).
+
+### 🇬🇧 English
+
+#### Changed
+
+- Confirmed compatibility with installer
+  [v5.20.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.20.0);
+  the supported version in README has been bumped (was v5.19.2).
+
 ## [0.2.0] — 2026-07-15
 
 ### 🇷🇺 Русский

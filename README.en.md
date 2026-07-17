@@ -81,7 +81,7 @@ The bot is a layer on top of `manage_amneziawg.sh` from
 and depends directly on its interface.
 
 - **Supported installer version:
-  [v5.19.2](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.19.2)**
+  [v5.20.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.20.0)**
   (tested against it; newer versions are at your own risk until this line is
   updated).
 - Subcommands used: `add`, `remove`, `list`, `stats`, `regen`, `backup`,
