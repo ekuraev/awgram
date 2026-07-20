@@ -500,14 +500,6 @@ pub fn check_running(lang: Lang) -> String {
     }
     .to_string()
 }
-pub fn check_result(lang: Lang, body: &str) -> String {
-    let b = html_escape(body);
-    match lang {
-        Lang::Ru => format!("🩺 <b>Проверка</b>\n<pre>{b}</pre>"),
-        Lang::En => format!("🩺 <b>Check</b>\n<pre>{b}</pre>"),
-    }
-}
-
 pub fn btn_diagnose(lang: Lang) -> String {
     match lang {
         Lang::Ru => "🔬 Диагностика",
@@ -586,9 +578,7 @@ pub fn error_text(lang: Lang, err: &Error) -> String {
         (Lang::Ru, Error::RestoreRolledBack) => {
             "⚠️ Восстановление провалилось. Конфиг откачен к предыдущему состоянию."
         }
-        (Lang::En, Error::RestoreRolledBack) => {
-            "⚠️ Restore failed. Configuration was rolled back."
-        }
+        (Lang::En, Error::RestoreRolledBack) => "⚠️ Restore failed. Configuration was rolled back.",
         (Lang::Ru, _) => "❌ Ошибка выполнения операции.",
         (Lang::En, _) => "❌ Operation error.",
     }
@@ -664,7 +654,9 @@ pub fn btn_repair(lang: Lang) -> String {
 }
 pub fn confirm_restart(lang: Lang) -> String {
     match lang {
-        Lang::Ru => "🔁 <b>Перезапустить сервис?</b>\nВсе VPN-подключения будут разорваны на 1–2 секунды.",
+        Lang::Ru => {
+            "🔁 <b>Перезапустить сервис?</b>\nВсе VPN-подключения будут разорваны на 1–2 секунды."
+        }
         Lang::En => "🔁 <b>Restart service?</b>\nAll VPN connections will drop for 1–2 seconds.",
     }
     .to_string()
@@ -700,10 +692,18 @@ pub fn repair_result(lang: Lang, rc: i32) -> String {
 
 // --- check card (структурированный отчёт) ---
 fn bool_mark(ok: bool) -> &'static str {
-    if ok { "✅" } else { "❌" }
+    if ok {
+        "✅"
+    } else {
+        "❌"
+    }
 }
-fn warn_mark(missing: bool) -> &'static str {
-    if missing { "⚠️" } else { "✅" }
+fn warn_mark(present: bool) -> &'static str {
+    if present {
+        "✅"
+    } else {
+        "⚠️"
+    }
 }
 pub fn check_card(lang: Lang, r: &crate::vpn::wire::CheckReport) -> String {
     let header = if r.ok { "✅" } else { "❌" };
@@ -711,22 +711,53 @@ pub fn check_card(lang: Lang, r: &crate::vpn::wire::CheckReport) -> String {
     match lang {
         Lang::Ru => {
             lines.push(format!("{header} <b>Проверка сервера</b>"));
-            lines.push(format!("{} Сервис: {}", bool_mark(r.service.active),
-                if r.service.active { "активен" } else { "НЕ активен" }));
+            lines.push(format!(
+                "{} Сервис: {}",
+                bool_mark(r.service.active),
+                if r.service.active {
+                    "активен"
+                } else {
+                    "НЕ активен"
+                }
+            ));
             let iface = if r.interface.present {
-                let mtu = r.interface.mtu.map(|m| m.to_string()).unwrap_or_default();
+                let mtu = r
+                    .interface
+                    .mtu
+                    .map(|m| m.to_string())
+                    .unwrap_or_else(|| "n/a".to_string());
                 let addrs = r.interface.addresses.join(", ");
-                format!("{} Интерфейс {}: MTU {}, {}", bool_mark(true), html_escape(&r.interface.name), mtu, html_escape(&addrs))
+                format!(
+                    "{} Интерфейс {}: MTU {}, {}",
+                    bool_mark(true),
+                    html_escape(&r.interface.name),
+                    mtu,
+                    html_escape(&addrs)
+                )
             } else {
                 "❌ Интерфейс отсутствует".to_string()
             };
             lines.push(iface);
-            lines.push(format!("{} Порт {}/udp: {}",
-                bool_mark(r.port.listening), r.port.number,
-                if r.port.listening { "прослушивается" } else { "НЕ прослушивается" }));
-            lines.push(format!("{} Модуль amneziawg: {}",
+            lines.push(format!(
+                "{} Порт {}/{}: {}",
+                bool_mark(r.port.listening),
+                r.port.number,
+                r.port.proto,
+                if r.port.listening {
+                    "прослушивается"
+                } else {
+                    "НЕ прослушивается"
+                }
+            ));
+            lines.push(format!(
+                "{} Модуль amneziawg: {}",
                 warn_mark(r.module.loaded),
-                if r.module.loaded { "загружен" } else { "не загружен (норма для userspace)" }));
+                if r.module.loaded {
+                    "загружен"
+                } else {
+                    "не загружен (норма для userspace)"
+                }
+            ));
             lines.push(format!("👥 Клиентов: {}", r.clients.total));
             let fw = if !r.firewall.ufw_active {
                 "⚠️ UFW: не активен".to_string()
@@ -739,22 +770,53 @@ pub fn check_card(lang: Lang, r: &crate::vpn::wire::CheckReport) -> String {
         }
         Lang::En => {
             lines.push(format!("{header} <b>Server check</b>"));
-            lines.push(format!("{} Service: {}", bool_mark(r.service.active),
-                if r.service.active { "active" } else { "NOT active" }));
+            lines.push(format!(
+                "{} Service: {}",
+                bool_mark(r.service.active),
+                if r.service.active {
+                    "active"
+                } else {
+                    "NOT active"
+                }
+            ));
             let iface = if r.interface.present {
-                let mtu = r.interface.mtu.map(|m| m.to_string()).unwrap_or_default();
+                let mtu = r
+                    .interface
+                    .mtu
+                    .map(|m| m.to_string())
+                    .unwrap_or_else(|| "n/a".to_string());
                 let addrs = r.interface.addresses.join(", ");
-                format!("{} Interface {}: MTU {}, {}", bool_mark(true), html_escape(&r.interface.name), mtu, html_escape(&addrs))
+                format!(
+                    "{} Interface {}: MTU {}, {}",
+                    bool_mark(true),
+                    html_escape(&r.interface.name),
+                    mtu,
+                    html_escape(&addrs)
+                )
             } else {
                 "❌ Interface missing".to_string()
             };
             lines.push(iface);
-            lines.push(format!("{} Port {}/udp: {}",
-                bool_mark(r.port.listening), r.port.number,
-                if r.port.listening { "listening" } else { "NOT listening" }));
-            lines.push(format!("{} amneziawg module: {}",
+            lines.push(format!(
+                "{} Port {}/{}: {}",
+                bool_mark(r.port.listening),
+                r.port.number,
+                r.port.proto,
+                if r.port.listening {
+                    "listening"
+                } else {
+                    "NOT listening"
+                }
+            ));
+            lines.push(format!(
+                "{} amneziawg module: {}",
                 warn_mark(r.module.loaded),
-                if r.module.loaded { "loaded" } else { "not loaded (ok for userspace)" }));
+                if r.module.loaded {
+                    "loaded"
+                } else {
+                    "not loaded (ok for userspace)"
+                }
+            ));
             lines.push(format!("👥 Clients: {}", r.clients.total));
             let fw = if !r.firewall.ufw_active {
                 "⚠️ UFW: inactive".to_string()
@@ -1003,19 +1065,38 @@ mod tests {
         use crate::vpn::wire::CheckReport;
         let ok = CheckReport {
             ok: true,
-            service: crate::vpn::wire::ServiceBlock { unit: "awg-quick@awg0".into(), active: true },
-            interface: crate::vpn::wire::InterfaceBlock { name: "awg0".into(), present: true, mtu: Some(1280), addresses: vec!["10.9.9.1/24".into()] },
-            port: crate::vpn::wire::PortBlock { number: 39743, proto: "udp".into(), listening: true },
+            service: crate::vpn::wire::ServiceBlock {
+                unit: "awg-quick@awg0".into(),
+                active: true,
+            },
+            interface: crate::vpn::wire::InterfaceBlock {
+                name: "awg0".into(),
+                present: true,
+                mtu: Some(1280),
+                addresses: vec!["10.9.9.1/24".into()],
+            },
+            port: crate::vpn::wire::PortBlock {
+                number: 39743,
+                proto: "udp".into(),
+                listening: true,
+            },
             module: crate::vpn::wire::ModuleBlock { loaded: true },
             clients: crate::vpn::wire::ClientsBlock { total: 5 },
-            firewall: crate::vpn::wire::FirewallBlock { ufw_active: true, port_allowed: true },
+            firewall: crate::vpn::wire::FirewallBlock {
+                ufw_active: true,
+                port_allowed: true,
+            },
         };
         let text = check_card(Lang::Ru, &ok);
         assert!(text.contains("✅"));
         assert!(text.contains("39743"));
         assert!(text.contains("5"));
 
-        let bad = CheckReport { ok: false, service: ok.service.clone(), ..ok.clone() };
+        let bad = CheckReport {
+            ok: false,
+            service: ok.service.clone(),
+            ..ok.clone()
+        };
         let bad_text = check_card(Lang::Ru, &bad);
         assert!(bad_text.contains("❌"));
     }

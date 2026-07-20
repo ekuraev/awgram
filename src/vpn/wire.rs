@@ -356,7 +356,8 @@ mod tests {
 
     #[test]
     fn parse_remove_not_found() {
-        let s = r#"{"ok":true,"removed":0,"failed":1,"results":[{"name":"x","status":"not_found"}]}"#;
+        let s =
+            r#"{"ok":true,"removed":0,"failed":1,"results":[{"name":"x","status":"not_found"}]}"#;
         let o = parse_remove(s).unwrap();
         assert_eq!(o.results[0].status, RemoveStatus::NotFound);
     }
@@ -449,9 +450,12 @@ mod tests {
 
     #[test]
     fn parse_repair_codes() {
-        let ok = parse_repair(r#"{"ok":true,"module_loaded":true,"service_active":true,"rc":0}"#).unwrap();
+        let ok = parse_repair(r#"{"ok":true,"module_loaded":true,"service_active":true,"rc":0}"#)
+            .unwrap();
         assert_eq!(ok.rc, 0);
-        let svc_down = parse_repair(r#"{"ok":false,"module_loaded":true,"service_active":false,"rc":2}"#).unwrap();
+        let svc_down =
+            parse_repair(r#"{"ok":false,"module_loaded":true,"service_active":false,"rc":2}"#)
+                .unwrap();
         assert_eq!(svc_down.rc, 2);
         assert!(!svc_down.service_active);
     }

@@ -154,9 +154,7 @@ pub fn parse_allowed_ips(input: &str) -> Result<String, ValidateError> {
 fn endpoint_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     // host:port или [ipv6]:port. host — домен или IPv4. Запрещаем shell-метасимволы.
-    RE.get_or_init(|| {
-        Regex::new(r"^(?:\[?[0-9a-fA-F:.]+\]?|[A-Za-z0-9._-]+):[0-9]{1,5}$").unwrap()
-    })
+    RE.get_or_init(|| Regex::new(r"^(?:\[?[0-9a-fA-F:.]+\]?|[A-Za-z0-9._-]+):[0-9]{1,5}$").unwrap())
 }
 
 pub fn parse_endpoint(input: &str) -> Result<String, ValidateError> {
@@ -313,8 +311,11 @@ mod tests {
     #[test]
     fn keepalive_rejects_out_of_range_and_non_numeric() {
         for bad in ["", "abc", "-1", "601", "9999", "1.5", "25s"] {
-            assert_eq!(parse_keepalive(bad), Err(ValidateError::BadExpiry),
-                "should reject {bad:?}");
+            assert_eq!(
+                parse_keepalive(bad),
+                Err(ValidateError::BadExpiry),
+                "should reject {bad:?}"
+            );
         }
     }
 
@@ -327,9 +328,19 @@ mod tests {
 
     #[test]
     fn dns_rejects_non_ip_and_too_many() {
-        for bad in ["", "not-ip", "1.1.1.1; rm -rf /", "a.b.c.d", "1.1.1.1,", "8.8.8.8 1.1.1.1"] {
-            assert_eq!(parse_dns(bad), Err(ValidateError::BadExpiry),
-                "should reject {bad:?}");
+        for bad in [
+            "",
+            "not-ip",
+            "1.1.1.1; rm -rf /",
+            "a.b.c.d",
+            "1.1.1.1,",
+            "8.8.8.8 1.1.1.1",
+        ] {
+            assert_eq!(
+                parse_dns(bad),
+                Err(ValidateError::BadExpiry),
+                "should reject {bad:?}"
+            );
         }
         // > 4 адресов
         let five = "1.1.1.1, 2.2.2.2, 3.3.3.3, 4.4.4.4, 5.5.5.5";
@@ -346,8 +357,11 @@ mod tests {
     #[test]
     fn allowed_ips_rejects_non_cidr_and_shell_meta() {
         for bad in ["", "192.168.1.5", "not-cidr", "1.1.1.1; ls", "../etc"] {
-            assert_eq!(parse_allowed_ips(bad), Err(ValidateError::BadExpiry),
-                "should reject {bad:?}");
+            assert_eq!(
+                parse_allowed_ips(bad),
+                Err(ValidateError::BadExpiry),
+                "should reject {bad:?}"
+            );
         }
     }
 
@@ -361,14 +375,20 @@ mod tests {
     #[test]
     fn endpoint_rejects_missing_port_and_meta() {
         for bad in ["vpn.example.com", "", ":51820", "a.b:51820; rm", "host:abc"] {
-            assert_eq!(parse_endpoint(bad), Err(ValidateError::BadExpiry),
-                "should reject {bad:?}");
+            assert_eq!(
+                parse_endpoint(bad),
+                Err(ValidateError::BadExpiry),
+                "should reject {bad:?}"
+            );
         }
     }
 
     #[test]
     fn modify_param_cli_names() {
-        assert_eq!(modify_param_cli(ModifyParam::Keepalive), "PersistentKeepalive");
+        assert_eq!(
+            modify_param_cli(ModifyParam::Keepalive),
+            "PersistentKeepalive"
+        );
         assert_eq!(modify_param_cli(ModifyParam::Dns), "DNS");
         assert_eq!(modify_param_cli(ModifyParam::AllowedIps), "AllowedIPs");
         assert_eq!(modify_param_cli(ModifyParam::Endpoint), "Endpoint");

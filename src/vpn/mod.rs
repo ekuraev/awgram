@@ -69,7 +69,8 @@ impl Vpn {
         }
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         let out = run(&self.spec(), &arg_refs).await?;
-        let parsed = wire::parse_add(&out).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
+        let parsed =
+            wire::parse_add(&out).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
         let entry = parsed
             .results
             .into_iter()
@@ -86,9 +87,9 @@ impl Vpn {
             wire::AddStatus::InvalidName => {
                 Err(crate::error::Error::Parse("add: невалидное имя".into()))
             }
-            wire::AddStatus::Error | wire::AddStatus::Unknown => {
-                Err(crate::error::Error::Parse("add: ошибка создания клиента".into()))
-            }
+            wire::AddStatus::Error | wire::AddStatus::Unknown => Err(crate::error::Error::Parse(
+                "add: ошибка создания клиента".into(),
+            )),
         }
     }
 
@@ -273,7 +274,12 @@ impl Vpn {
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
-        Ok(BackupFile { name, path, size, mtime })
+        Ok(BackupFile {
+            name,
+            path,
+            size,
+            mtime,
+        })
     }
 
     /// Восстанавливает из бэкапа по индексу в списке `list_backups()` (0 = самый новый).
@@ -496,7 +502,10 @@ echo '{"command":"add","ok":true,"added":0,"failed":1,"applied":false,"results":
 "#;
         let (_d, vpn) = vpn_with_script(stub);
         let err = vpn.add("alice", None, false).await.unwrap_err();
-        assert!(matches!(err, crate::error::Error::ClientExists(_)), "got {err:?}");
+        assert!(
+            matches!(err, crate::error::Error::ClientExists(_)),
+            "got {err:?}"
+        );
     }
 
     #[tokio::test]
@@ -509,7 +518,10 @@ exit 1
         let (_d, vpn) = vpn_with_script(stub);
         // rc != 0 → run() вернёт ScriptFailed ДО парсинга stdout.
         let err = vpn.add("alice", None, false).await.unwrap_err();
-        assert!(matches!(err, crate::error::Error::ScriptFailed { .. }), "got {err:?}");
+        assert!(
+            matches!(err, crate::error::Error::ScriptFailed { .. }),
+            "got {err:?}"
+        );
     }
 
     #[tokio::test]
@@ -546,7 +558,10 @@ echo '{"command":"remove","ok":true,"removed":0,"failed":1,"results":[{"name":"g
 "#;
         let (_d, vpn) = vpn_with_script(stub);
         let err = vpn.remove("ghost").await.unwrap_err();
-        assert!(matches!(err, crate::error::Error::ClientNotFound(_)), "got {err:?}");
+        assert!(
+            matches!(err, crate::error::Error::ClientNotFound(_)),
+            "got {err:?}"
+        );
     }
 
     #[tokio::test]
@@ -579,7 +594,10 @@ echo '{"command":"regen","ok":true,"regenerated":0,"failed":1,"results":[{"name"
 "#;
         let (_d, vpn) = vpn_with_script(stub);
         let err = vpn.regen_client("ghost").await.unwrap_err();
-        assert!(matches!(err, crate::error::Error::ClientNotFound(_)), "got {err:?}");
+        assert!(
+            matches!(err, crate::error::Error::ClientNotFound(_)),
+            "got {err:?}"
+        );
     }
 
     #[test]
@@ -833,7 +851,10 @@ echo '{"command":"restore","ok":false,"error":"boom","source":"/x.tar.gz","appli
         std::fs::create_dir_all(&bdir).unwrap();
         std::fs::write(bdir.join("awg_backup_x.tar.gz"), b"x").unwrap();
         let err = vpn.restore(0).await.unwrap_err();
-        assert!(matches!(err, crate::error::Error::RestoreRolledBack), "got {err:?}");
+        assert!(
+            matches!(err, crate::error::Error::RestoreRolledBack),
+            "got {err:?}"
+        );
     }
 
     #[tokio::test]

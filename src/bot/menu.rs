@@ -304,15 +304,7 @@ mod tests {
     fn main_menu_has_expected_actions() {
         let data = all_callback_data(&main_menu(Lang::Ru));
         for expected in [
-            "list",
-            "add",
-            "stats",
-            "backup",
-            "check",
-            "diagnose",
-            "restart",
-            "repair",
-            "settings",
+            "list", "add", "stats", "backup", "check", "diagnose", "restart", "repair", "settings",
         ] {
             assert!(data.contains(&expected.to_string()), "missing {expected}");
         }

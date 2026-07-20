@@ -92,7 +92,10 @@ mod tests {
     async fn extra_env_reaches_script() {
         let dir = tempfile::tempdir().unwrap();
         // Stub печатает значение env-переменной, если она задана.
-        let script = write_script(&dir, "#!/bin/sh\nprintf '%s' \"${AWG_STRICT_CONFIRM:-unset}\"\n");
+        let script = write_script(
+            &dir,
+            "#!/bin/sh\nprintf '%s' \"${AWG_STRICT_CONFIRM:-unset}\"\n",
+        );
         let spec = RunSpec {
             script: &script,
             sudo_prefix: "",
@@ -106,7 +109,10 @@ mod tests {
     #[tokio::test]
     async fn no_extra_env_means_unset() {
         let dir = tempfile::tempdir().unwrap();
-        let script = write_script(&dir, "#!/bin/sh\nprintf '%s' \"${AWG_STRICT_CONFIRM:-unset}\"\n");
+        let script = write_script(
+            &dir,
+            "#!/bin/sh\nprintf '%s' \"${AWG_STRICT_CONFIRM:-unset}\"\n",
+        );
         let spec = RunSpec {
             script: &script,
             sudo_prefix: "",

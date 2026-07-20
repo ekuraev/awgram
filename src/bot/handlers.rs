@@ -116,30 +116,30 @@ fn parse_callback(data: &str) -> Action {
             } else if let Some(v) = data.strip_prefix("bk:card:") {
                 v.parse().map(Action::BackupCard).unwrap_or(Action::Unknown)
             } else if let Some(v) = data.strip_prefix("bk:dl:") {
-                    v.parse()
-                        .map(Action::BackupDownload)
-                        .unwrap_or(Action::Unknown)
-                } else if let Some(v) = data.strip_prefix("modparam:") {
-                    // ДО mod: — modparam:... тоже начинается с "mod", но другой разделитель.
-                    let parts: Vec<&str> = v.splitn(2, ':').collect();
-                    if parts.len() != 2 {
-                        return Action::Unknown;
-                    }
-                    let name = parts[0].to_string();
-                    let param = match parts[1] {
-                        "keepalive" => crate::vpn::validate::ModifyParam::Keepalive,
-                        "dns" => crate::vpn::validate::ModifyParam::Dns,
-                        "allowedips" => crate::vpn::validate::ModifyParam::AllowedIps,
-                        "endpoint" => crate::vpn::validate::ModifyParam::Endpoint,
-                        _ => return Action::Unknown,
-                    };
-                    Action::ModifyParam(name, param)
-                } else if let Some(v) = data.strip_prefix("mod:") {
-                    Action::Modify(v.to_string())
-                } else {
-                    Action::Unknown
+                v.parse()
+                    .map(Action::BackupDownload)
+                    .unwrap_or(Action::Unknown)
+            } else if let Some(v) = data.strip_prefix("modparam:") {
+                // ДО mod: — modparam:... тоже начинается с "mod", но другой разделитель.
+                let parts: Vec<&str> = v.splitn(2, ':').collect();
+                if parts.len() != 2 {
+                    return Action::Unknown;
                 }
+                let name = parts[0].to_string();
+                let param = match parts[1] {
+                    "keepalive" => crate::vpn::validate::ModifyParam::Keepalive,
+                    "dns" => crate::vpn::validate::ModifyParam::Dns,
+                    "allowedips" => crate::vpn::validate::ModifyParam::AllowedIps,
+                    "endpoint" => crate::vpn::validate::ModifyParam::Endpoint,
+                    _ => return Action::Unknown,
+                };
+                Action::ModifyParam(name, param)
+            } else if let Some(v) = data.strip_prefix("mod:") {
+                Action::Modify(v.to_string())
+            } else {
+                Action::Unknown
             }
+        }
     }
 }
 
@@ -302,23 +302,30 @@ async fn message_handler(
             let raw = msg.text().unwrap_or_default().to_string();
             match crate::vpn::validate::parse_modify_value(param, &raw) {
                 Ok(value) => {
-                    let waiting = bot.send_message(msg.chat.id, i18n::creating(lang)).await.ok();
+                    let waiting = bot
+                        .send_message(msg.chat.id, i18n::creating(lang))
+                        .await
+                        .ok();
                     match vpn.modify(&name, param, &value).await {
                         Ok(out) => {
                             if let Some(m) = waiting {
                                 let _ = bot.delete_message(msg.chat.id, m.id).await;
                             }
-                            bot.send_message(msg.chat.id, i18n::modify_done(lang, param, &out.value))
-                                .reply_markup(menu::main_menu(lang))
-                                .parse_mode(ParseMode::Html)
-                                .await?;
+                            bot.send_message(
+                                msg.chat.id,
+                                i18n::modify_done(lang, param, &out.value),
+                            )
+                            .reply_markup(menu::main_menu(lang))
+                            .parse_mode(ParseMode::Html)
+                            .await?;
                         }
                         Err(e) => {
                             tracing::error!(error = %e, "modify провалился");
                             if let Some(m) = waiting {
                                 let _ = bot.delete_message(msg.chat.id, m.id).await;
                             }
-                            bot.send_message(msg.chat.id, i18n::error_text(lang, &e)).await?;
+                            bot.send_message(msg.chat.id, i18n::error_text(lang, &e))
+                                .await?;
                         }
                     }
                     dialogue.exit().await?;
@@ -327,11 +334,22 @@ async fn message_handler(
                     // Невалидный ввод — остаёмся в том же state, даём попробовать снова.
                     bot.send_message(
                         msg.chat.id,
-                        format!("⚠️ {} {}", i18n::bad_expiry(lang), i18n::ask_modify_param(lang, param)),
+                        format!("⚠️ {}", i18n::ask_modify_param(lang, param)),
                     )
                     .await?;
                 }
             }
+        }
+        State::AwaitingModifyParam { name } => {
+            // Пользователь ввёл текст вместо нажатия кнопки выбора параметра —
+            // не сбрасываем диалог, переспрашиваем с подсказкой.
+            bot.send_message(
+                msg.chat.id,
+                format!("{} {}", i18n::modify_param_select_title(lang), name),
+            )
+            .reply_markup(menu::modify_param_menu(lang, &name))
+            .parse_mode(ParseMode::Html)
+            .await?;
         }
         _ => {
             // /start и всё прочее.
