@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use crate::config::Config;
 use crate::error::Result;
 use model::{AddResult, Client};
-use runner::{run, run_capture, RunSpec};
+use runner::{run, RunSpec};
 
 pub struct Vpn {
     script: PathBuf,
@@ -37,12 +37,28 @@ impl Vpn {
     }
 
     pub async fn list(&self) -> Result<Vec<Client>> {
-        let out = run(&self.spec(), &["list", "--json"]).await?;
+        let (out, code) = run(&self.spec(), &["list", "--json"]).await?;
+        // list печатает голый JSON-массив — нет status-конверта. Ненулевой exit
+        // всегда означает ошибку выполнения; вывод уходит в stderr-контекст.
+        if code != 0 {
+            return Err(crate::error::Error::ScriptFailed {
+                code: Some(code),
+                stderr: out,
+            });
+        }
         model::parse_client_list(&out).map_err(|e| crate::error::Error::Parse(e.to_string()))
     }
 
     pub async fn stats(&self) -> Result<Vec<Client>> {
-        let out = run(&self.spec(), &["stats", "--json"]).await?;
+        let (out, code) = run(&self.spec(), &["stats", "--json"]).await?;
+        // stats печатает голый JSON-массив — нет status-конверта. Ненулевой exit
+        // всегда означает ошибку выполнения; вывод уходит в stderr-контекст.
+        if code != 0 {
+            return Err(crate::error::Error::ScriptFailed {
+                code: Some(code),
+                stderr: out,
+            });
+        }
         model::parse_client_list(&out).map_err(|e| crate::error::Error::Parse(e.to_string()))
     }
 
@@ -68,7 +84,15 @@ impl Vpn {
             args.push("--psk".into());
         }
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-        let out = run(&self.spec(), &arg_refs).await?;
+        let (out, code) = run(&self.spec(), &arg_refs).await?;
+        // add печатает JSON-конверт ДАЖЕ при exit 1 (status:"exists" и т.п.) —
+        // парсим всегда. Но пустой stdout — скрипт упал ДО печати, это не JSON.
+        if out.trim().is_empty() {
+            return Err(crate::error::Error::ScriptFailed {
+                code: Some(code),
+                stderr: format!("add: пустой stdout (exit {code})"),
+            });
+        }
         let parsed =
             wire::parse_add(&out).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
         let entry = parsed
@@ -103,7 +127,14 @@ impl Vpn {
             extra_env: &[("AWG_STRICT_CONFIRM", "1")],
         };
         let args = ["remove", &name, "--json", "--yes"];
-        let out = run(&spec, &args).await?;
+        let (out, code) = run(&spec, &args).await?;
+        // remove печатает JSON-конверт при exit 1 (status:"not_found") — парсим всегда.
+        if out.trim().is_empty() {
+            return Err(crate::error::Error::ScriptFailed {
+                code: Some(code),
+                stderr: format!("remove: пустой stdout (exit {code})"),
+            });
+        }
         let parsed =
             wire::parse_remove(&out).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
         let entry = parsed
@@ -125,7 +156,14 @@ impl Vpn {
         let name =
             validate::validate_name(name).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
         let args = ["regen", &name, "--json"];
-        let out = run(&self.spec(), &args).await?;
+        let (out, code) = run(&self.spec(), &args).await?;
+        // regen печатает JSON-конверт при exit 1 (status:"not_found") — парсим всегда.
+        if out.trim().is_empty() {
+            return Err(crate::error::Error::ScriptFailed {
+                code: Some(code),
+                stderr: format!("regen: пустой stdout (exit {code})"),
+            });
+        }
         let parsed =
             wire::parse_regen(&out).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
         let entry = parsed
@@ -161,7 +199,15 @@ impl Vpn {
         }
         args.push("--json");
         args.push("--yes");
-        let out = run(&spec, &args).await?;
+        let (out, code) = run(&spec, &args).await?;
+        // regen_all печатает JSON при partial-failure (ok:false, failed>0) — exit 1,
+        // но regenerated/failed авторитетны. Парсим всегда.
+        if out.trim().is_empty() {
+            return Err(crate::error::Error::ScriptFailed {
+                code: Some(code),
+                stderr: format!("regen: пустой stdout (exit {code})"),
+            });
+        }
         let parsed =
             wire::parse_regen(&out).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
         if parsed.regenerated == 0 && parsed.failed == 0 {
@@ -257,7 +303,13 @@ impl Vpn {
     /// Путь берётся из JSON-конверта v5.21.0 (`BackupOut.path`), а не
     /// угадывается как «новейший .tar.gz по mtime».
     pub async fn backup(&self) -> Result<BackupFile> {
-        let out = run(&self.spec(), &["backup", "--json"]).await?;
+        let (out, code) = run(&self.spec(), &["backup", "--json"]).await?;
+        if out.trim().is_empty() {
+            return Err(crate::error::Error::ScriptFailed {
+                code: Some(code),
+                stderr: format!("backup: пустой stdout (exit {code})"),
+            });
+        }
         let parsed =
             wire::parse_backup(&out).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
         let path = std::path::PathBuf::from(&parsed.path);
@@ -303,7 +355,14 @@ impl Vpn {
             extra_env: &[("AWG_STRICT_CONFIRM", "1")],
         };
         let path = bf.path.to_string_lossy().into_owned();
-        let out = run(&spec, &["restore", &path, "--json", "--yes"]).await?;
+        let (out, code) = run(&spec, &["restore", &path, "--json", "--yes"]).await?;
+        // restore печатает {"rolled_back":true} при exit 1 — парсим всегда.
+        if out.trim().is_empty() {
+            return Err(crate::error::Error::ScriptFailed {
+                code: Some(code),
+                stderr: format!("restore: пустой stdout (exit {code})"),
+            });
+        }
         let parsed =
             wire::parse_restore(&out).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
         if parsed.ok == Some(true) {
@@ -324,11 +383,10 @@ impl Vpn {
 
     /// Запускает `check --json` и возвращает структурированный отчёт v5.21.0.
     /// check печатает JSON в stdout даже при ok:false (обнаружены проблемы);
-    /// run() требует exit 0 — stub в тестах всегда exit 0, реальный скрипт
-    /// выходит 0 на «проблемы найдены» (ненулевой код зарезервирован за
-    /// ошибками выполнения). На всякий случай используем run_capture.
+    /// run() возвращает stdout независимо от exit code — парсим конверт всегда
+    /// (ok:false — это «проблемы найдены», а не ошибка выполнения).
     pub async fn check(&self) -> Result<wire::CheckReport> {
-        let (out, _code) = run_capture(&self.spec(), &["check", "--json"]).await?;
+        let (out, _code) = run(&self.spec(), &["check", "--json"]).await?;
         wire::parse_check(&out).map_err(|e| crate::error::Error::Parse(e.to_string()))
     }
 
@@ -336,7 +394,7 @@ impl Vpn {
     /// (как `check`: ненулевой код — «найдены проблемы», а не ошибка).
     /// Пустой вывод — ошибка: диагностика всегда что-то печатает.
     pub async fn diagnose(&self) -> Result<String> {
-        let (out, _code) = run_capture(&self.spec(), &["diagnose"]).await?;
+        let (out, _code) = run(&self.spec(), &["diagnose"]).await?;
         if out.trim().is_empty() {
             return Err(crate::error::Error::Parse("пустой вывод diagnose".into()));
         }
@@ -355,7 +413,13 @@ impl Vpn {
             validate::validate_name(name).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
         let param_cli = validate::modify_param_cli(param);
         let args = ["modify", &name, param_cli, value, "--json"];
-        let out = run(&self.spec(), &args).await?;
+        let (out, code) = run(&self.spec(), &args).await?;
+        if out.trim().is_empty() {
+            return Err(crate::error::Error::ScriptFailed {
+                code: Some(code),
+                stderr: format!("modify: пустой stdout (exit {code})"),
+            });
+        }
         wire::parse_modify(&out).map_err(|e| crate::error::Error::Parse(e.to_string()))
     }
 
@@ -368,14 +432,27 @@ impl Vpn {
             timeout_secs: self.timeout_secs,
             extra_env: &[("AWG_STRICT_CONFIRM", "1")],
         };
-        let out = run(&spec, &["restart", "--json", "--yes"]).await?;
+        let (out, code) = run(&spec, &["restart", "--json", "--yes"]).await?;
+        if out.trim().is_empty() {
+            return Err(crate::error::Error::ScriptFailed {
+                code: Some(code),
+                stderr: format!("restart: пустой stdout (exit {code})"),
+            });
+        }
         wire::parse_restart(&out).map_err(|e| crate::error::Error::Parse(e.to_string()))
     }
 
     /// Чинит модуль ядра amneziawg (`repair-module --json`). Не деструктивно —
     /// без AWG_STRICT_CONFIRM. Возвращает код завершения ремонта (0 = чисто).
     pub async fn repair_module(&self) -> Result<wire::RepairOut> {
-        let out = run(&self.spec(), &["repair-module", "--json"]).await?;
+        let (out, code) = run(&self.spec(), &["repair-module", "--json"]).await?;
+        // repair-module печатает JSON с rc:1/2 при exit 1 — парсим всегда.
+        if out.trim().is_empty() {
+            return Err(crate::error::Error::ScriptFailed {
+                code: Some(code),
+                stderr: format!("repair-module: пустой stdout (exit {code})"),
+            });
+        }
         wire::parse_repair(&out).map_err(|e| crate::error::Error::Parse(e.to_string()))
     }
 }
@@ -496,9 +573,13 @@ echo '{"command":"add","ok":true,"added":1,"failed":0,"applied":true,"results":[
 
     #[tokio::test]
     #[serial]
-    async fn add_exists_status_becomes_client_exists_error() {
+    async fn add_returns_client_exists_when_script_exits_nonzero() {
+        // Реальный инсталлер v5.21.0 печатает {"status":"exists"} в stdout и
+        // ЗАТЕМ выходит с rc=1 (_cmd_rc=1). add() должен распарсить JSON
+        // независимо от exit code и вернуть Error::ClientExists.
         let stub = r#"#!/bin/sh
 echo '{"command":"add","ok":true,"added":0,"failed":1,"applied":false,"results":[{"name":"alice","status":"exists"}]}'
+exit 1
 "#;
         let (_d, vpn) = vpn_with_script(stub);
         let err = vpn.add("alice", None, false).await.unwrap_err();
@@ -510,16 +591,38 @@ echo '{"command":"add","ok":true,"added":0,"failed":1,"applied":false,"results":
 
     #[tokio::test]
     #[serial]
-    async fn add_error_envelope_becomes_script_failed() {
+    async fn add_error_envelope_becomes_parse_failure() {
+        // ok:false с rc:1 — envelope означает ошибку создания; нет статуса exists,
+        // нет пустого stdout → должна вернуть Parse (нет конкретной status-ветки).
         let stub = r#"#!/bin/sh
 echo '{"command":"add","ok":false,"error":"boom","rc":1}'
 exit 1
 "#;
         let (_d, vpn) = vpn_with_script(stub);
-        // rc != 0 → run() вернёт ScriptFailed ДО парсинга stdout.
+        let err = vpn.add("alice", None, false).await.unwrap_err();
+        // status:Unknown → Parse (не ScriptFailed: stdout есть, конверт распарсен).
+        assert!(
+            matches!(err, crate::error::Error::Parse(_)),
+            "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn add_errors_when_script_prints_nothing_and_exits_nonzero() {
+        // Скрипт упал ДО печати чего-либо (например, kill -9, OOM, либо
+        // bash-ошибка до любого echo). run() возвращает пустой stdout →
+        // защита от пустого stdout: ScriptFailed с diagnostic-контекстом.
+        // (Если скрипт печатает в stderr, runner мержит его в out — тогда
+        // сработает Parse, что тоже корректно: был вывод, но не JSON.)
+        let stub = "#!/bin/sh\nexit 1\n";
+        let (_d, vpn) = vpn_with_script(stub);
         let err = vpn.add("alice", None, false).await.unwrap_err();
         assert!(
-            matches!(err, crate::error::Error::ScriptFailed { .. }),
+            matches!(
+                err,
+                crate::error::Error::ScriptFailed { code: Some(1), .. }
+            ),
             "got {err:?}"
         );
     }
@@ -552,9 +655,11 @@ fi
 
     #[tokio::test]
     #[serial]
-    async fn remove_not_found_becomes_client_not_found() {
+    async fn remove_returns_not_found_when_script_exits_nonzero() {
+        // Реальный инсталлер: {"status":"not_found"} → exit 1.
         let stub = r#"#!/bin/sh
 echo '{"command":"remove","ok":true,"removed":0,"failed":1,"results":[{"name":"ghost","status":"not_found"}]}'
+exit 1
 "#;
         let (_d, vpn) = vpn_with_script(stub);
         let err = vpn.remove("ghost").await.unwrap_err();
@@ -589,8 +694,10 @@ echo '{"command":"regen","ok":true,"regenerated":1,"failed":0,"results":[{"name"
     #[tokio::test]
     #[serial]
     async fn regen_client_not_found_becomes_client_not_found() {
+        // Реальный инсталлер: {"status":"not_found"} → exit 1.
         let stub = r#"#!/bin/sh
 echo '{"command":"regen","ok":true,"regenerated":0,"failed":1,"results":[{"name":"ghost","status":"not_found"}]}'
+exit 1
 "#;
         let (_d, vpn) = vpn_with_script(stub);
         let err = vpn.regen_client("ghost").await.unwrap_err();
@@ -783,8 +890,10 @@ echo '{"command":"regen","ok":true,"regenerated":3,"failed":0,"reset_routes":fal
     #[tokio::test]
     #[serial]
     async fn regen_all_partial_failure() {
+        // Реальный инсталлер: partial (failed>0) → exit 1.
         let stub = r#"#!/bin/sh
 echo '{"command":"regen","ok":false,"regenerated":1,"failed":1,"reset_routes":false,"results":[{"name":"a","status":"regenerated"},{"name":"b","status":"error"}]}'
+exit 1
 "#;
         let (_d, vpn) = vpn_with_script(stub);
         let res = vpn.regen_all(false).await.unwrap();
@@ -841,10 +950,11 @@ echo '{"command":"restore","ok":true,"source":"/x.tar.gz","applied":true,"rolled
     #[tokio::test]
     #[serial]
     async fn restore_rolled_back_becomes_error() {
-        // list_backups возвращает 1 запись; stub эмитит rolled_back=true.
+        // list_backups возвращает 1 запись; stub эмитит rolled_back=true → exit 1.
         let (dir, vpn) = vpn_with_script(
             r#"#!/bin/sh
 echo '{"command":"restore","ok":false,"error":"boom","source":"/x.tar.gz","applied":false,"rolled_back":true}'
+exit 1
 "#,
         );
         let bdir = dir.path().join("backups");
@@ -900,12 +1010,15 @@ echo '{"command":"restart","ok":true,"unit":"awg-quick@awg0","active":true}'
     #[tokio::test]
     #[serial]
     async fn repair_module_returns_rc_code() {
+        // Реальный инсталлер: rc=2 (требуется перезагрузка) → exit 1,
+        // но JSON печатается в stdout и парсится независимо от exit code.
         let stub = r#"#!/bin/sh
 [ "$1" = repair-module ] || exit 1
-echo '{"command":"repair-module","ok":true,"module_loaded":true,"service_active":true,"rc":0}'
+echo '{"command":"repair-module","ok":true,"module_loaded":true,"service_active":true,"rc":2}'
+exit 1
 "#;
         let (_d, vpn) = vpn_with_script(stub);
         let out = vpn.repair_module().await.unwrap();
-        assert_eq!(out.rc, 0);
+        assert_eq!(out.rc, 2);
     }
 }

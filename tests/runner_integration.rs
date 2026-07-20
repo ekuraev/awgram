@@ -2,8 +2,7 @@ use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
-use awgram::error::Error;
-use awgram::vpn::runner::{run, run_capture, RunSpec};
+use awgram::vpn::runner::{run, RunSpec};
 use serial_test::serial;
 
 fn make_script(body: &str) -> (tempfile::TempDir, PathBuf) {
@@ -27,13 +26,15 @@ async fn returns_stdout_on_success() {
         timeout_secs: 5,
         extra_env: &[],
     };
-    let out = run(&spec, &["list"]).await.unwrap();
+    let (out, _code) = run(&spec, &["list"]).await.unwrap();
     assert_eq!(out.trim(), "list-ok");
 }
 
 #[tokio::test]
 #[serial] // гонка ETXTBSY: форк параллельного теста удерживает write-fd чужого скрипта до execve
-async fn maps_nonzero_exit_to_script_failed() {
+async fn returns_stdout_and_exit_code_on_nonzero() {
+    // run() возвращает (stdout, exit_code) ВСЕГДА — даже при ненулевом exit.
+    // Это контракт, на котором основан Fix 2 (P1.1): JSON на stdout при exit 1.
     let (_d, script) = make_script("#!/bin/sh\necho boom 1>&2\nexit 3\n");
     let spec = RunSpec {
         script: &script,
@@ -41,14 +42,10 @@ async fn maps_nonzero_exit_to_script_failed() {
         timeout_secs: 5,
         extra_env: &[],
     };
-    let err = run(&spec, &["add"]).await.unwrap_err();
-    match err {
-        Error::ScriptFailed { code, stderr } => {
-            assert_eq!(code, Some(3));
-            assert!(stderr.contains("boom"));
-        }
-        other => panic!("expected ScriptFailed, got {other:?}"),
-    }
+    let (out, code) = run(&spec, &["add"]).await.unwrap();
+    assert_eq!(code, 3);
+    // runner мержит stderr в out при пустом stdout — boom попадает в out.
+    assert!(out.contains("boom"));
 }
 
 #[tokio::test]
@@ -64,12 +61,14 @@ async fn times_out_long_running_script() {
         extra_env: &[],
     };
     let err = run(&spec, &["list"]).await.unwrap_err();
-    assert!(matches!(err, Error::Timeout));
+    assert!(matches!(err, awgram::error::Error::Timeout));
 }
 
 #[tokio::test]
 #[serial] // гонка ETXTBSY: форк параллельного теста удерживает write-fd чужого скрипта до execve
-async fn run_capture_returns_output_on_nonzero() {
+async fn run_returns_output_on_nonzero_exit() {
+    // Бывший run_capture-тест: diagnose/check печатают stdout и при exit 1.
+    // Теперь run() покрывает этот кейс — отдельной функции не нужно.
     let (_d, script) = make_script("#!/bin/sh\necho diag\nexit 1\n");
     let spec = RunSpec {
         script: &script,
@@ -77,7 +76,7 @@ async fn run_capture_returns_output_on_nonzero() {
         timeout_secs: 5,
         extra_env: &[],
     };
-    let (out, code) = run_capture(&spec, &["check"]).await.unwrap();
+    let (out, code) = run(&spec, &["check"]).await.unwrap();
     assert!(out.contains("diag"));
     assert_eq!(code, 1);
 }
