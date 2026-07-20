@@ -22,16 +22,27 @@ tangible on budget VPS hosts.
 
 ## Features
 
-- ➕ **Add a client**: expiry (1d–365d presets or custom), PSK, duplicate
-  guard with recreate; you get back a `.conf` file, a QR code and an import
-  link.
-- 👥 **Client list**: status, ↓/↑ traffic, ⏳ expiry badge; client card,
-  config re-delivery, deletion with confirmation.
+### Clients
+
+- ➕ **Add**: expiry (1d–365d presets or custom), PSK, duplicate guard with
+  recreate; you get back a `.conf`, a QR and an import link.
+- 👥 **List**: status, ↓/↑ traffic, ⏳ expiry badge; client card, config
+  re-delivery, deletion with confirmation.
+- ⚙️ **Modify client parameters**: Keepalive, DNS, AllowedIPs, Endpoint.
 - 🔄 **Config re-issue**: one client or all at once (optionally with route
   reset).
 - 📊 **Stats**: total clients, active, aggregate traffic.
+
+### Server
+
+- 🩺 **Check**: card with service, interface, port, module, clients and
+  firewall status (✅/⚠️/❌).
+- 🔬 **Environment diagnostics**.
+- 🔁 **Restart service** and 🛠 **kernel module repair** (DKMS rebuild).
 - 💾 **Backup/restore** of the AmneziaWG state, archive download to chat.
-- 🩺 **Server check** and 🔬 **environment diagnostics**.
+
+### Settings & security
+
 - ⚙️ **Settings**: RU/EN language (per admin), default PSK, client name
   ID prefix; everything survives restarts (persistent state).
 - 🔒 **Security**: access restricted to `admin_ids`, shell-free manage-script
