@@ -316,11 +316,14 @@ impl Vpn {
         }
     }
 
-    /// Запускает `check` и возвращает stdout независимо от кода выхода
-    /// (ненулевой код означает «обнаружены проблемы», а не ошибку выполнения).
-    pub async fn check(&self) -> Result<String> {
-        let (out, _code) = run_capture(&self.spec(), &["check"]).await?;
-        Ok(out)
+    /// Запускает `check --json` и возвращает структурированный отчёт v5.21.0.
+    /// check печатает JSON в stdout даже при ok:false (обнаружены проблемы);
+    /// run() требует exit 0 — stub в тестах всегда exit 0, реальный скрипт
+    /// выходит 0 на «проблемы найдены» (ненулевой код зарезервирован за
+    /// ошибками выполнения). На всякий случай используем run_capture.
+    pub async fn check(&self) -> Result<wire::CheckReport> {
+        let (out, _code) = run_capture(&self.spec(), &["check", "--json"]).await?;
+        wire::parse_check(&out).map_err(|e| crate::error::Error::Parse(e.to_string()))
     }
 
     /// Запускает `diagnose` и возвращает stdout независимо от кода выхода
@@ -650,11 +653,28 @@ echo '{{"command":"backup","ok":true,"path":"{}","size_bytes":7}}'
     }
 
     #[tokio::test]
-    #[serial] // гонка ETXTBSY: параллельный fork удерживает write-fd чужого fake-скрипта до execve
-    async fn check_returns_output_even_on_problems() {
-        let (_d, vpn) = vpn_with_script("#!/bin/sh\necho 'ПРОБЛЕМЫ'\nexit 1\n");
-        let out = vpn.check().await.unwrap();
-        assert!(out.contains("ПРОБЛЕМЫ"));
+    #[serial]
+    async fn check_returns_report_with_problems() {
+        // check с ok:false (обнаружены проблемы) НЕ ошибка выполнения — возвращаем отчёт.
+        let stub = r#"#!/bin/sh
+echo '{"command":"check","ok":false,"service":{"unit":"awg-quick@awg0","active":false},"interface":{"name":"awg0","present":false},"port":{"number":0,"listening":false},"module":{"loaded":false},"clients":{"total":0},"firewall":{"ufw_active":false,"port_allowed":false}}'
+"#;
+        let (_d, vpn) = vpn_with_script(stub);
+        let report = vpn.check().await.unwrap();
+        assert!(!report.ok);
+        assert!(!report.service.active);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn check_success_report() {
+        let stub = r#"#!/bin/sh
+echo '{"command":"check","ok":true,"service":{"unit":"awg-quick@awg0","active":true},"interface":{"name":"awg0","present":true,"mtu":1280,"addresses":["10.9.9.1/24"]},"port":{"number":39743,"listening":true},"module":{"loaded":true},"clients":{"total":5},"firewall":{"ufw_active":true,"port_allowed":true}}'
+"#;
+        let (_d, vpn) = vpn_with_script(stub);
+        let report = vpn.check().await.unwrap();
+        assert!(report.ok);
+        assert_eq!(report.clients.total, 5);
     }
 
     #[tokio::test]

@@ -827,8 +827,9 @@ async fn callback_handler(
         Action::Check => {
             let waiting = bot.send_message(chat, i18n::check_running(lang)).await.ok();
             match vpn.check().await {
-                Ok(body) => {
-                    let body = truncate_for_message(body);
+                Ok(report) => {
+                    // INTERIM: raw JSON-ish display. Task 12 replaces with i18n::check_card.
+                    let body = truncate_for_message(format!("{report:?}"));
                     bot.send_message(chat, i18n::check_result(lang, &body))
                         .parse_mode(ParseMode::Html)
                         .reply_markup(menu::main_menu(lang))
