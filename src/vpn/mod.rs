@@ -336,6 +336,42 @@ impl Vpn {
         }
         Ok(out)
     }
+
+    /// Меняет один параметр клиента (`modify <name> <param> <value> --json`).
+    /// Имя и param валидируются локально; CLI-имя param даёт `modify_param_cli`.
+    pub async fn modify(
+        &self,
+        name: &str,
+        param: validate::ModifyParam,
+        value: &str,
+    ) -> Result<wire::ModifyOut> {
+        let name =
+            validate::validate_name(name).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
+        let param_cli = validate::modify_param_cli(param);
+        let args = ["modify", &name, param_cli, value, "--json"];
+        let out = run(&self.spec(), &args).await?;
+        wire::parse_modify(&out).map_err(|e| crate::error::Error::Parse(e.to_string()))
+    }
+
+    /// Перезапускает юнит awg-quick (`restart --json --yes`). В v5.21.0 restart
+    /// вызывает confirm_action — ставим AWG_STRICT_CONFIRM=1 и флаг --yes.
+    pub async fn restart(&self) -> Result<wire::RestartOut> {
+        let spec = RunSpec {
+            script: &self.script,
+            sudo_prefix: &self.sudo_prefix,
+            timeout_secs: self.timeout_secs,
+            extra_env: &[("AWG_STRICT_CONFIRM", "1")],
+        };
+        let out = run(&spec, &["restart", "--json", "--yes"]).await?;
+        wire::parse_restart(&out).map_err(|e| crate::error::Error::Parse(e.to_string()))
+    }
+
+    /// Чинит модуль ядра amneziawg (`repair-module --json`). Не деструктивно —
+    /// без AWG_STRICT_CONFIRM. Возвращает код завершения ремонта (0 = чисто).
+    pub async fn repair_module(&self) -> Result<wire::RepairOut> {
+        let out = run(&self.spec(), &["repair-module", "--json"]).await?;
+        wire::parse_repair(&out).map_err(|e| crate::error::Error::Parse(e.to_string()))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -798,5 +834,57 @@ echo '{"command":"restore","ok":false,"error":"boom","source":"/x.tar.gz","appli
         std::fs::write(bdir.join("awg_backup_x.tar.gz"), b"x").unwrap();
         let err = vpn.restore(0).await.unwrap_err();
         assert!(matches!(err, crate::error::Error::RestoreRolledBack), "got {err:?}");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn modify_passes_param_and_value() {
+        // Stub проверяет argv: modify <name> <param> <value> --json
+        const STUB: &str = r#"#!/bin/sh
+[ "$1" = modify ] || exit 1
+[ "$2" = alice ] && [ "$3" = PersistentKeepalive ] && [ "$4" = 25 ] || exit 1
+echo '{"command":"modify","ok":true,"name":"alice","param":"PersistentKeepalive","value":"25"}'
+"#;
+        let (_d, vpn) = vpn_with_script(STUB);
+        let out = vpn
+            .modify("alice", validate::ModifyParam::Keepalive, "25")
+            .await
+            .unwrap();
+        assert_eq!(out.param, "PersistentKeepalive");
+        assert_eq!(out.value, "25");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn modify_rejects_bad_name() {
+        let (_d, vpn) = vpn_with_script("#!/bin/sh\nexit 1\n");
+        assert!(vpn
+            .modify("bad name;rm", validate::ModifyParam::Dns, "1.1.1.1")
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn restart_returns_active_true() {
+        let stub = r#"#!/bin/sh
+[ "$1" = restart ] || exit 1
+echo '{"command":"restart","ok":true,"unit":"awg-quick@awg0","active":true}'
+"#;
+        let (_d, vpn) = vpn_with_script(stub);
+        let out = vpn.restart().await.unwrap();
+        assert!(out.active);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn repair_module_returns_rc_code() {
+        let stub = r#"#!/bin/sh
+[ "$1" = repair-module ] || exit 1
+echo '{"command":"repair-module","ok":true,"module_loaded":true,"service_active":true,"rc":0}'
+"#;
+        let (_d, vpn) = vpn_with_script(stub);
+        let out = vpn.repair_module().await.unwrap();
+        assert_eq!(out.rc, 0);
     }
 }
