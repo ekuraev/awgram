@@ -105,7 +105,7 @@ impl Vpn {
                 name: entry.name,
                 conf_path: entry.conf.unwrap_or_default(),
                 qr_path: entry.qr.unwrap_or_default(),
-                uri: entry.vpnuri.unwrap_or_default(),
+                uri: read_vpnuri_content(&entry.vpnuri.unwrap_or_default()),
             }),
             wire::AddStatus::Exists => Err(crate::error::Error::ClientExists(name)),
             wire::AddStatus::InvalidName => {
@@ -176,7 +176,7 @@ impl Vpn {
                 name: entry.name,
                 conf_path: entry.conf.unwrap_or_default(),
                 qr_path: entry.qr.unwrap_or_default(),
-                uri: entry.vpnuri.unwrap_or_default(),
+                uri: read_vpnuri_content(&entry.vpnuri.unwrap_or_default()),
             }),
             wire::RegenStatus::NotFound => Err(crate::error::Error::ClientNotFound(name)),
             _ => Err(crate::error::Error::Parse("regen: ошибка".into())),
@@ -457,6 +457,21 @@ impl Vpn {
     }
 }
 
+/// Читает содержимое `.vpnuri`-файла (готовую ссылку `vpn://…`) по пути из
+/// JSON-конверта v5.21.0. Поле `vpnuri` в конверте — это ПУТЬ к файлу, а не
+/// сама ссылка; `send_client_files` показывает `AddResult.uri` как ссылку,
+/// поэтому без чтения файла пользователь получал серверный путь вместо vpn://.
+/// Пустой путь / отсутствующий файл → пустая строка (qr/vpnuri опциональны).
+fn read_vpnuri_content(path: &str) -> String {
+    if path.is_empty() {
+        return String::new();
+    }
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct BackupFile {
     pub name: String,
@@ -557,18 +572,60 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn add_success_takes_paths_from_json() {
-        // Stub эмитит add-конверт с путями — add() берёт их, не угадывая по имени.
-        let stub = r#"#!/bin/sh
+        // Stub эмитит add-конверт с путями — add() берёт их из JSON.
+        // P2.1: vpnuri в конверте — ПУТЬ к файлу; add() читает его содержимое
+        // (готовую ссылку vpn://…), а не отдаёт путь как ссылку.
+        let dir = tempfile::tempdir().unwrap();
+        let vpnuri_path = dir.path().join("alice.vpnuri");
+        let vpnuri_str = vpnuri_path.to_string_lossy().to_string();
+        std::fs::write(&vpnuri_path, "vpn://amnezia/x?k=secret\n").unwrap();
+        let stub = format!(
+            r#"#!/bin/sh
 [ "$1" = add ] || exit 1
-echo '{"command":"add","ok":true,"added":1,"failed":0,"applied":true,"results":[{"name":"alice","status":"created","conf":"/tmp/zz/alice.conf","qr":"/tmp/zz/alice.png","vpnuri":"/tmp/zz/alice.vpnuri","expires_at":null}]}'
-"#;
-        let (dir, vpn) = vpn_with_script(stub);
-        // Файлы не обязаны существовать — add() не делает stat для путей из JSON.
+echo '{{"command":"add","ok":true,"added":1,"failed":0,"applied":true,"results":[{{"name":"alice","status":"created","conf":"/tmp/zz/alice.conf","qr":"/tmp/zz/alice.png","vpnuri":"{vpnuri_str}","expires_at":null}}]}}'
+"#,
+        );
+        let script_path = dir.path().join("stub.sh");
+        std::fs::write(&script_path, &stub).unwrap();
+        let mut perm = std::fs::metadata(&script_path).unwrap().permissions();
+        perm.set_mode(0o755);
+        std::fs::set_permissions(&script_path, perm).unwrap();
+        let vpn = Vpn {
+            script: script_path,
+            sudo_prefix: String::new(),
+            timeout_secs: 5,
+            clients_dir: dir.path().to_path_buf(),
+        };
         let res = vpn.add("alice", None, false).await.unwrap();
         assert_eq!(res.conf_path, "/tmp/zz/alice.conf");
         assert_eq!(res.qr_path, "/tmp/zz/alice.png");
-        assert_eq!(res.uri, "/tmp/zz/alice.vpnuri");
-        drop(dir);
+        // uri — СОДЕРЖИМОЕ .vpnuri-файла, а не путь к нему.
+        assert_eq!(res.uri, "vpn://amnezia/x?k=secret");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn add_uri_empty_when_vpnuri_file_missing() {
+        // qr/vpnuri опциональны в конверте (qrencode может отсутствовать).
+        // Если vpnuri-путь указан, но файла нет → uri = "" (не путь, не ошибка).
+        let dir = tempfile::tempdir().unwrap();
+        let stub = r#"#!/bin/sh
+[ "$1" = add ] || exit 1
+echo '{"command":"add","ok":true,"added":1,"failed":0,"applied":true,"results":[{"name":"alice","status":"created","conf":"/tmp/zz/alice.conf","qr":null,"vpnuri":"/nonexistent/alice.vpnuri","expires_at":null}]}'
+"#;
+        let script_path = dir.path().join("stub.sh");
+        std::fs::write(&script_path, stub).unwrap();
+        let mut perm = std::fs::metadata(&script_path).unwrap().permissions();
+        perm.set_mode(0o755);
+        std::fs::set_permissions(&script_path, perm).unwrap();
+        let vpn = Vpn {
+            script: script_path,
+            sudo_prefix: String::new(),
+            timeout_secs: 5,
+            clients_dir: dir.path().to_path_buf(),
+        };
+        let res = vpn.add("alice", None, false).await.unwrap();
+        assert_eq!(res.uri, "");
     }
 
     #[tokio::test]
@@ -937,7 +994,7 @@ exit 1
     #[serial]
     async fn restore_success() {
         let stub = r#"#!/bin/sh
-echo '{"command":"restore","ok":true,"source":"/x.tar.gz","applied":true,"rolled_back":false,"restored":{"server_conf":true,"clients":3,"keys":5}}'
+echo '{"command":"restore","ok":true,"source":"/x.tar.gz","applied":true,"rolled_back":false,"restored":{"server_conf":true,"clients":3,"keys":true}}'
 "#;
         let (dir, vpn) = vpn_with_script(stub);
         // restore требует list_backups для индекса — подготовим один.
