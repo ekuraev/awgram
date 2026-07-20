@@ -81,11 +81,11 @@ The bot is a layer on top of `manage_amneziawg.sh` from
 and depends directly on its interface.
 
 - **Supported installer version:
-  [v5.20.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.20.0)**
-  (tested against it; newer versions are at your own risk until this line is
-  updated).
-- Subcommands used: `add`, `remove`, `list`, `stats`, `regen`, `backup`,
-  `restore`, `check`, `diagnose` — all with `--json`.
+  [v5.21.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.21.0)**
+  (tested against it; older v5.20.x releases are not supported — the bot uses
+  the extended `--json` interface for management commands introduced in v5.21.0).
+- Subcommands used: `add`, `remove`, `list`, `stats`, `regen`, `modify`,
+  `backup`, `restore`, `check`, `restart`, `repair-module` — all with `--json`.
 
 ## Building from source
 

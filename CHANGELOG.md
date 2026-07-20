@@ -7,19 +7,61 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
 
 ### 🇷🇺 Русский
 
+#### ⚠️ Breaking
+
+- Минимальная версия инсталлера поднята до
+  [v5.21.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.21.0).
+  Бот переведён на расширенный `--json`-интерфейс команд управления
+  (`add`/`remove`/`regen`/`modify`/`backup`/`restore`/`check`/`restart`/
+  `repair-module`), которого нет в v5.20.x. На действующем VPS обновите
+  инсталлер: `awgram-setup update` (или `bash install_amneziawg.sh --force`).
+
+#### Добавлено
+
+- 🛠 **Изменение параметров клиента** (`modify`): Keepalive, DNS, AllowedIPs,
+  Endpoint — кнопка «⚙️ Изменить» в карточке клиента.
+- 🔁 **Перезапуск сервиса** (`restart`) и 🛠 **починка модуля** (`repair-module`)
+  — новый ряд обслуживания в главном меню.
+- 🩺 **Структурированная карточка проверки**: статус сервиса, интерфейса,
+  порта, модуля, клиентов и фаервола — вместо сырого `<pre>` с текстом.
+- Точные сообщения об ошибках: «клиент не найден», «восстановление откачено».
+
 #### Изменено
 
-- Подтверждена совместимость с инсталлером
-  [v5.20.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.20.0);
-  поддерживаемая версия в README обновлена (была v5.19.2).
+- Убраны хрупкие эвристики: fingerprint `.conf` для обнаружения «тихого
+  пропуска» при `add`, поиск новейшего бэкапа по mtime, угадывание путей
+  `.conf`/`.png`/`.vpnuri` по имени — теперь всё из JSON-ответа скрипта.
+- Деструктивные команды (`remove`/`restore`/`restart`) запускаются с
+  `AWG_STRICT_CONFIRM=1` + `--yes` (рекомендация маинтейнера инсталлера).
 
 ### 🇬🇧 English
 
+#### ⚠️ Breaking
+
+- Minimum installer version bumped to
+  [v5.21.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.21.0).
+  The bot now uses the extended `--json` interface for management commands
+  (`add`/`remove`/`regen`/`modify`/`backup`/`restore`/`check`/`restart`/
+  `repair-module`), unavailable in v5.20.x. On a running VPS, update the
+  installer: `awgram-setup update` (or `bash install_amneziawg.sh --force`).
+
+#### Added
+
+- 🛠 **Modify client parameters** (`modify`): Keepalive, DNS, AllowedIPs,
+  Endpoint — "⚙️ Modify" button in the client card.
+- 🔁 **Restart service** (`restart`) and 🛠 **repair module** (`repair-module`)
+  — new maintenance row in the main menu.
+- 🩺 **Structured check card**: service, interface, port, module, clients and
+  firewall status — instead of raw `<pre>` text.
+- Precise error messages: "client not found", "restore rolled back".
+
 #### Changed
 
-- Confirmed compatibility with installer
-  [v5.20.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.20.0);
-  the supported version in README has been bumped (was v5.19.2).
+- Removed fragile heuristics: `.conf` fingerprinting for silent-skip detection
+  on `add`, newest-backup-by-mtime lookup, path guessing for
+  `.conf`/`.png`/`.vpnuri` — now all from JSON response.
+- Destructive commands (`remove`/`restore`/`restart`) run with
+  `AWG_STRICT_CONFIRM=1` + `--yes` (recommended by the installer maintainer).
 
 ## [0.2.0] — 2026-07-15
 
