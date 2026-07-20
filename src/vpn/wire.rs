@@ -159,8 +159,9 @@ pub struct RestoreCounts {
     pub server_conf: bool,
     #[serde(default)]
     pub clients: u32,
+    /// v5.21.0: "keys": true|false (наличие *.private в KEYS_DIR), НЕ количество.
     #[serde(default)]
-    pub keys: u32,
+    pub keys: bool,
 }
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct RestoreOut {
@@ -388,12 +389,21 @@ mod tests {
 
     #[test]
     fn parse_restore_success() {
-        let s = r#"{"ok":true,"source":"/x.tar.gz","applied":true,"rolled_back":false,"restored":{"server_conf":true,"clients":3,"keys":5}}"#;
+        // v5.21.0: restored.keys — boolean (наличие *.private), НЕ количество.
+        let s = r#"{"ok":true,"source":"/x.tar.gz","applied":true,"rolled_back":false,"restored":{"server_conf":true,"clients":3,"keys":true}}"#;
         let o = parse_restore(s).unwrap();
         assert!(o.applied);
         assert!(!o.rolled_back);
         assert_eq!(o.restored.clients, 3);
-        assert_eq!(o.restored.keys, 5);
+        assert!(o.restored.keys);
+    }
+
+    #[test]
+    fn parse_restore_keys_defaults_false_when_missing() {
+        // Аддитивный контракт: keys может отсутствовать → default false.
+        let s = r#"{"ok":true,"source":"/x","restored":{"server_conf":true,"clients":0}}"#;
+        let o = parse_restore(s).unwrap();
+        assert!(!o.restored.keys);
     }
 
     #[test]
