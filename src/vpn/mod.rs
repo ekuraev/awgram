@@ -680,10 +680,7 @@ exit 1
         let (_d, vpn) = vpn_with_script(stub);
         let err = vpn.add("alice", None, false).await.unwrap_err();
         // status:Unknown → Parse (не ScriptFailed: stdout есть, конверт распарсен).
-        assert!(
-            matches!(err, crate::error::Error::Parse(_)),
-            "got {err:?}"
-        );
+        assert!(matches!(err, crate::error::Error::Parse(_)), "got {err:?}");
     }
 
     #[tokio::test]
@@ -698,10 +695,7 @@ exit 1
         let (_d, vpn) = vpn_with_script(stub);
         let err = vpn.add("alice", None, false).await.unwrap_err();
         assert!(
-            matches!(
-                err,
-                crate::error::Error::ScriptFailed { code: Some(1), .. }
-            ),
+            matches!(err, crate::error::Error::ScriptFailed { code: Some(1), .. }),
             "got {err:?}"
         );
     }

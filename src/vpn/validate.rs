@@ -158,9 +158,7 @@ fn endpoint_re() -> &'static Regex {
     // парными скобками. Инсталлер требует именно [IPv6]:port — непарные скобки
     // или голый IPv6 с двоеточиями неотличимы от host:port и парсерятся бы
     // неверно. Запрещаем shell-метасимволы.
-    RE.get_or_init(|| {
-        Regex::new(r"^(?:\[[0-9a-fA-F:.]+\]|[A-Za-z0-9._-]+):[0-9]{1,5}$").unwrap()
-    })
+    RE.get_or_init(|| Regex::new(r"^(?:\[[0-9a-fA-F:.]+\]|[A-Za-z0-9._-]+):[0-9]{1,5}$").unwrap())
 }
 
 /// Endpoint в формате host:port или [IPv6]:port. Порт проверяется в диапазоне
@@ -173,7 +171,8 @@ pub fn parse_endpoint(input: &str) -> Result<String, ValidateError> {
     // Извлекаем порт: для [IPv6]:port — после ']'; для host:port — после ':'.
     let port_str = if v.contains(']') {
         // [IPv6]:port → берём часть после ']'
-        v.rsplit_once(']').map(|(_, rest)| rest.trim_start_matches(':'))
+        v.rsplit_once(']')
+            .map(|(_, rest)| rest.trim_start_matches(':'))
     } else {
         // host:port → после последнего ':'
         v.rsplit_once(':').map(|(_, port)| port)
@@ -408,7 +407,13 @@ mod tests {
     #[test]
     fn endpoint_rejects_port_out_of_range() {
         // P2.4: инсталлер требует порт 1..=65535 (manage.sh:1034).
-        for bad in ["host:0", "host:65536", "host:99999", "1.2.3.4:0", "[::1]:99999"] {
+        for bad in [
+            "host:0",
+            "host:65536",
+            "host:99999",
+            "1.2.3.4:0",
+            "[::1]:99999",
+        ] {
             assert_eq!(
                 parse_endpoint(bad),
                 Err(ValidateError::BadExpiry),
@@ -420,7 +425,12 @@ mod tests {
     #[test]
     fn endpoint_rejects_unpaired_ipv6_brackets() {
         // P2.4: инсталлер требует [IPv6]:port с парными скобками.
-        for bad in ["[::1:51820", "::1]:51820", "[::1]51820", "2606:4700::1:51820"] {
+        for bad in [
+            "[::1:51820",
+            "::1]:51820",
+            "[::1]51820",
+            "2606:4700::1:51820",
+        ] {
             assert_eq!(
                 parse_endpoint(bad),
                 Err(ValidateError::BadExpiry),
