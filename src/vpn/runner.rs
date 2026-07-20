@@ -35,29 +35,13 @@ fn build_cmd(spec: &RunSpec<'_>, args: &[&str]) -> Command {
     cmd
 }
 
-pub async fn run(spec: &RunSpec<'_>, args: &[&str]) -> Result<String> {
-    let mut cmd = build_cmd(spec, args);
-    let child = cmd.spawn()?;
-    let dur = Duration::from_secs(spec.timeout_secs);
-
-    let output = match timeout(dur, child.wait_with_output()).await {
-        Ok(res) => res?,
-        Err(_) => return Err(Error::Timeout), // child убивается через kill_on_drop
-    };
-
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-    } else {
-        Err(Error::ScriptFailed {
-            code: output.status.code(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        })
-    }
-}
-
-/// Как `run`, но возвращает stdout и код выхода независимо от успеха.
-/// Тайм-аут по-прежнему → Error::Timeout. Нужен для `check` (код 1 = «проблемы», не ошибка).
-pub async fn run_capture(spec: &RunSpec<'_>, args: &[&str]) -> Result<(String, i32)> {
+/// Запускает скрипт и возвращает `(stdout, exit_code)` ВСЕГДА — даже при
+/// ненулевом exit code. Это критично для JSON-контракта manage v5.21.0:
+/// скрипт печатает JSON в stdout и ЗАТЕМ выходит с кодом 1 для легитимных
+/// статусов (exists/not_found/partial/rollback/repair rc). Отбрасывание
+/// stdout на non-zero делало все status-ветки в add/remove/regen/restore
+/// недостижимыми в проде. Timeout по-прежнему → Error::Timeout.
+pub async fn run(spec: &RunSpec<'_>, args: &[&str]) -> Result<(String, i32)> {
     let mut cmd = build_cmd(spec, args);
     let child = cmd.spawn()?;
     let dur = Duration::from_secs(spec.timeout_secs);
@@ -102,7 +86,7 @@ mod tests {
             timeout_secs: 5,
             extra_env: &[("AWG_STRICT_CONFIRM", "1")],
         };
-        let out = run(&spec, &[]).await.unwrap();
+        let (out, _) = run(&spec, &[]).await.unwrap();
         assert_eq!(out, "1");
     }
 
@@ -119,7 +103,7 @@ mod tests {
             timeout_secs: 5,
             extra_env: &[],
         };
-        let out = run(&spec, &[]).await.unwrap();
+        let (out, _) = run(&spec, &[]).await.unwrap();
         assert_eq!(out, "unset");
     }
 }
