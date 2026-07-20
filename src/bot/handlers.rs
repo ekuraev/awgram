@@ -547,13 +547,14 @@ async fn callback_handler(
                 .await
                 .ok();
             match vpn.regen_all(reset_routes).await {
-                Ok(true) => {
+                Ok(crate::vpn::RegenAllOutcome::NoClients)
+                | Ok(crate::vpn::RegenAllOutcome::Done(_)) => {
                     bot.send_message(chat, i18n::regen_all_done(lang))
                         .reply_markup(menu::main_menu(lang))
                         .parse_mode(ParseMode::Html)
                         .await?;
                 }
-                Ok(false) => {
+                Ok(crate::vpn::RegenAllOutcome::Partial { .. }) => {
                     bot.send_message(chat, i18n::regen_all_partial(lang))
                         .reply_markup(menu::main_menu(lang))
                         .parse_mode(ParseMode::Html)

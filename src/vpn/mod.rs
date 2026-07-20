@@ -144,24 +144,35 @@ impl Vpn {
         }
     }
 
-    /// Перевыпускает файлы всех клиентов. `Ok(false)` — скрипт завершился с
-    /// rc ≠ 0: часть клиентов могла быть перевыпущена («завершено с
-    /// предупреждениями»), а не отказ операции. Таймаут ×3 — массовый regen
-    /// пропорционален числу клиентов.
-    pub async fn regen_all(&self, reset_routes: bool) -> Result<bool> {
+    /// Перевыпускает файлы всех клиентов. Различает «нет клиентов» (no-op),
+    /// полный успех и частичный провал — UI показывает разные сообщения.
+    /// Таймаут ×3 — массовый regen пропорционален числу клиентов.
+    pub async fn regen_all(&self, reset_routes: bool) -> Result<RegenAllOutcome> {
         let spec = RunSpec {
             script: &self.script,
             sudo_prefix: &self.sudo_prefix,
             timeout_secs: self.timeout_secs * 3,
-            extra_env: &[],
+            extra_env: &[("AWG_STRICT_CONFIRM", "1")],
         };
-        let args: &[&str] = if reset_routes {
-            &["regen", "--reset-routes"]
+        let mut args: Vec<&str> = vec!["regen"];
+        if reset_routes {
+            args.push("--reset-routes");
+        }
+        args.push("--json");
+        args.push("--yes");
+        let out = run(&spec, &args).await?;
+        let parsed =
+            wire::parse_regen(&out).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
+        if parsed.regenerated == 0 && parsed.failed == 0 {
+            Ok(RegenAllOutcome::NoClients)
+        } else if parsed.failed == 0 {
+            Ok(RegenAllOutcome::Done(parsed.regenerated))
         } else {
-            &["regen"]
-        };
-        let (_out, code) = run_capture(&spec, args).await?;
-        Ok(code == 0)
+            Ok(RegenAllOutcome::Partial {
+                ok: parsed.regenerated,
+                failed: parsed.failed,
+            })
+        }
     }
 
     /// Повторная выдача уже созданных файлов клиента из `clients_dir` (для кнопки «📄 Конфиг»
@@ -241,31 +252,68 @@ impl Vpn {
         Ok(out)
     }
 
-    /// Запускает `backup` и возвращает свежесозданный архив (самый новый по mtime).
+    /// Запускает `backup` и возвращает свежесозданный архив.
+    /// Путь берётся из JSON-конверта v5.21.0 (`BackupOut.path`), а не
+    /// угадывается как «новейший .tar.gz по mtime».
     pub async fn backup(&self) -> Result<BackupFile> {
-        run(&self.spec(), &["backup"]).await?;
-        self.list_backups()?
-            .into_iter()
-            .next()
-            .ok_or_else(|| crate::error::Error::Parse("бэкап не найден после создания".into()))
+        let out = run(&self.spec(), &["backup", "--json"]).await?;
+        let parsed =
+            wire::parse_backup(&out).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
+        let path = std::path::PathBuf::from(&parsed.path);
+        let name = path
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| parsed.path.clone());
+        let meta = std::fs::metadata(&path)
+            .map_err(|e| crate::error::Error::Parse(format!("backup stat: {e}")))?;
+        let size = parsed.size_bytes.unwrap_or(meta.len());
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        Ok(BackupFile { name, path, size, mtime })
     }
 
     /// Восстанавливает из бэкапа по индексу в списке `list_backups()` (0 = самый новый).
+    /// Парсит JSON-конверт: `rolled_back:true → RestoreRolledBack`,
+    /// `ok:false && !rolled_back → ScriptFailed`. `AWG_STRICT_CONFIRM=1` + `--yes`.
     pub async fn restore(&self, index: usize) -> Result<()> {
         let backups = self.list_backups()?;
         let bf = backups
             .get(index)
             .ok_or_else(|| crate::error::Error::Parse("бэкап не найден".into()))?;
-        // basename-валидация: имя без разделителей пути и по шаблону
         if bf.name.contains('/')
             || !bf.name.starts_with("awg_backup_")
             || !bf.name.ends_with(".tar.gz")
         {
             return Err(crate::error::Error::Parse("некорректное имя бэкапа".into()));
         }
+        let spec = RunSpec {
+            script: &self.script,
+            sudo_prefix: &self.sudo_prefix,
+            timeout_secs: self.timeout_secs,
+            extra_env: &[("AWG_STRICT_CONFIRM", "1")],
+        };
         let path = bf.path.to_string_lossy().into_owned();
-        run(&self.spec(), &["restore", &path]).await?;
-        Ok(())
+        let out = run(&spec, &["restore", &path, "--json", "--yes"]).await?;
+        let parsed =
+            wire::parse_restore(&out).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
+        if parsed.ok == Some(true) {
+            Ok(())
+        } else if parsed.rolled_back {
+            Err(crate::error::Error::RestoreRolledBack)
+        } else {
+            tracing::error!(
+                error = ?parsed.error,
+                "restore провалился без отката"
+            );
+            Err(crate::error::Error::ScriptFailed {
+                code: None,
+                stderr: parsed.error.unwrap_or_else(|| "restore failed".into()),
+            })
+        }
     }
 
     /// Запускает `check` и возвращает stdout независимо от кода выхода
@@ -293,6 +341,18 @@ pub struct BackupFile {
     pub path: PathBuf,
     pub size: u64,
     pub mtime: i64,
+}
+
+/// Результат массового regen. Различает «нет клиентов» (no-op), полный успех
+/// и частичный провал — UI показывает разные сообщения.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RegenAllOutcome {
+    /// Клиентов нет — скрипт завершился как empty no-op.
+    NoClients,
+    /// Все N клиентов перевыпущены успешно.
+    Done(u32),
+    /// Часть перевыпущена, часть провалилась (скрипт вернул ok:false).
+    Partial { ok: u32, failed: u32 },
 }
 
 #[cfg(test)]
@@ -543,21 +603,28 @@ echo '{"command":"regen","ok":true,"regenerated":0,"failed":1,"results":[{"name"
     }
 
     #[tokio::test]
-    #[serial] // гонка ETXTBSY: параллельный fork удерживает write-fd чужого fake-скрипта до execve
-    async fn backup_returns_newest_archive() {
-        // заглушка создаёт файл в clients_dir/backups/
-        let (dir, vpn) = vpn_with_script(
-            "#!/bin/sh\nmkdir -p \"$(dirname \"$0\")/../backups\" 2>/dev/null; true\n",
+    #[serial]
+    async fn backup_takes_path_from_json() {
+        // Stub создаёт реальный файл по пути из JSON (BackupFile делает stat).
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("awg_backup_x.tar.gz");
+        std::fs::write(&target, b"archive").unwrap();
+        let target_str = target.to_string_lossy().to_string();
+        let stub = format!(
+            r#"#!/bin/sh
+[ "$1" = backup ] || exit 1
+echo '{{"command":"backup","ok":true,"path":"{}","size_bytes":7}}'
+"#,
+            target_str
         );
-        let bdir = dir.path().join("backups");
-        std::fs::create_dir_all(&bdir).unwrap();
-        std::fs::write(
-            bdir.join("awg_backup_2026-01-01_00-00-00.000Z.tar.gz"),
-            b"x",
-        )
-        .unwrap();
+        let (dir2, vpn) = vpn_with_script(&stub);
+        // BackupFile ищет файл по path из JSON; clients_dir тут dir2.path(),
+        // но backup() использует путь из ответа, а не clients_dir.
+        let _ = dir2;
         let bf = vpn.backup().await.unwrap();
-        assert!(bf.name.ends_with(".tar.gz"));
+        assert_eq!(bf.name, "awg_backup_x.tar.gz");
+        assert_eq!(bf.size, 7);
+        assert!(bf.path.ends_with("awg_backup_x.tar.gz"));
     }
 
     #[test]
@@ -616,28 +683,100 @@ echo '{"command":"regen","ok":true,"regenerated":0,"failed":1,"results":[{"name"
     }
 
     #[tokio::test]
-    #[serial] // гонка ETXTBSY: параллельный fork удерживает write-fd чужого fake-скрипта до execve
-    async fn regen_all_true_on_success_false_on_partial() {
-        let (_d, vpn) = vpn_with_script("#!/bin/sh\nexit 0\n");
-        assert!(vpn.regen_all(false).await.unwrap());
-
-        let (_d2, vpn2) = vpn_with_script("#!/bin/sh\necho warn\nexit 1\n");
-        assert!(!vpn2.regen_all(false).await.unwrap());
+    #[serial]
+    async fn regen_all_no_clients_is_noop() {
+        let stub = r#"#!/bin/sh
+[ "$1" = regen ] || exit 1
+echo '{"command":"regen","ok":true,"regenerated":0,"failed":0,"reset_routes":false,"results":[]}'
+"#;
+        let (_d, vpn) = vpn_with_script(stub);
+        // Теперь метод должен сигнализировать «нет клиентов» — см. изменение сигнатуры.
+        let res = vpn.regen_all(false).await.unwrap();
+        assert!(matches!(res, RegenAllOutcome::NoClients));
     }
 
     #[tokio::test]
-    #[serial] // гонка ETXTBSY: параллельный fork удерживает write-fd чужого fake-скрипта до execve
+    #[serial]
+    async fn regen_all_success() {
+        let stub = r#"#!/bin/sh
+echo '{"command":"regen","ok":true,"regenerated":3,"failed":0,"reset_routes":false,"results":[{"name":"a","status":"regenerated"},{"name":"b","status":"regenerated"}]}'
+"#;
+        let (_d, vpn) = vpn_with_script(stub);
+        let res = vpn.regen_all(false).await.unwrap();
+        assert!(matches!(res, RegenAllOutcome::Done(n) if n == 3));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn regen_all_partial_failure() {
+        let stub = r#"#!/bin/sh
+echo '{"command":"regen","ok":false,"regenerated":1,"failed":1,"reset_routes":false,"results":[{"name":"a","status":"regenerated"},{"name":"b","status":"error"}]}'
+"#;
+        let (_d, vpn) = vpn_with_script(stub);
+        let res = vpn.regen_all(false).await.unwrap();
+        assert!(matches!(res, RegenAllOutcome::Partial { ok: 1, failed: 1 }));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn regen_all_success_via_json() {
+        let (_d, vpn) = vpn_with_script(
+            r#"#!/bin/sh
+echo '{"command":"regen","ok":true,"regenerated":2,"failed":0,"reset_routes":false,"results":[]}'
+"#,
+        );
+        assert!(matches!(
+            vpn.regen_all(false).await.unwrap(),
+            RegenAllOutcome::Done(2)
+        ));
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn regen_all_passes_reset_routes_flag() {
-        // Стаб успешен ТОЛЬКО при наличии --reset-routes среди аргументов.
-        const STUB: &str = "#!/bin/sh\nfor a in \"$@\"; do\n  [ \"$a\" = \"--reset-routes\" ] && exit 0\ndone\nexit 1\n";
-        let (_d, vpn) = vpn_with_script(STUB);
-        assert!(
-            vpn.regen_all(true).await.unwrap(),
-            "с reset_routes=true флаг должен дойти до скрипта"
+        const STUB2: &str = r#"#!/bin/sh
+for a in "$@"; do
+  if [ "$a" = "--reset-routes" ]; then
+    echo '{"command":"regen","ok":true,"regenerated":1,"failed":0,"reset_routes":true,"results":[]}'
+    exit 0
+  fi
+done
+exit 1
+"#;
+        let (_d2, vpn2) = vpn_with_script(STUB2);
+        assert!(matches!(
+            vpn2.regen_all(true).await.unwrap(),
+            RegenAllOutcome::Done(1)
+        ));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn restore_success() {
+        let stub = r#"#!/bin/sh
+echo '{"command":"restore","ok":true,"source":"/x.tar.gz","applied":true,"rolled_back":false,"restored":{"server_conf":true,"clients":3,"keys":5}}'
+"#;
+        let (dir, vpn) = vpn_with_script(stub);
+        // restore требует list_backups для индекса — подготовим один.
+        let bdir = dir.path().join("backups");
+        std::fs::create_dir_all(&bdir).unwrap();
+        std::fs::write(bdir.join("awg_backup_x.tar.gz"), b"x").unwrap();
+        vpn.restore(0).await.unwrap();
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn restore_rolled_back_becomes_error() {
+        // list_backups возвращает 1 запись; stub эмитит rolled_back=true.
+        let (dir, vpn) = vpn_with_script(
+            r#"#!/bin/sh
+echo '{"command":"restore","ok":false,"error":"boom","source":"/x.tar.gz","applied":false,"rolled_back":true}'
+"#,
         );
-        assert!(
-            !vpn.regen_all(false).await.unwrap(),
-            "без reset_routes флага быть не должно"
-        );
+        let bdir = dir.path().join("backups");
+        std::fs::create_dir_all(&bdir).unwrap();
+        std::fs::write(bdir.join("awg_backup_x.tar.gz"), b"x").unwrap();
+        let err = vpn.restore(0).await.unwrap_err();
+        assert!(matches!(err, crate::error::Error::RestoreRolledBack), "got {err:?}");
     }
 }
