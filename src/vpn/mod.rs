@@ -1,6 +1,7 @@
 pub mod model;
 pub mod runner;
 pub mod validate;
+pub mod wire;
 
 use std::path::PathBuf;
 
