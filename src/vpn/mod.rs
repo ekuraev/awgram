@@ -385,8 +385,20 @@ impl Vpn {
     /// check печатает JSON в stdout даже при ok:false (обнаружены проблемы);
     /// run() возвращает stdout независимо от exit code — парсим конверт всегда
     /// (ok:false — это «проблемы найдены», а не ошибка выполнения).
+    /// НО: при фатальной ошибке (die до check_server) инсталлер возвращает
+    /// аварийный конверт {"ok":false,"error":"...","rc":N} без полей отчёта.
+    /// Все блоки CheckReport имеют defaults → без этой проверки такой конверт
+    /// десериализуется в фиктивный отчёт (неактивный сервис, ноль клиентов),
+    /// и бот радостно покажет пользователю «всё сломано, но это норма».
     pub async fn check(&self) -> Result<wire::CheckReport> {
         let (out, _code) = run(&self.spec(), &["check", "--json"]).await?;
+        if let Some(env) = wire::try_error_envelope(&out) {
+            tracing::error!(error = ?env.error, rc = env.rc, "check: аварийный конверт");
+            return Err(crate::error::Error::ScriptFailed {
+                code: Some(env.rc),
+                stderr: env.error,
+            });
+        }
         wire::parse_check(&out).map_err(|e| crate::error::Error::Parse(e.to_string()))
     }
 
@@ -444,8 +456,18 @@ impl Vpn {
 
     /// Чинит модуль ядра amneziawg (`repair-module --json`). Не деструктивно —
     /// без AWG_STRICT_CONFIRM. Возвращает код завершения ремонта (0 = чисто).
+    /// P2.3: отдельный timeout 300с — DKMS rebuild + установка kernel headers
+    /// заявлены инсталлером как операция до 5 минут (manage.sh: «может занять
+    /// до 5 минут — DKMS rebuild»). Общий timeout 60с обрывал бы восстановление
+    /// посреди apt-установки headers.
     pub async fn repair_module(&self) -> Result<wire::RepairOut> {
-        let (out, code) = run(&self.spec(), &["repair-module", "--json"]).await?;
+        let spec = RunSpec {
+            script: &self.script,
+            sudo_prefix: &self.sudo_prefix,
+            timeout_secs: 300,
+            extra_env: &[],
+        };
+        let (out, code) = run(&spec, &["repair-module", "--json"]).await?;
         // repair-module печатает JSON с rc:1/2 при exit 1 — парсим всегда.
         if out.trim().is_empty() {
             return Err(crate::error::Error::ScriptFailed {
@@ -893,6 +915,25 @@ echo '{"command":"check","ok":true,"service":{"unit":"awg-quick@awg0","active":t
         let report = vpn.check().await.unwrap();
         assert!(report.ok);
         assert_eq!(report.clients.total, 5);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn check_returns_error_on_fatal_envelope() {
+        // P2.2: при фатальной ошибке (die до check_server) инсталлер возвращает
+        // аварийный конверт {"ok":false,"error":...,"rc":N} без полей отчёта.
+        // Без try_error_envelope он десериализуется в фиктивный отчёт (все defaults)
+        // → бот показывает «сервис неактивен, 0 клиентов» как нормальный результат.
+        let stub = r#"#!/bin/sh
+echo '{"command":"check","ok":false,"error":"config not found","rc":1}'
+exit 1
+"#;
+        let (_d, vpn) = vpn_with_script(stub);
+        let err = vpn.check().await.unwrap_err();
+        assert!(
+            matches!(err, crate::error::Error::ScriptFailed { code: Some(1), .. }),
+            "expected ScriptFailed for fatal envelope, got {err:?}"
+        );
     }
 
     #[tokio::test]
