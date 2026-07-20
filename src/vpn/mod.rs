@@ -58,7 +58,7 @@ impl Vpn {
     pub async fn add(&self, name: &str, expires: Option<&str>, psk: bool) -> Result<AddResult> {
         let name =
             validate::validate_name(name).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
-        let mut args: Vec<String> = vec!["add".into(), name.clone()];
+        let mut args: Vec<String> = vec!["add".into(), name.clone(), "--json".into()];
         if let Some(exp) = expires {
             let exp = validate::validate_expiry(exp)
                 .map_err(|e| crate::error::Error::Parse(e.to_string()))?;
@@ -68,34 +68,80 @@ impl Vpn {
             args.push("--psk".into());
         }
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-        // Upstream `manage add` при существующем имени пропускает клиента с warning,
-        // но завершается с rc 0 («тихий» no-op). Отличаем его от успеха по факту
-        // изменения `<name>.conf`: нетронутый старый файл = клиента не создали.
-        let conf = self.clients_dir.join(format!("{name}.conf"));
-        let before = conf_fingerprint(&conf);
-        // `add` prints no JSON — just human-readable logs. The created files are
-        // read back from `clients_dir` afterwards.
-        run(&self.spec(), &arg_refs).await?;
-        if before.is_some() && conf_fingerprint(&conf) == before {
-            return Err(crate::error::Error::ClientExists(name));
+        let out = run(&self.spec(), &arg_refs).await?;
+        let parsed = wire::parse_add(&out).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
+        let entry = parsed
+            .results
+            .into_iter()
+            .next()
+            .ok_or_else(|| crate::error::Error::Parse("add: пустой results[]".into()))?;
+        match entry.status {
+            wire::AddStatus::Created => Ok(AddResult {
+                name: entry.name,
+                conf_path: entry.conf.unwrap_or_default(),
+                qr_path: entry.qr.unwrap_or_default(),
+                uri: entry.vpnuri.unwrap_or_default(),
+            }),
+            wire::AddStatus::Exists => Err(crate::error::Error::ClientExists(name)),
+            wire::AddStatus::InvalidName => {
+                Err(crate::error::Error::Parse("add: невалидное имя".into()))
+            }
+            wire::AddStatus::Error | wire::AddStatus::Unknown => {
+                Err(crate::error::Error::Parse("add: ошибка создания клиента".into()))
+            }
         }
-        self.existing_files(&name)
     }
 
     pub async fn remove(&self, name: &str) -> Result<()> {
         let name =
             validate::validate_name(name).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
-        run(&self.spec(), &["remove", &name]).await?;
-        Ok(())
+        let spec = RunSpec {
+            script: &self.script,
+            sudo_prefix: &self.sudo_prefix,
+            timeout_secs: self.timeout_secs,
+            extra_env: &[("AWG_STRICT_CONFIRM", "1")],
+        };
+        let args = ["remove", &name, "--json", "--yes"];
+        let out = run(&spec, &args).await?;
+        let parsed =
+            wire::parse_remove(&out).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
+        let entry = parsed
+            .results
+            .into_iter()
+            .next()
+            .ok_or_else(|| crate::error::Error::Parse("remove: пустой results[]".into()))?;
+        match entry.status {
+            wire::RemoveStatus::Removed => Ok(()),
+            wire::RemoveStatus::NotFound => Err(crate::error::Error::ClientNotFound(name)),
+            _ => Err(crate::error::Error::Parse("remove: ошибка".into())),
+        }
     }
 
     /// Перевыпускает файлы одного клиента (`regen <name>`): ключи и IP
-    /// сохраняются, `.conf`/QR/URI создаются заново и читаются с диска.
+    /// сохраняются, `.conf`/QR/URI создаются заново. Пути берутся из JSON-конверта
+    /// v5.21.0 (`results[0].conf/qr/vpnuri`), а не угадываются по имени.
     pub async fn regen_client(&self, name: &str) -> Result<AddResult> {
         let name =
             validate::validate_name(name).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
-        run(&self.spec(), &["regen", &name]).await?;
-        self.existing_files(&name)
+        let args = ["regen", &name, "--json"];
+        let out = run(&self.spec(), &args).await?;
+        let parsed =
+            wire::parse_regen(&out).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
+        let entry = parsed
+            .results
+            .into_iter()
+            .next()
+            .ok_or_else(|| crate::error::Error::Parse("regen: пустой results[]".into()))?;
+        match entry.status {
+            wire::RegenStatus::Regenerated => Ok(AddResult {
+                name: entry.name,
+                conf_path: entry.conf.unwrap_or_default(),
+                qr_path: entry.qr.unwrap_or_default(),
+                uri: entry.vpnuri.unwrap_or_default(),
+            }),
+            wire::RegenStatus::NotFound => Err(crate::error::Error::ClientNotFound(name)),
+            _ => Err(crate::error::Error::Parse("regen: ошибка".into())),
+        }
     }
 
     /// Перевыпускает файлы всех клиентов. `Ok(false)` — скрипт завершился с
@@ -241,15 +287,6 @@ impl Vpn {
     }
 }
 
-/// Отпечаток файла для сравнения «до/после» запуска `add`: mtime + размер + inode.
-/// Скрипт пишет конфиги атомарно (rename), поэтому любое реальное создание
-/// меняет как минимум inode. None — файла нет.
-fn conf_fingerprint(path: &std::path::Path) -> Option<(std::time::SystemTime, u64, u64)> {
-    use std::os::unix::fs::MetadataExt;
-    let m = std::fs::metadata(path).ok()?;
-    Some((m.modified().ok()?, m.len(), m.ino()))
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct BackupFile {
     pub name: String,
@@ -336,72 +373,114 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial] // гонка ETXTBSY: параллельный fork удерживает write-fd чужого fake-скрипта до execve
-    async fn add_runs_script_then_reads_created_conf() {
-        // Real `add` prints no JSON — just logs — and creates `<name>.conf` on disk.
-        let (dir, vpn) =
-            vpn_with_script("#!/bin/sh\necho conf > \"$(dirname \"$0\")/alice.conf\"\nexit 0\n");
+    #[serial]
+    async fn add_success_takes_paths_from_json() {
+        // Stub эмитит add-конверт с путями — add() берёт их, не угадывая по имени.
+        let stub = r#"#!/bin/sh
+[ "$1" = add ] || exit 1
+echo '{"command":"add","ok":true,"added":1,"failed":0,"applied":true,"results":[{"name":"alice","status":"created","conf":"/tmp/zz/alice.conf","qr":"/tmp/zz/alice.png","vpnuri":"/tmp/zz/alice.vpnuri","expires_at":null}]}'
+"#;
+        let (dir, vpn) = vpn_with_script(stub);
+        // Файлы не обязаны существовать — add() не делает stat для путей из JSON.
         let res = vpn.add("alice", None, false).await.unwrap();
-        assert!(res.conf_path.ends_with("alice.conf"));
-        assert_eq!(res.uri, "");
+        assert_eq!(res.conf_path, "/tmp/zz/alice.conf");
+        assert_eq!(res.qr_path, "/tmp/zz/alice.png");
+        assert_eq!(res.uri, "/tmp/zz/alice.vpnuri");
         drop(dir);
     }
 
     #[tokio::test]
-    #[serial] // гонка ETXTBSY: параллельный fork удерживает write-fd чужого fake-скрипта до execve
-    async fn add_errors_when_script_silently_skips_existing_client() {
-        // Upstream `manage add` при существующем имени пишет warning, делает
-        // `continue` и завершается с rc 0, ничего не создав. Старый `.conf`
-        // остаётся на диске нетронутым — add() обязан отличить этот «тихий
-        // пропуск» от успешного создания, иначе бот отправит чужой старый конфиг.
-        let (dir, vpn) = vpn_with_script("#!/bin/sh\nexit 0\n");
-        std::fs::write(dir.path().join("alice.conf"), "old conf").unwrap();
+    #[serial]
+    async fn add_exists_status_becomes_client_exists_error() {
+        let stub = r#"#!/bin/sh
+echo '{"command":"add","ok":true,"added":0,"failed":1,"applied":false,"results":[{"name":"alice","status":"exists"}]}'
+"#;
+        let (_d, vpn) = vpn_with_script(stub);
         let err = vpn.add("alice", None, false).await.unwrap_err();
-        assert!(
-            matches!(err, crate::error::Error::ClientExists(_)),
-            "got {err:?}"
-        );
-        drop(dir);
+        assert!(matches!(err, crate::error::Error::ClientExists(_)), "got {err:?}");
     }
 
     #[tokio::test]
-    #[serial] // гонка ETXTBSY: параллельный fork удерживает write-fd чужого fake-скрипта до execve
-    async fn add_succeeds_when_script_rewrites_preexisting_conf() {
-        // Осиротевший `.conf` на диске при отсутствии клиента в awg0.conf:
-        // скрипт создаёт клиента и перезаписывает файл — это успех, не пропуск.
-        let (dir, vpn) = vpn_with_script(
-            "#!/bin/sh\necho 'fresh new conf' > \"$(dirname \"$0\")/alice.conf\"\nexit 0\n",
-        );
-        std::fs::write(dir.path().join("alice.conf"), "stale").unwrap();
-        let res = vpn.add("alice", None, false).await.unwrap();
-        assert!(res.conf_path.ends_with("alice.conf"));
-        drop(dir);
-    }
-
-    #[tokio::test]
-    #[serial] // гонка ETXTBSY: параллельный fork удерживает write-fd чужого fake-скрипта до execve
-    async fn add_errors_when_script_did_not_create_conf() {
-        let (_d, vpn) = vpn_with_script("#!/bin/sh\nexit 0\n");
+    #[serial]
+    async fn add_error_envelope_becomes_script_failed() {
+        let stub = r#"#!/bin/sh
+echo '{"command":"add","ok":false,"error":"boom","rc":1}'
+exit 1
+"#;
+        let (_d, vpn) = vpn_with_script(stub);
+        // rc != 0 → run() вернёт ScriptFailed ДО парсинга stdout.
         let err = vpn.add("alice", None, false).await.unwrap_err();
-        assert!(matches!(err, crate::error::Error::Parse(_)));
+        assert!(matches!(err, crate::error::Error::ScriptFailed { .. }), "got {err:?}");
     }
 
     #[tokio::test]
-    #[serial] // гонка ETXTBSY: параллельный fork удерживает write-fd чужого fake-скрипта до execve
-    async fn add_passes_psk_flag() {
-        // argv: $0=script, $1="add", $2=<name>, [$3.. flags]. Stub only creates
-        // `<name>.conf` when `--psk` is among the args — proves the flag
-        // actually reaches the script invocation.
-        const STUB: &str = "#!/bin/sh\nname=\"$2\"\nfor a in \"$@\"; do\n  if [ \"$a\" = \"--psk\" ]; then\n    touch \"$(dirname \"$0\")/$name.conf\"\n    exit 0\n  fi\ndone\nexit 1\n";
+    #[serial]
+    async fn add_passes_psk_and_expires_flags() {
+        // argv: add <name> [--expires=..] [--psk] --json
+        const STUB: &str = r#"#!/bin/sh
+[ "$1" = add ] || exit 1
+ok=1
+for a in "$@"; do
+  case "$a" in
+    --psk) psk=1 ;;
+    --expires=*) exp="$a" ;;
+  esac
+done
+if [ -n "${psk:-}" ] && [ -n "${exp:-}" ]; then
+  echo '{"ok":true,"results":[{"name":"a","status":"created"}]}'
+elif [ -z "${psk:-}${exp:-}" ]; then
+  echo '{"ok":true,"results":[{"name":"a","status":"created"}]}'
+else
+  exit 1
+fi
+"#;
+        let (_d, vpn) = vpn_with_script(STUB);
+        assert!(vpn.add("alice", Some("30d"), true).await.is_ok());
+        assert!(vpn.add("alice", None, false).await.is_ok());
+    }
 
-        let (dir, vpn) = vpn_with_script(STUB);
-        let res = vpn.add("alice", None, true).await;
-        assert!(res.is_ok(), "expected Ok with --psk passed, got {res:?}");
-        drop(dir);
+    #[tokio::test]
+    #[serial]
+    async fn remove_not_found_becomes_client_not_found() {
+        let stub = r#"#!/bin/sh
+echo '{"command":"remove","ok":true,"removed":0,"failed":1,"results":[{"name":"ghost","status":"not_found"}]}'
+"#;
+        let (_d, vpn) = vpn_with_script(stub);
+        let err = vpn.remove("ghost").await.unwrap_err();
+        assert!(matches!(err, crate::error::Error::ClientNotFound(_)), "got {err:?}");
+    }
 
-        let (_d2, vpn2) = vpn_with_script(STUB);
-        let err = vpn2.add("bob", None, false).await;
-        assert!(err.is_err(), "expected Err without --psk, got {err:?}");
+    #[tokio::test]
+    #[serial]
+    async fn remove_success() {
+        let stub = r#"#!/bin/sh
+echo '{"command":"remove","ok":true,"removed":1,"failed":0,"results":[{"name":"alice","status":"removed"}]}'
+"#;
+        let (_d, vpn) = vpn_with_script(stub);
+        vpn.remove("alice").await.unwrap();
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn regen_client_success_takes_paths_from_json() {
+        let stub = r#"#!/bin/sh
+[ "$1" = regen ] || exit 1
+echo '{"command":"regen","ok":true,"regenerated":1,"failed":0,"results":[{"name":"alice","status":"regenerated","conf":"/x/alice.conf","qr":null,"vpnuri":null}]}'
+"#;
+        let (_d, vpn) = vpn_with_script(stub);
+        let res = vpn.regen_client("alice").await.unwrap();
+        assert_eq!(res.conf_path, "/x/alice.conf");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn regen_client_not_found_becomes_client_not_found() {
+        let stub = r#"#!/bin/sh
+echo '{"command":"regen","ok":true,"regenerated":0,"failed":1,"results":[{"name":"ghost","status":"not_found"}]}'
+"#;
+        let (_d, vpn) = vpn_with_script(stub);
+        let err = vpn.regen_client("ghost").await.unwrap_err();
+        assert!(matches!(err, crate::error::Error::ClientNotFound(_)), "got {err:?}");
     }
 
     #[test]
@@ -530,19 +609,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial] // гонка ETXTBSY: параллельный fork удерживает write-fd чужого fake-скрипта до execve
-    async fn regen_client_runs_script_and_reads_files() {
-        // Стаб создаёт conf только при argv "regen <name>" — проверяем и команду, и чтение файлов.
-        let (dir, vpn) = vpn_with_script(
-            "#!/bin/sh\n[ \"$1\" = regen ] || exit 1\necho conf > \"$(dirname \"$0\")/$2.conf\"\nexit 0\n",
-        );
-        let res = vpn.regen_client("alice").await.unwrap();
-        assert!(res.conf_path.ends_with("alice.conf"));
-        drop(dir);
-    }
-
-    #[tokio::test]
-    #[serial] // гонка ETXTBSY: параллельный fork удерживает write-fd чужого fake-скрипта до execve
+    #[serial] // гонка ETXBSY: параллельный fork удерживает write-fd чужого fake-скрипта до execve
     async fn regen_client_rejects_bad_name() {
         let (_d, vpn) = vpn_with_script("#!/bin/sh\nexit 0\n");
         assert!(vpn.regen_client("bad name;rm").await.is_err());
