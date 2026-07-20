@@ -5,6 +5,8 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-07-20
+
 ### 🇷🇺 Русский
 
 #### ⚠️ Breaking
@@ -192,5 +194,6 @@ config paths have changed. On a running VPS, perform once:
 - Environment diagnostics (🔬 button), ⏳ client expiry badges.
 - RU/EN localization, PSK default, backup/restore, persistent state.
 
+[0.3.0]: https://github.com/ekuraev/awgram/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/ekuraev/awgram/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/ekuraev/awgram/releases/tag/v0.1.0
