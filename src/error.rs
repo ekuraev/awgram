@@ -12,6 +12,10 @@ pub enum Error {
     Parse(String),
     #[error("клиент '{0}' уже существует — скрипт пропустил создание")]
     ClientExists(String),
+    #[error("клиент '{0}' не найден")]
+    ClientNotFound(String),
+    #[error("восстановление провалилось, конфиг откачен к предыдущему состоянию")]
+    RestoreRolledBack,
     #[error("ошибка ввода-вывода: {0}")]
     Io(#[from] std::io::Error),
     #[error("ошибка Telegram: {0}")]
@@ -28,6 +32,10 @@ impl Error {
             Error::Timeout => "⏳ Превышено время ожидания. Попробуйте позже.",
             Error::Parse(_) => "Не удалось разобрать ответ сервера.",
             Error::ClientExists(_) => "⚠️ Клиент с таким именем уже существует.",
+            Error::ClientNotFound(_) => "⚠️ Клиент не найден.",
+            Error::RestoreRolledBack => {
+                "⚠️ Восстановление провалилось. Конфиг откачен к предыдущему состоянию."
+            }
             Error::Io(_) => "❌ Ошибка выполнения операции.",
             Error::Telegram(_) => "❌ Ошибка отправки сообщения.",
         }
@@ -49,5 +57,20 @@ mod tests {
             e.user_message(),
             "❌ Операция не удалась. Попробуйте ещё раз."
         );
+    }
+
+    #[test]
+    fn client_not_found_user_message() {
+        let e = Error::ClientNotFound("ghost".into());
+        let m = e.user_message();
+        assert!(m.contains("не найден") || m.contains("not found"));
+    }
+
+    #[test]
+    fn restore_rolled_back_user_message() {
+        let e = Error::RestoreRolledBack;
+        let m = e.user_message();
+        // локализованный текст, без утечки stderr
+        assert!(!m.is_empty());
     }
 }

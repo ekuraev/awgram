@@ -75,6 +75,124 @@ pub fn validate_expiry(input: &str) -> Result<String, ValidateError> {
     }
 }
 
+/// Параметры клиента, которые бот умеет менять через `manage modify`.
+/// CLI-имена совпадают с ключами в клиентском .conf (PersistentKeepalive/DNS/AllowedIPs/Endpoint).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModifyParam {
+    Keepalive,
+    Dns,
+    AllowedIps,
+    Endpoint,
+}
+
+pub fn modify_param_cli(p: ModifyParam) -> &'static str {
+    match p {
+        ModifyParam::Keepalive => "PersistentKeepalive",
+        ModifyParam::Dns => "DNS",
+        ModifyParam::AllowedIps => "AllowedIPs",
+        ModifyParam::Endpoint => "Endpoint",
+    }
+}
+
+fn keepalive_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^[0-9]{1,5}$").unwrap())
+}
+
+/// 0..=65535 секунд (0 = off). Диапазон выровнен с инсталлером v5.21.0
+/// (manage.sh:1024 `value -gt 65535`). Буквы/знаки/вне диапазона → ошибка.
+pub fn parse_keepalive(input: &str) -> Result<String, ValidateError> {
+    let v = input.trim();
+    if !keepalive_re().is_match(v) {
+        return Err(ValidateError::BadExpiry);
+    }
+    match v.parse::<u32>() {
+        Ok(n) if n <= 65535 => Ok(n.to_string()),
+        _ => Err(ValidateError::BadExpiry),
+    }
+}
+
+/// 1..=4 IP-адресов (v4/v6) через запятую. Shell-метасимволы невозможны —
+/// `IpAddr::from_str` их не примет.
+pub fn parse_dns(input: &str) -> Result<String, ValidateError> {
+    let parts: Vec<&str> = input.split(',').map(|s| s.trim()).collect();
+    if parts.is_empty() || parts.len() > 4 || parts.iter().any(|s| s.is_empty()) {
+        return Err(ValidateError::BadExpiry);
+    }
+    for p in &parts {
+        if p.parse::<std::net::IpAddr>().is_err() {
+            return Err(ValidateError::BadExpiry);
+        }
+    }
+    Ok(parts.join(", "))
+}
+
+fn cidr_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    // IPv4 CIDR или IPv6 CIDR. Не принимаем ничего с shell-метасимволами: в
+    // шаблон не входят ; | & $ ` < > и т.д.
+    RE.get_or_init(|| {
+        Regex::new(r"^(?:[0-9]{1,3}(?:\.[0-9]{1,3}){3}/[0-9]{1,2}|[0-9a-fA-F:]+/[0-9]{1,3})$")
+            .unwrap()
+    })
+}
+
+/// CIDR-список через запятую. Синтаксическая проверка; валидность подсети
+/// оставляем скрипту.
+pub fn parse_allowed_ips(input: &str) -> Result<String, ValidateError> {
+    let parts: Vec<&str> = input.split(',').map(|s| s.trim()).collect();
+    if parts.is_empty() || parts.iter().any(|s| s.is_empty()) {
+        return Err(ValidateError::BadExpiry);
+    }
+    for p in &parts {
+        if !cidr_re().is_match(p) {
+            return Err(ValidateError::BadExpiry);
+        }
+    }
+    Ok(parts.join(", "))
+}
+
+fn endpoint_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    // Две формы: host:port (host = FQDN/IPv4) или [IPv6]:port с ОБЯЗАТЕЛЬНЫМИ
+    // парными скобками. Инсталлер требует именно [IPv6]:port — непарные скобки
+    // или голый IPv6 с двоеточиями неотличимы от host:port и парсерятся бы
+    // неверно. Запрещаем shell-метасимволы.
+    RE.get_or_init(|| Regex::new(r"^(?:\[[0-9a-fA-F:.]+\]|[A-Za-z0-9._-]+):[0-9]{1,5}$").unwrap())
+}
+
+/// Endpoint в формате host:port или [IPv6]:port. Порт проверяется в диапазоне
+/// 1..=65535 (инсталлер manage.sh:1034). Shell-метасимволы отсекаются regex.
+pub fn parse_endpoint(input: &str) -> Result<String, ValidateError> {
+    let v = input.trim();
+    if !endpoint_re().is_match(v) {
+        return Err(ValidateError::BadExpiry);
+    }
+    // Извлекаем порт: для [IPv6]:port — после ']'; для host:port — после ':'.
+    let port_str = if v.contains(']') {
+        // [IPv6]:port → берём часть после ']'
+        v.rsplit_once(']')
+            .map(|(_, rest)| rest.trim_start_matches(':'))
+    } else {
+        // host:port → после последнего ':'
+        v.rsplit_once(':').map(|(_, port)| port)
+    }
+    .unwrap_or("");
+    match port_str.parse::<u32>() {
+        Ok(p) if (1..=65535).contains(&p) => Ok(v.to_string()),
+        _ => Err(ValidateError::BadExpiry),
+    }
+}
+
+pub fn parse_modify_value(p: ModifyParam, input: &str) -> Result<String, ValidateError> {
+    match p {
+        ModifyParam::Keepalive => parse_keepalive(input),
+        ModifyParam::Dns => parse_dns(input),
+        ModifyParam::AllowedIps => parse_allowed_ips(input),
+        ModifyParam::Endpoint => parse_endpoint(input),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,5 +317,143 @@ mod tests {
                 "bad slug {s:?}"
             );
         }
+    }
+
+    #[test]
+    fn keepalive_accepts_valid_range() {
+        // P2.5: инсталлер принимает 0..=65535 (manage.sh:1024), не 0..=600.
+        assert_eq!(parse_keepalive("0").unwrap(), "0");
+        assert_eq!(parse_keepalive("25").unwrap(), "25");
+        assert_eq!(parse_keepalive("65535").unwrap(), "65535");
+    }
+
+    #[test]
+    fn keepalive_rejects_out_of_range_and_non_numeric() {
+        for bad in ["", "abc", "-1", "65536", "99999", "1.5", "25s"] {
+            assert_eq!(
+                parse_keepalive(bad),
+                Err(ValidateError::BadExpiry),
+                "should reject {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn dns_accepts_ip_list() {
+        assert_eq!(parse_dns("1.1.1.1").unwrap(), "1.1.1.1");
+        assert_eq!(parse_dns("1.1.1.1, 8.8.8.8").unwrap(), "1.1.1.1, 8.8.8.8");
+        assert!(parse_dns("2606:4700:4700::1111").is_ok());
+    }
+
+    #[test]
+    fn dns_rejects_non_ip_and_too_many() {
+        for bad in [
+            "",
+            "not-ip",
+            "1.1.1.1; rm -rf /",
+            "a.b.c.d",
+            "1.1.1.1,",
+            "8.8.8.8 1.1.1.1",
+        ] {
+            assert_eq!(
+                parse_dns(bad),
+                Err(ValidateError::BadExpiry),
+                "should reject {bad:?}"
+            );
+        }
+        // > 4 адресов
+        let five = "1.1.1.1, 2.2.2.2, 3.3.3.3, 4.4.4.4, 5.5.5.5";
+        assert_eq!(parse_dns(five), Err(ValidateError::BadExpiry));
+    }
+
+    #[test]
+    fn allowed_ips_accepts_cidr() {
+        assert!(parse_allowed_ips("0.0.0.0/0").is_ok());
+        assert!(parse_allowed_ips("192.168.1.0/24, 10.0.0.0/8").is_ok());
+        assert!(parse_allowed_ips("::/0").is_ok());
+    }
+
+    #[test]
+    fn allowed_ips_rejects_non_cidr_and_shell_meta() {
+        for bad in ["", "192.168.1.5", "not-cidr", "1.1.1.1; ls", "../etc"] {
+            assert_eq!(
+                parse_allowed_ips(bad),
+                Err(ValidateError::BadExpiry),
+                "should reject {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn endpoint_accepts_host_port() {
+        assert!(parse_endpoint("vpn.example.com:51820").is_ok());
+        assert!(parse_endpoint("1.2.3.4:51820").is_ok());
+        assert!(parse_endpoint("[2606:4700::1]:51820").is_ok());
+        assert!(parse_endpoint("host:1").is_ok());
+        assert!(parse_endpoint("host:65535").is_ok());
+    }
+
+    #[test]
+    fn endpoint_rejects_missing_port_and_meta() {
+        for bad in ["vpn.example.com", "", ":51820", "a.b:51820; rm", "host:abc"] {
+            assert_eq!(
+                parse_endpoint(bad),
+                Err(ValidateError::BadExpiry),
+                "should reject {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn endpoint_rejects_port_out_of_range() {
+        // P2.4: инсталлер требует порт 1..=65535 (manage.sh:1034).
+        for bad in [
+            "host:0",
+            "host:65536",
+            "host:99999",
+            "1.2.3.4:0",
+            "[::1]:99999",
+        ] {
+            assert_eq!(
+                parse_endpoint(bad),
+                Err(ValidateError::BadExpiry),
+                "should reject {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn endpoint_rejects_unpaired_ipv6_brackets() {
+        // P2.4: инсталлер требует [IPv6]:port с парными скобками.
+        for bad in [
+            "[::1:51820",
+            "::1]:51820",
+            "[::1]51820",
+            "2606:4700::1:51820",
+        ] {
+            assert_eq!(
+                parse_endpoint(bad),
+                Err(ValidateError::BadExpiry),
+                "should reject {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn modify_param_cli_names() {
+        assert_eq!(
+            modify_param_cli(ModifyParam::Keepalive),
+            "PersistentKeepalive"
+        );
+        assert_eq!(modify_param_cli(ModifyParam::Dns), "DNS");
+        assert_eq!(modify_param_cli(ModifyParam::AllowedIps), "AllowedIPs");
+        assert_eq!(modify_param_cli(ModifyParam::Endpoint), "Endpoint");
+    }
+
+    #[test]
+    fn parse_modify_value_dispatches_by_param() {
+        assert!(parse_modify_value(ModifyParam::Keepalive, "25").is_ok());
+        assert!(parse_modify_value(ModifyParam::Dns, "1.1.1.1").is_ok());
+        assert!(parse_modify_value(ModifyParam::Keepalive, "abc").is_err());
     }
 }

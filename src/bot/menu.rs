@@ -18,6 +18,10 @@ pub fn main_menu(lang: Lang) -> InlineKeyboardMarkup {
             cb(&i18n::btn_check(lang), "check"),
             cb(&i18n::btn_diagnose(lang), "diagnose"),
         ],
+        vec![
+            cb(&i18n::btn_restart(lang), "restart"),
+            cb(&i18n::btn_repair(lang), "repair"),
+        ],
         vec![cb(&i18n::btn_settings(lang), "settings")],
     ])
 }
@@ -174,6 +178,7 @@ pub fn client_card(lang: Lang, name: &str) -> InlineKeyboardMarkup {
             cb(del_txt, &format!("del:{name}")),
         ],
         vec![cb(&i18n::btn_regen(lang), &format!("regen:{name}"))],
+        vec![cb(&i18n::btn_modify(lang), &format!("mod:{name}"))],
         vec![cb(&i18n::btn_back(lang), "menu")],
     ])
 }
@@ -204,6 +209,40 @@ pub fn confirm_regen_all(lang: Lang) -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![
         vec![cb(&i18n::btn_regen_all_go(lang), "regen_all_go")],
         vec![cb(&i18n::btn_regen_all_routes(lang), "regen_all_routes")],
+        vec![cb(&i18n::btn_back(lang), "menu")],
+    ])
+}
+
+pub fn modify_param_menu(lang: Lang, name: &str) -> InlineKeyboardMarkup {
+    use crate::vpn::validate::ModifyParam;
+    InlineKeyboardMarkup::new(vec![
+        vec![
+            cb(
+                &i18n::modify_param_label(lang, ModifyParam::Keepalive),
+                &format!("modparam:{name}:keepalive"),
+            ),
+            cb(
+                &i18n::modify_param_label(lang, ModifyParam::Dns),
+                &format!("modparam:{name}:dns"),
+            ),
+        ],
+        vec![
+            cb(
+                &i18n::modify_param_label(lang, ModifyParam::AllowedIps),
+                &format!("modparam:{name}:allowedips"),
+            ),
+            cb(
+                &i18n::modify_param_label(lang, ModifyParam::Endpoint),
+                &format!("modparam:{name}:endpoint"),
+            ),
+        ],
+        vec![cb(&i18n::btn_back(lang), "menu")],
+    ])
+}
+
+pub fn confirm_restart_menu(lang: Lang) -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![
+        vec![cb(&i18n::btn_restart_go(lang), "restart_go")],
         vec![cb(&i18n::btn_back(lang), "menu")],
     ])
 }
@@ -265,10 +304,40 @@ mod tests {
     fn main_menu_has_expected_actions() {
         let data = all_callback_data(&main_menu(Lang::Ru));
         for expected in [
-            "list", "add", "stats", "backup", "check", "diagnose", "settings",
+            "list", "add", "stats", "backup", "check", "diagnose", "restart", "repair", "settings",
         ] {
             assert!(data.contains(&expected.to_string()), "missing {expected}");
         }
+    }
+
+    #[test]
+    fn main_menu_has_restart_and_repair() {
+        let data = all_callback_data(&main_menu(Lang::Ru));
+        assert!(data.contains(&"restart".to_string()));
+        assert!(data.contains(&"repair".to_string()));
+    }
+
+    #[test]
+    fn client_card_has_modify_button() {
+        let data = all_callback_data(&client_card(Lang::Ru, "alice"));
+        assert!(data.contains(&"mod:alice".to_string()));
+    }
+
+    #[test]
+    fn modify_param_menu_has_four_params_and_back() {
+        let data = all_callback_data(&modify_param_menu(Lang::Ru, "alice"));
+        assert!(data.contains(&"modparam:alice:keepalive".to_string()));
+        assert!(data.contains(&"modparam:alice:dns".to_string()));
+        assert!(data.contains(&"modparam:alice:allowedips".to_string()));
+        assert!(data.contains(&"modparam:alice:endpoint".to_string()));
+        assert!(data.contains(&"menu".to_string()));
+    }
+
+    #[test]
+    fn confirm_restart_menu_has_go_and_back() {
+        let data = all_callback_data(&confirm_restart_menu(Lang::Ru));
+        assert!(data.contains(&"restart_go".to_string()));
+        assert!(data.contains(&"menu".to_string()));
     }
 
     #[test]
