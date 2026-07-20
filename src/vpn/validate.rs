@@ -96,17 +96,18 @@ pub fn modify_param_cli(p: ModifyParam) -> &'static str {
 
 fn keepalive_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^[0-9]{1,3}$").unwrap())
+    RE.get_or_init(|| Regex::new(r"^[0-9]{1,5}$").unwrap())
 }
 
-/// 0..=600 секунд (0 = off). Буквы/знаки/вне диапазона → ошибка.
+/// 0..=65535 секунд (0 = off). Диапазон выровнен с инсталлером v5.21.0
+/// (manage.sh:1024 `value -gt 65535`). Буквы/знаки/вне диапазона → ошибка.
 pub fn parse_keepalive(input: &str) -> Result<String, ValidateError> {
     let v = input.trim();
     if !keepalive_re().is_match(v) {
         return Err(ValidateError::BadExpiry);
     }
     match v.parse::<u32>() {
-        Ok(n) if n <= 600 => Ok(n.to_string()),
+        Ok(n) if n <= 65535 => Ok(n.to_string()),
         _ => Err(ValidateError::BadExpiry),
     }
 }
@@ -153,16 +154,34 @@ pub fn parse_allowed_ips(input: &str) -> Result<String, ValidateError> {
 
 fn endpoint_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    // host:port или [ipv6]:port. host — домен или IPv4. Запрещаем shell-метасимволы.
-    RE.get_or_init(|| Regex::new(r"^(?:\[?[0-9a-fA-F:.]+\]?|[A-Za-z0-9._-]+):[0-9]{1,5}$").unwrap())
+    // Две формы: host:port (host = FQDN/IPv4) или [IPv6]:port с ОБЯЗАТЕЛЬНЫМИ
+    // парными скобками. Инсталлер требует именно [IPv6]:port — непарные скобки
+    // или голый IPv6 с двоеточиями неотличимы от host:port и парсерятся бы
+    // неверно. Запрещаем shell-метасимволы.
+    RE.get_or_init(|| {
+        Regex::new(r"^(?:\[[0-9a-fA-F:.]+\]|[A-Za-z0-9._-]+):[0-9]{1,5}$").unwrap()
+    })
 }
 
+/// Endpoint в формате host:port или [IPv6]:port. Порт проверяется в диапазоне
+/// 1..=65535 (инсталлер manage.sh:1034). Shell-метасимволы отсекаются regex.
 pub fn parse_endpoint(input: &str) -> Result<String, ValidateError> {
     let v = input.trim();
-    if endpoint_re().is_match(v) {
-        Ok(v.to_string())
+    if !endpoint_re().is_match(v) {
+        return Err(ValidateError::BadExpiry);
+    }
+    // Извлекаем порт: для [IPv6]:port — после ']'; для host:port — после ':'.
+    let port_str = if v.contains(']') {
+        // [IPv6]:port → берём часть после ']'
+        v.rsplit_once(']').map(|(_, rest)| rest.trim_start_matches(':'))
     } else {
-        Err(ValidateError::BadExpiry)
+        // host:port → после последнего ':'
+        v.rsplit_once(':').map(|(_, port)| port)
+    }
+    .unwrap_or("");
+    match port_str.parse::<u32>() {
+        Ok(p) if (1..=65535).contains(&p) => Ok(v.to_string()),
+        _ => Err(ValidateError::BadExpiry),
     }
 }
 
@@ -303,14 +322,15 @@ mod tests {
 
     #[test]
     fn keepalive_accepts_valid_range() {
+        // P2.5: инсталлер принимает 0..=65535 (manage.sh:1024), не 0..=600.
         assert_eq!(parse_keepalive("0").unwrap(), "0");
         assert_eq!(parse_keepalive("25").unwrap(), "25");
-        assert_eq!(parse_keepalive("600").unwrap(), "600");
+        assert_eq!(parse_keepalive("65535").unwrap(), "65535");
     }
 
     #[test]
     fn keepalive_rejects_out_of_range_and_non_numeric() {
-        for bad in ["", "abc", "-1", "601", "9999", "1.5", "25s"] {
+        for bad in ["", "abc", "-1", "65536", "99999", "1.5", "25s"] {
             assert_eq!(
                 parse_keepalive(bad),
                 Err(ValidateError::BadExpiry),
@@ -370,11 +390,37 @@ mod tests {
         assert!(parse_endpoint("vpn.example.com:51820").is_ok());
         assert!(parse_endpoint("1.2.3.4:51820").is_ok());
         assert!(parse_endpoint("[2606:4700::1]:51820").is_ok());
+        assert!(parse_endpoint("host:1").is_ok());
+        assert!(parse_endpoint("host:65535").is_ok());
     }
 
     #[test]
     fn endpoint_rejects_missing_port_and_meta() {
         for bad in ["vpn.example.com", "", ":51820", "a.b:51820; rm", "host:abc"] {
+            assert_eq!(
+                parse_endpoint(bad),
+                Err(ValidateError::BadExpiry),
+                "should reject {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn endpoint_rejects_port_out_of_range() {
+        // P2.4: инсталлер требует порт 1..=65535 (manage.sh:1034).
+        for bad in ["host:0", "host:65536", "host:99999", "1.2.3.4:0", "[::1]:99999"] {
+            assert_eq!(
+                parse_endpoint(bad),
+                Err(ValidateError::BadExpiry),
+                "should reject {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn endpoint_rejects_unpaired_ipv6_brackets() {
+        // P2.4: инсталлер требует [IPv6]:port с парными скобками.
+        for bad in ["[::1:51820", "::1]:51820", "[::1]51820", "2606:4700::1:51820"] {
             assert_eq!(
                 parse_endpoint(bad),
                 Err(ValidateError::BadExpiry),

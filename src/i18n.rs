@@ -610,8 +610,8 @@ pub fn modify_param_label(lang: Lang, p: crate::vpn::validate::ModifyParam) -> S
 pub fn ask_modify_param(lang: Lang, p: crate::vpn::validate::ModifyParam) -> String {
     use crate::vpn::validate::ModifyParam;
     let hint = match (lang, p) {
-        (Lang::Ru, ModifyParam::Keepalive) => "Введите Keepalive в секундах (0–600, 0 = выкл):",
-        (Lang::En, ModifyParam::Keepalive) => "Enter Keepalive in seconds (0–600, 0 = off):",
+        (Lang::Ru, ModifyParam::Keepalive) => "Введите Keepalive в секундах (0–65535, 0 = выкл):",
+        (Lang::En, ModifyParam::Keepalive) => "Enter Keepalive in seconds (0–65535, 0 = off):",
         (Lang::Ru, ModifyParam::Dns) => "Введите DNS (через запятую, до 4 адресов):",
         (Lang::En, ModifyParam::Dns) => "Enter DNS (comma-separated, up to 4):",
         (Lang::Ru, ModifyParam::AllowedIps) => "Введите AllowedIPs (CIDR через запятую):",
