@@ -34,6 +34,27 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
 - Деструктивные команды (`remove`/`restore`/`restart`) запускаются с
   `AWG_STRICT_CONFIRM=1` + `--yes` (рекомендация маинтейнера инсталлера).
 
+#### Исправлено (багфиксы code review)
+
+- **P1.1**: `run()` отбрасывал stdout при ненулевом exit code, но инсталлер
+  v5.21.0 печатает JSON и ЗАТЕМ выходит с кодом 1 для `exists`/`not_found`/
+  `partial`/`rolled_back`/`repair rc=1/2`. Все status-ветки были недостижимы
+  в проде (стабы `exit 0` маскировали баг). `run()` теперь всегда возвращает
+  `(stdout, exit_code)`, методы парсят JSON независимо от кода выхода.
+- **P1.2**: `restored.keys` десериализовался как `u32`, но инсталлер
+  возвращает `"keys": true|false` (наличие `*.private`). Успешный restore
+  падал на парсинге → бот сообщал о провале.
+- **P2.1**: `vpnuri` в JSON-конверте — ПУТЬ к файлу, а не ссылка `vpn://`.
+  `add`/`regen_client` теперь читают содержимое файла, иначе пользователь
+  получал серверный путь вместо импорт-ссылки.
+- **P2.2**: аварийный конверт `{"ok":false,"error":...}` при фатальной ошибке
+  `check` десериализовался в фиктивный отчёт (все defaults). Теперь
+  `try_error_envelope` ловит его → `ScriptFailed`.
+- **P2.3**: `repair-module` использует отдельный timeout 300с (общий 60с
+  обрывал DKMS rebuild + apt-установку kernel headers — заявлено до 5 минут).
+- **P2.4**: endpoint-валидатор принимает порт 1..=65535 и требует парные
+  скобки `[IPv6]:port` (ранее пропускал `host:0`, `host:99999`, `[host:port`).
+
 ### 🇬🇧 English
 
 #### ⚠️ Breaking
@@ -62,6 +83,31 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
   `.conf`/`.png`/`.vpnuri` — now all from JSON response.
 - Destructive commands (`remove`/`restore`/`restart`) run with
   `AWG_STRICT_CONFIRM=1` + `--yes` (recommended by the installer maintainer).
+
+#### Fixed (code review bugfixes)
+
+- **P1.1**: `run()` discarded stdout on non-zero exit code, but installer
+  v5.21.0 prints JSON THEN exits with code 1 for `exists`/`not_found`/
+  `partial`/`rolled_back`/`repair rc=1/2`. All status branches were
+  unreachable in production (stubs `exit 0` masked the bug). `run()` now
+  always returns `(stdout, exit_code)`; methods parse JSON regardless of
+  exit code.
+- **P1.2**: `restored.keys` deserialized as `u32`, but the installer returns
+  `"keys": true|false` (presence of `*.private`). A successful restore failed
+  to parse → bot reported failure.
+- **P2.1**: `vpnuri` in the JSON envelope is a file PATH, not a `vpn://`
+  link. `add`/`regen_client` now read the file contents — otherwise the user
+  got a server path instead of an import link.
+- **P2.2**: an error envelope `{"ok":false,"error":...}` on a fatal `check`
+  failure deserialized into a fake report (all defaults). Now
+  `try_error_envelope` catches it → `ScriptFailed`.
+- **P2.3**: `repair-module` uses a dedicated 300s timeout (the common 60s
+  cut off DKMS rebuild + apt kernel headers install — up to 5 minutes).
+- **P2.4**: endpoint validator accepts port 1..=65535 and requires paired
+  `[IPv6]:port` brackets (previously allowed `host:0`, `host:99999`,
+  `[host:port`).
+- **P2.5**: keepalive range widened from 0..=600 to 0..=65535 to match the
+  installer (`manage.sh:1024`).
 
 ## [0.2.0] — 2026-07-15
 
