@@ -32,6 +32,7 @@ impl Vpn {
             script: &self.script,
             sudo_prefix: &self.sudo_prefix,
             timeout_secs: self.timeout_secs,
+            extra_env: &[],
         }
     }
 
@@ -106,6 +107,7 @@ impl Vpn {
             script: &self.script,
             sudo_prefix: &self.sudo_prefix,
             timeout_secs: self.timeout_secs * 3,
+            extra_env: &[],
         };
         let args: &[&str] = if reset_routes {
             &["regen", "--reset-routes"]

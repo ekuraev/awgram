@@ -25,6 +25,7 @@ async fn returns_stdout_on_success() {
         script: &script,
         sudo_prefix: "",
         timeout_secs: 5,
+        extra_env: &[],
     };
     let out = run(&spec, &["list"]).await.unwrap();
     assert_eq!(out.trim(), "list-ok");
@@ -38,6 +39,7 @@ async fn maps_nonzero_exit_to_script_failed() {
         script: &script,
         sudo_prefix: "",
         timeout_secs: 5,
+        extra_env: &[],
     };
     let err = run(&spec, &["add"]).await.unwrap_err();
     match err {
@@ -59,6 +61,7 @@ async fn times_out_long_running_script() {
         script: &script,
         sudo_prefix: "",
         timeout_secs: 3,
+        extra_env: &[],
     };
     let err = run(&spec, &["list"]).await.unwrap_err();
     assert!(matches!(err, Error::Timeout));
@@ -72,6 +75,7 @@ async fn run_capture_returns_output_on_nonzero() {
         script: &script,
         sudo_prefix: "",
         timeout_secs: 5,
+        extra_env: &[],
     };
     let (out, code) = run_capture(&spec, &["check"]).await.unwrap();
     assert!(out.contains("diag"));
