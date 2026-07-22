@@ -58,11 +58,9 @@ pub fn normalize_name(input: &str, slug: Option<&str>) -> Result<String, Validat
 /// 5 случайных символов a-z0-9 (~60 млн комбинаций); коллизии дополнительно
 /// отсекает проверка дубликатов `vpn.exists` в диалоге добавления.
 pub fn gen_slug() -> String {
-    use rand::Rng;
     const CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
-    let mut rng = rand::rng();
     (0..5)
-        .map(|_| CHARS[rng.random_range(0..CHARS.len())] as char)
+        .map(|_| CHARS[rand::random_range(0..CHARS.len())] as char)
         .collect()
 }
 
