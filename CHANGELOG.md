@@ -5,6 +5,33 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
 
 ## [Unreleased]
 
+### 🇷🇺 Русский
+
+#### ♻️ Изменено
+
+- Поддержка инсталлера расширена до
+  [v5.21.2](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.21.2)
+  (минимум остался [v5.21.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.21.0)).
+  JSON-контракт не изменился — v5.21.1/v5.21.2 это багфиксы валидации
+  (нормализация порта в `check`, числовые счётчики в `stats --json`),
+  которые бот переваривает как есть.
+- Обновление зависимостей: `rand` 0.9 → 0.10 (переход на свободную функцию
+  `rand::random_range`), а также минорные бампы `regex`, `thiserror`,
+  `tokio`, `serde`.
+
+### 🇬🇧 English
+
+#### ♻️ Changed
+
+- Installer support extended to
+  [v5.21.2](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.21.2)
+  (minimum remains [v5.21.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.21.0)).
+  The JSON contract is unchanged — v5.21.1/v5.21.2 are validation bugfixes
+  (port normalisation in `check`, numeric counters in `stats --json`) that
+  the bot handles as-is.
+- Dependency updates: `rand` 0.9 → 0.10 (moved to the `rand::random_range`
+  free function), plus minor bumps of `regex`, `thiserror`, `tokio`, `serde`.
+
 ## [0.3.0] — 2026-07-20
 
 ### 🇷🇺 Русский
