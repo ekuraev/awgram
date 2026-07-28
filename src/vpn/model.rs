@@ -35,6 +35,38 @@ pub struct AddResult {
     pub uri: String,
 }
 
+/// Результат массового создания: успешно созданные клиенты (с путями для
+/// выдачи) и пропущенные (с причиной). `created.is_empty()` → ничего не
+/// создано, альбома не будет.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BulkResult {
+    pub created: Vec<AddResult>,
+    pub skipped: Vec<Skip>,
+}
+
+/// Пропущенный при массовом создании клиент (коллизия имени / невалидное
+/// имя / ошибка генерации). `reason` маппится из `AddStatus` инсталлера.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Skip {
+    pub name: String,
+    pub reason: SkipReason,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkipReason {
+    Exists,
+    InvalidName,
+    Error,
+}
+
+/// Свободные адреса в подсети сервера: `total` — usable-хостов (минус
+/// network+broadcast), `free` — минус сервер и существующие клиенты.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CapacityInfo {
+    pub free: u32,
+    pub total: u32,
+}
+
 pub fn parse_client_list(json: &str) -> Result<Vec<Client>, serde_json::Error> {
     serde_json::from_str(json)
 }
@@ -443,5 +475,28 @@ mod tests {
             format_expiry_badge(Lang::En, now, Some(now - 1)),
             Some("⏳ expired".to_string())
         );
+    }
+
+    #[test]
+    fn bulk_result_default_is_empty() {
+        let b = BulkResult {
+            created: vec![],
+            skipped: vec![],
+        };
+        assert!(b.created.is_empty());
+        assert!(b.skipped.is_empty());
+    }
+
+    #[test]
+    fn capacity_info_holds_counts() {
+        let c = CapacityInfo { free: 250, total: 254 };
+        assert_eq!(c.free, 250);
+        assert_eq!(c.total, 254);
+    }
+
+    #[test]
+    fn skip_reason_variants_exist() {
+        let s = Skip { name: "x".into(), reason: SkipReason::Exists };
+        assert!(matches!(s.reason, SkipReason::Exists));
     }
 }
