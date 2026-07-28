@@ -590,10 +590,14 @@ async fn callback_handler(
         },
         Action::Stats => match vpn.stats().await {
             Ok(clients) => {
-                bot.send_message(chat, format_stats(lang, &clients))
-                    .reply_markup(menu::main_menu(lang))
-                    .parse_mode(ParseMode::Html)
-                    .await?;
+                edit_or_send(
+                    &bot,
+                    chat,
+                    msg_id,
+                    format_stats(lang, &clients),
+                    menu::main_menu(lang),
+                )
+                .await;
             }
             Err(e) => {
                 bot.send_message(chat, i18n::error_text(lang, &e)).await?;
@@ -604,10 +608,14 @@ async fn callback_handler(
                 Some(c) => {
                     let now = now_epoch();
                     let expiry = vpn.client_expiry(&name);
-                    bot.send_message(chat, format_client_card(lang, c, now, expiry))
-                        .reply_markup(menu::client_card(lang, &name))
-                        .parse_mode(ParseMode::Html)
-                        .await?;
+                    edit_or_send(
+                        &bot,
+                        chat,
+                        msg_id,
+                        format_client_card(lang, c, now, expiry),
+                        menu::client_card(lang, &name),
+                    )
+                    .await;
                 }
                 None => {
                     bot.send_message(chat, i18n::not_found(lang)).await?;
@@ -631,10 +639,14 @@ async fn callback_handler(
             }
         }
         Action::AskDelete(name) => {
-            bot.send_message(chat, i18n::confirm_delete(lang, &name))
-                .reply_markup(menu::confirm_delete(lang, &name))
-                .parse_mode(ParseMode::Html)
-                .await?;
+            edit_or_send(
+                &bot,
+                chat,
+                msg_id,
+                i18n::confirm_delete(lang, &name),
+                menu::confirm_delete(lang, &name),
+            )
+            .await;
         }
         Action::ConfirmDelete(name) => match vpn.remove(&name).await {
             Ok(()) => {
@@ -683,10 +695,14 @@ async fn callback_handler(
             }
         }
         Action::RegenAll => {
-            bot.send_message(chat, i18n::confirm_regen_all(lang))
-                .reply_markup(menu::confirm_regen_all(lang))
-                .parse_mode(ParseMode::Html)
-                .await?;
+            edit_or_send(
+                &bot,
+                chat,
+                msg_id,
+                i18n::confirm_regen_all(lang),
+                menu::confirm_regen_all(lang),
+            )
+            .await;
         }
         Action::RegenAllRun(reset_routes) => {
             let waiting = bot
@@ -791,23 +807,24 @@ async fn callback_handler(
             dialogue.exit().await?;
         }
         Action::Settings => {
-            bot.send_message(
+            edit_or_send(
+                &bot,
                 chat,
+                msg_id,
                 i18n::settings_title(lang, settings.psk_default(), settings.name_slug()),
+                menu::settings_menu(lang, settings.psk_default(), settings.name_slug()),
             )
-            .reply_markup(menu::settings_menu(
-                lang,
-                settings.psk_default(),
-                settings.name_slug(),
-            ))
-            .parse_mode(ParseMode::Html)
-            .await?;
+            .await;
         }
         Action::Modify(name) => {
-            bot.send_message(chat, i18n::modify_param_select_title(lang))
-                .reply_markup(menu::modify_param_menu(lang, &name))
-                .parse_mode(ParseMode::Html)
-                .await?;
+            edit_or_send(
+                &bot,
+                chat,
+                msg_id,
+                i18n::modify_param_select_title(lang),
+                menu::modify_param_menu(lang, &name),
+            )
+            .await;
             dialogue.update(State::AwaitingModifyParam { name }).await?;
         }
         Action::ModifyParam(name, param) => {
@@ -818,10 +835,14 @@ async fn callback_handler(
                 .await?;
         }
         Action::Restart => {
-            bot.send_message(chat, i18n::confirm_restart(lang))
-                .reply_markup(menu::confirm_restart_menu(lang))
-                .parse_mode(ParseMode::Html)
-                .await?;
+            edit_or_send(
+                &bot,
+                chat,
+                msg_id,
+                i18n::confirm_restart(lang),
+                menu::confirm_restart_menu(lang),
+            )
+            .await;
         }
         Action::RestartRun => {
             let waiting = bot.send_message(chat, i18n::creating(lang)).await.ok();
@@ -870,61 +891,60 @@ async fn callback_handler(
                 settings.set_lang(uid, l);
             }
             let lang = settings.lang(uid);
-            bot.send_message(chat, i18n::menu_title(lang))
-                .reply_markup(menu::main_menu(lang))
-                .parse_mode(ParseMode::Html)
-                .await?;
+            edit_or_send(
+                &bot,
+                chat,
+                msg_id,
+                i18n::menu_title(lang),
+                menu::main_menu(lang),
+            )
+            .await;
         }
         Action::SetLang(code) => {
             if let Some(l) = i18n::parse_lang(&code) {
                 settings.set_lang(uid, l);
             }
             let lang = settings.lang(uid);
-            bot.send_message(
+            edit_or_send(
+                &bot,
                 chat,
+                msg_id,
                 i18n::settings_title(lang, settings.psk_default(), settings.name_slug()),
+                menu::settings_menu(lang, settings.psk_default(), settings.name_slug()),
             )
-            .reply_markup(menu::settings_menu(
-                lang,
-                settings.psk_default(),
-                settings.name_slug(),
-            ))
-            .parse_mode(ParseMode::Html)
-            .await?;
+            .await;
         }
         Action::SetPsk(on) => {
             settings.set_psk_default(on);
-            bot.send_message(
+            edit_or_send(
+                &bot,
                 chat,
+                msg_id,
                 i18n::settings_title(lang, settings.psk_default(), settings.name_slug()),
+                menu::settings_menu(lang, settings.psk_default(), settings.name_slug()),
             )
-            .reply_markup(menu::settings_menu(
-                lang,
-                settings.psk_default(),
-                settings.name_slug(),
-            ))
-            .parse_mode(ParseMode::Html)
-            .await?;
+            .await;
         }
         Action::SetSlug(on) => {
             settings.set_name_slug(on);
-            bot.send_message(
+            edit_or_send(
+                &bot,
                 chat,
+                msg_id,
                 i18n::settings_title(lang, settings.psk_default(), settings.name_slug()),
+                menu::settings_menu(lang, settings.psk_default(), settings.name_slug()),
             )
-            .reply_markup(menu::settings_menu(
-                lang,
-                settings.psk_default(),
-                settings.name_slug(),
-            ))
-            .parse_mode(ParseMode::Html)
-            .await?;
+            .await;
         }
         Action::Backup => {
-            bot.send_message(chat, i18n::backup_menu_title(lang))
-                .reply_markup(menu::backup_menu(lang))
-                .parse_mode(ParseMode::Html)
-                .await?;
+            edit_or_send(
+                &bot,
+                chat,
+                msg_id,
+                i18n::backup_menu_title(lang),
+                menu::backup_menu(lang),
+            )
+            .await;
         }
         Action::BackupNew => {
             let waiting = bot
@@ -950,15 +970,24 @@ async fn callback_handler(
         }
         Action::BackupList => match vpn.list_backups() {
             Ok(list) if list.is_empty() => {
-                bot.send_message(chat, i18n::backups_empty(lang))
-                    .reply_markup(menu::main_menu(lang))
-                    .await?;
+                edit_or_send(
+                    &bot,
+                    chat,
+                    msg_id,
+                    i18n::backups_empty(lang),
+                    menu::main_menu(lang),
+                )
+                .await;
             }
             Ok(list) => {
-                bot.send_message(chat, i18n::backups_list_title(lang))
-                    .reply_markup(menu::backups_list(lang, &list))
-                    .parse_mode(ParseMode::Html)
-                    .await?;
+                edit_or_send(
+                    &bot,
+                    chat,
+                    msg_id,
+                    i18n::backups_list_title(lang),
+                    menu::backups_list(lang, &list),
+                )
+                .await;
             }
             Err(e) => {
                 bot.send_message(chat, i18n::error_text(lang, &e)).await?;
@@ -968,15 +997,17 @@ async fn callback_handler(
             Ok(list) => match list.get(idx) {
                 Some(bf) => {
                     let text = format!("<code>{}</code>", i18n::html_escape(&bf.name));
-                    bot.send_message(chat, text)
-                        .reply_markup(menu::backup_card(lang, idx))
-                        .parse_mode(ParseMode::Html)
-                        .await?;
+                    edit_or_send(&bot, chat, msg_id, text, menu::backup_card(lang, idx)).await;
                 }
                 None => {
-                    bot.send_message(chat, i18n::backup_not_found(lang))
-                        .reply_markup(menu::main_menu(lang))
-                        .await?;
+                    edit_or_send(
+                        &bot,
+                        chat,
+                        msg_id,
+                        i18n::backup_not_found(lang),
+                        menu::main_menu(lang),
+                    )
+                    .await;
                 }
             },
             Err(e) => {
@@ -1005,15 +1036,24 @@ async fn callback_handler(
         Action::Restore(idx) => match vpn.list_backups() {
             Ok(list) => match list.get(idx) {
                 Some(bf) => {
-                    bot.send_message(chat, i18n::confirm_restore(lang, &bf.name))
-                        .reply_markup(menu::confirm_restore(lang, idx))
-                        .parse_mode(ParseMode::Html)
-                        .await?;
+                    edit_or_send(
+                        &bot,
+                        chat,
+                        msg_id,
+                        i18n::confirm_restore(lang, &bf.name),
+                        menu::confirm_restore(lang, idx),
+                    )
+                    .await;
                 }
                 None => {
-                    bot.send_message(chat, i18n::backup_not_found(lang))
-                        .reply_markup(menu::main_menu(lang))
-                        .await?;
+                    edit_or_send(
+                        &bot,
+                        chat,
+                        msg_id,
+                        i18n::backup_not_found(lang),
+                        menu::main_menu(lang),
+                    )
+                    .await;
                 }
             },
             Err(e) => {

@@ -7,11 +7,35 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
 
 ### 🇷🇺 Русский
 
-_Пусто — изменений после v0.4.0 пока нет._
+_Пусто — изменений после v0.5.0 пока нет._
 
 ### 🇬🇧 English
 
-_Empty — no changes since v0.4.0 yet._
+_Empty — no changes since v0.5.0 yet._
+
+## [0.5.0] — 2026-07-28
+
+### 🇷🇺 Русский
+
+#### ✨ Добавлено
+
+- Механика in-place-навигации (`editMessageText`) расширена на **все**
+  экраны-меню: настройки и тумблеры, карточка клиента, статистика,
+  бэкапы (меню/список/карточка), подтверждения (удаление/рестарт/рестор/
+  перевыпуск) и выбор языка. Чат больше не плодит дубли ни при каком
+  переходе по кнопкам — каждое меню живёт в одном сообщении
+  (продолжение [#16](https://github.com/ekuraev/awgram/issues/16)).
+
+### 🇬🇧 English
+
+#### ✨ Added
+
+- The in-place navigation (`editMessageText`) now covers **all** menu
+  screens: settings and toggles, client card, stats, backups
+  (menu/list/card), confirmations (delete/restart/restore/regen) and
+  language selection. No transition through a button clutters the chat
+  with duplicates anymore — every menu lives in a single message
+  (follow-up to [#16](https://github.com/ekuraev/awgram/issues/16)).
 
 ## [0.4.0] — 2026-07-28
 
@@ -255,6 +279,7 @@ config paths have changed. On a running VPS, perform once:
 - Environment diagnostics (🔬 button), ⏳ client expiry badges.
 - RU/EN localization, PSK default, backup/restore, persistent state.
 
+[0.5.0]: https://github.com/ekuraev/awgram/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/ekuraev/awgram/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/ekuraev/awgram/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/ekuraev/awgram/compare/v0.1.0...v0.2.0
