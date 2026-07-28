@@ -465,7 +465,7 @@ async fn message_handler(
             match crate::vpn::validate::validate_expiry(&raw) {
                 Ok(exp) => {
                     bot.send_message(msg.chat.id, i18n::psk_step(lang, settings.psk_default()))
-                        .reply_markup(menu::psk_step(lang, settings.psk_default()))
+                        .reply_markup(menu::bulk_psk_step(lang, settings.psk_default()))
                         .parse_mode(ParseMode::Html)
                         .await?;
                     dialogue
@@ -1099,6 +1099,15 @@ async fn callback_handler(
             dialogue.update(State::AwaitingBulkPrefix).await?;
         }
         Action::AddBulkRun(count) => {
+            // callback_data — untrusted input (craftable). Клавиатура эмитит
+            // только 1/3/5/10, но защищаемся от crafted bulk:N извне.
+            if count == 0 || count > crate::vpn::validate::MAX_BULK as usize {
+                bot.send_message(chat, session_expired_text(lang))
+                    .reply_markup(menu::main_menu(lang))
+                    .parse_mode(ParseMode::Html)
+                    .await?;
+                return Ok(());
+            }
             // Шаг 2/4: префикс уже введён (AwaitingBulkCount хранит его) —
             // переходим к выбору срока. Кол-во пришло из кнопки bulk_count_menu
             // (1/3/5/10 — префикс уже валиден, max=MAX_BULK держит клавиатура).
@@ -1145,7 +1154,7 @@ async fn callback_handler(
                     Some(kind.clone())
                 };
                 bot.send_message(chat, i18n::psk_step(lang, settings.psk_default()))
-                    .reply_markup(menu::psk_step(lang, settings.psk_default()))
+                    .reply_markup(menu::bulk_psk_step(lang, settings.psk_default()))
                     .parse_mode(ParseMode::Html)
                     .await?;
                 dialogue

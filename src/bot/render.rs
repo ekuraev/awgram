@@ -51,17 +51,26 @@ pub async fn send_client_files(bot: &Bot, chat: ChatId, lang: Lang, res: &AddRes
 /// Используется при массовой генерации. Все элементы — одного типа (документы),
 /// иначе Telegram отклонит альбом. `conf_paths` пуст → no-op (не ошибка).
 pub async fn send_album(bot: &Bot, chat: ChatId, conf_paths: &[String]) -> Result<()> {
-    if conf_paths.is_empty() {
-        return Ok(());
+    match conf_paths {
+        [] => Ok(()),
+        [single] => {
+            // sendMediaGroup требует 2–10 элементов; один конфиг шлём документом.
+            bot.send_document(chat, InputFile::file(single))
+                .await
+                .map_err(|e| Error::Telegram(e.to_string()))?;
+            Ok(())
+        }
+        paths => {
+            let media: Vec<InputMedia> = paths
+                .iter()
+                .map(|p| InputMedia::Document(InputMediaDocument::new(InputFile::file(p))))
+                .collect();
+            bot.send_media_group(chat, media)
+                .await
+                .map_err(|e| Error::Telegram(e.to_string()))?;
+            Ok(())
+        }
     }
-    let media: Vec<InputMedia> = conf_paths
-        .iter()
-        .map(|p| InputMedia::Document(InputMediaDocument::new(InputFile::file(p))))
-        .collect();
-    bot.send_media_group(chat, media)
-        .await
-        .map_err(|e| Error::Telegram(e.to_string()))?;
-    Ok(())
 }
 
 /// Авто-выдача после создания с учётом фильтра настроек. `conf/qr/link` —

@@ -12,6 +12,7 @@ pub fn main_menu(lang: Lang) -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![
         vec![cb(&i18n::btn_clients(lang), "list")],
         vec![cb(&i18n::btn_add(lang), "add")],
+        vec![cb(&i18n::btn_bulk(lang), "addbulk")],
         vec![cb(&i18n::btn_stats(lang), "stats")],
         vec![cb(&i18n::btn_backup(lang), "backup")],
         vec![
@@ -186,6 +187,26 @@ pub fn psk_step(lang: Lang, default_on: bool) -> InlineKeyboardMarkup {
         (
             cb(&i18n::btn_create_no_psk(lang), "add:psk:off"),
             cb(&i18n::btn_create_with_psk(lang), "add:psk:on"),
+        )
+    };
+    InlineKeyboardMarkup::new(vec![
+        vec![first, second],
+        vec![cb(&i18n::btn_back(lang), "menu")],
+    ])
+}
+
+/// Шаг выбора PSK в bulk-диалоге — как `psk_step`, но с `bulkadd:psk:` callback'ами
+/// (чтобы попасть в Action::AddBulkPsk, а не в одиночный Action::AddPsk).
+pub fn bulk_psk_step(lang: Lang, default_on: bool) -> InlineKeyboardMarkup {
+    let (first, second) = if default_on {
+        (
+            cb(&i18n::btn_create_with_psk(lang), "bulkadd:psk:on"),
+            cb(&i18n::btn_create_no_psk(lang), "bulkadd:psk:off"),
+        )
+    } else {
+        (
+            cb(&i18n::btn_create_no_psk(lang), "bulkadd:psk:off"),
+            cb(&i18n::btn_create_with_psk(lang), "bulkadd:psk:on"),
         )
     };
     InlineKeyboardMarkup::new(vec![
@@ -391,10 +412,18 @@ mod tests {
     fn main_menu_has_expected_actions() {
         let data = all_callback_data(&main_menu(Lang::Ru));
         for expected in [
-            "list", "add", "stats", "backup", "check", "diagnose", "restart", "repair", "settings",
+            "list", "add", "addbulk", "stats", "backup", "check", "diagnose", "restart", "repair",
+            "settings",
         ] {
             assert!(data.contains(&expected.to_string()), "missing {expected}");
         }
+    }
+
+    #[test]
+    fn bulk_psk_step_emits_bulkadd_callbacks() {
+        let data = all_callback_data(&bulk_psk_step(Lang::Ru, true));
+        assert!(data.contains(&"bulkadd:psk:on".to_string()));
+        assert!(!data.iter().any(|d| d.starts_with("add:psk:")));
     }
 
     #[test]
