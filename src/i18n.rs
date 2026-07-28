@@ -281,8 +281,12 @@ pub fn bulk_result_summary(lang: Lang, res: &crate::vpn::model::BulkResult) -> S
 // --- capacity-ошибки ---
 pub fn capacity_insufficient(lang: Lang, free: u32, needed: u32) -> String {
     match lang {
-        Lang::Ru => format!("⚠️ Свободно адресов: {free}, запрошено {needed}. Уменьшите количество."),
-        Lang::En => format!("⚠️ Only {free} addresses free, {needed} requested. Reduce the quantity."),
+        Lang::Ru => {
+            format!("⚠️ Свободно адресов: {free}, запрошено {needed}. Уменьшите количество.")
+        }
+        Lang::En => {
+            format!("⚠️ Only {free} addresses free, {needed} requested. Reduce the quantity.")
+        }
     }
 }
 pub fn capacity_exhausted(lang: Lang) -> String {
@@ -294,7 +298,9 @@ pub fn capacity_exhausted(lang: Lang) -> String {
 }
 pub fn capacity_unavailable(lang: Lang) -> String {
     match lang {
-        Lang::Ru => "⚠️ Не удалось получить информацию об интерфейсе. Проверьте сервер («🩺 Проверка»).",
+        Lang::Ru => {
+            "⚠️ Не удалось получить информацию об интерфейсе. Проверьте сервер («🩺 Проверка»)."
+        }
         Lang::En => "⚠️ Could not get interface info. Check the server (\"🩺 Check\").",
     }
     .to_string()
@@ -1301,11 +1307,21 @@ mod tests {
 
     #[test]
     fn bulk_result_summary_created_only() {
-        use crate::vpn::model::{BulkResult, AddResult};
+        use crate::vpn::model::{AddResult, BulkResult};
         let res = BulkResult {
             created: vec![
-                AddResult { name: "a".into(), conf_path: "/x".into(), qr_path: "".into(), uri: "".into() },
-                AddResult { name: "b".into(), conf_path: "/y".into(), qr_path: "".into(), uri: "".into() },
+                AddResult {
+                    name: "a".into(),
+                    conf_path: "/x".into(),
+                    qr_path: "".into(),
+                    uri: "".into(),
+                },
+                AddResult {
+                    name: "b".into(),
+                    conf_path: "/y".into(),
+                    qr_path: "".into(),
+                    uri: "".into(),
+                },
             ],
             skipped: vec![],
         };
@@ -1317,10 +1333,18 @@ mod tests {
 
     #[test]
     fn bulk_result_summary_with_skipped() {
-        use crate::vpn::model::{BulkResult, Skip, SkipReason, AddResult};
+        use crate::vpn::model::{AddResult, BulkResult, Skip, SkipReason};
         let res = BulkResult {
-            created: vec![AddResult { name: "a".into(), conf_path: "/x".into(), qr_path: "".into(), uri: "".into() }],
-            skipped: vec![Skip { name: "b".into(), reason: SkipReason::Exists }],
+            created: vec![AddResult {
+                name: "a".into(),
+                conf_path: "/x".into(),
+                qr_path: "".into(),
+                uri: "".into(),
+            }],
+            skipped: vec![Skip {
+                name: "b".into(),
+                reason: SkipReason::Exists,
+            }],
         };
         let ru = bulk_result_summary(Lang::Ru, &res);
         assert!(ru.contains("1"));

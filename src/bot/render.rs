@@ -200,7 +200,8 @@ mod tests {
             bot: &'a teloxide::Bot,
             chat: teloxide::types::ChatId,
             paths: &'a [String],
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::error::Result<()>> + 'a>> {
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::error::Result<()>> + 'a>>
+        {
             Box::pin(async move { send_album(bot, chat, paths).await })
         }
         fn _assert_filtered<'a>(
@@ -211,7 +212,8 @@ mod tests {
             conf: bool,
             qr: bool,
             link: bool,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::error::Result<()>> + 'a>> {
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::error::Result<()>> + 'a>>
+        {
             Box::pin(async move {
                 send_client_files_filtered(bot, chat, lang, res, conf, qr, link).await
             })

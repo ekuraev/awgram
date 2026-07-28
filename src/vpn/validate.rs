@@ -86,7 +86,9 @@ pub fn gen_bulk_names(
     let prefix = prefix.trim();
     // Префикс должен сам состоять из допустимых символов (без shell-метасимволов,
     // пробелов и т.п.) — иначе сгенерённые имена не пройдут name_re().
-    if !prefix.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    if !prefix
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
         || prefix.is_empty()
     {
         return Err(ValidateError::BadName);

@@ -159,7 +159,9 @@ impl Vpn {
         let parsed =
             wire::parse_add(&out).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
         if parsed.results.is_empty() {
-            return Err(crate::error::Error::Parse("add_many: пустой results[]".into()));
+            return Err(crate::error::Error::Parse(
+                "add_many: пустой results[]".into(),
+            ));
         }
         let mut created = Vec::new();
         let mut skipped = Vec::new();
@@ -1379,9 +1381,6 @@ echo '{"ok":true,"added":1,"failed":0,"applied":true,"results":[{"name":"a","sta
 echo '{"ok":true,"added":0,"failed":0,"applied":false,"results":[]}'
 "#;
         let (_d, vpn) = vpn_with_script(stub);
-        assert!(vpn
-            .add_many(&["a".to_string()], None, false)
-            .await
-            .is_err());
+        assert!(vpn.add_many(&["a".to_string()], None, false).await.is_err());
     }
 }

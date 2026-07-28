@@ -734,7 +734,7 @@ mod tests {
     fn settings_menu_has_deliver_toggles() {
         let data = all_callback_data(&settings_menu(Lang::Ru, true, false, true, false, true));
         assert!(data.contains(&"set:conf:off".to_string())); // on → эмитит off
-        assert!(data.contains(&"set:conf:on".to_string()) == false);
+        assert!(!data.contains(&"set:conf:on".to_string()));
         assert!(data.contains(&"set:qr:on".to_string())); // off → эмитит on
         assert!(data.contains(&"set:link:off".to_string())); // on → эмитит off
     }

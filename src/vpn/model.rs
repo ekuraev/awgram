@@ -489,14 +489,20 @@ mod tests {
 
     #[test]
     fn capacity_info_holds_counts() {
-        let c = CapacityInfo { free: 250, total: 254 };
+        let c = CapacityInfo {
+            free: 250,
+            total: 254,
+        };
         assert_eq!(c.free, 250);
         assert_eq!(c.total, 254);
     }
 
     #[test]
     fn skip_reason_variants_exist() {
-        let s = Skip { name: "x".into(), reason: SkipReason::Exists };
+        let s = Skip {
+            name: "x".into(),
+            reason: SkipReason::Exists,
+        };
         assert!(matches!(s.reason, SkipReason::Exists));
     }
 }
