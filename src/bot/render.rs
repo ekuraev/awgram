@@ -1,5 +1,5 @@
 use teloxide::prelude::*;
-use teloxide::types::{ChatId, InputFile, ParseMode};
+use teloxide::types::{ChatId, InputFile, InputMedia, InputMediaDocument, ParseMode};
 
 use crate::error::{Error, Result};
 use crate::i18n::{self, Lang};
@@ -39,6 +39,54 @@ pub async fn send_client_files(bot: &Bot, chat: ChatId, lang: Lang, res: &AddRes
             .map_err(|e| Error::Telegram(e.to_string()))?;
     }
     if !res.uri.is_empty() {
+        bot.send_message(chat, i18n::import_link(lang, &res.uri))
+            .parse_mode(ParseMode::Html)
+            .await
+            .map_err(|e| Error::Telegram(e.to_string()))?;
+    }
+    Ok(())
+}
+
+/// Выдаёт `.conf`-файлы одним альбомом через `sendMediaGroup` (2–10 документов).
+/// Используется при массовой генерации. Все элементы — одного типа (документы),
+/// иначе Telegram отклонит альбом. `conf_paths` пуст → no-op (не ошибка).
+pub async fn send_album(bot: &Bot, chat: ChatId, conf_paths: &[String]) -> Result<()> {
+    if conf_paths.is_empty() {
+        return Ok(());
+    }
+    let media: Vec<InputMedia> = conf_paths
+        .iter()
+        .map(|p| InputMedia::Document(InputMediaDocument::new(InputFile::file(p))))
+        .collect();
+    bot.send_media_group(chat, media)
+        .await
+        .map_err(|e| Error::Telegram(e.to_string()))?;
+    Ok(())
+}
+
+/// Авто-выдача после создания с учётом фильтра настроек. `conf/qr/link` —
+/// тумблеры из `SettingsStore`; каждый артефакт шлётся только если включён и
+/// существует (QR/ссылка условны — qrencode может отсутствовать).
+pub async fn send_client_files_filtered(
+    bot: &Bot,
+    chat: ChatId,
+    lang: Lang,
+    res: &AddResult,
+    conf: bool,
+    qr: bool,
+    link: bool,
+) -> Result<()> {
+    if conf {
+        bot.send_document(chat, InputFile::file(&res.conf_path))
+            .await
+            .map_err(|e| Error::Telegram(e.to_string()))?;
+    }
+    if qr && std::path::Path::new(&res.qr_path).exists() {
+        bot.send_photo(chat, InputFile::file(&res.qr_path))
+            .await
+            .map_err(|e| Error::Telegram(e.to_string()))?;
+    }
+    if link && !res.uri.is_empty() {
         bot.send_message(chat, i18n::import_link(lang, &res.uri))
             .parse_mode(ParseMode::Html)
             .await
@@ -141,5 +189,33 @@ mod tests {
         assert!(!text.contains("IP:"));
         assert!(text.contains("charlie"));
         assert!(text.contains("Трафик"));
+    }
+
+    #[test]
+    fn send_album_and_filtered_signatures_compile() {
+        // Compile-time check: функции существуют с правильными сигнатурами.
+        // Реальная отправка тестируется вручную (нужен живой Bot).
+        // Оба брала привязаны к одному `'a`, чтобы boxed future жил не дольше.
+        fn _assert_send_album<'a>(
+            bot: &'a teloxide::Bot,
+            chat: teloxide::types::ChatId,
+            paths: &'a [String],
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::error::Result<()>> + 'a>> {
+            Box::pin(async move { send_album(bot, chat, paths).await })
+        }
+        fn _assert_filtered<'a>(
+            bot: &'a teloxide::Bot,
+            chat: teloxide::types::ChatId,
+            lang: crate::i18n::Lang,
+            res: &'a crate::vpn::model::AddResult,
+            conf: bool,
+            qr: bool,
+            link: bool,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::error::Result<()>> + 'a>> {
+            Box::pin(async move {
+                send_client_files_filtered(bot, chat, lang, res, conf, qr, link).await
+            })
+        }
+        // если компилируется — контракт сигнатур соблюдён
     }
 }
