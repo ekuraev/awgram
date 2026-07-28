@@ -203,7 +203,10 @@ fn unknown_action_text(lang: Lang) -> &'static str {
 /// · `MessageNotModified` (контент не изменился — напр. 🔄 без изменений)
 ///   — глотаем, это успешный no-op;
 /// · любая иная ошибка (сообщение удалено/не текст/устарело) — откат к
-///   `send_message`, чтобы навигация не зависела от редактируемости сообщения.
+///   `send_message`, а со старого сообщения снимается inline-клавиатура
+///   (пустой markup), чтобы в чате не висели две живых клавиатуры. Если
+///   старое уже удалено — `edit_message_reply_markup` тоже упадёт, ошибку
+///   игнорируем.
 async fn edit_or_send(
     bot: &Bot,
     chat: ChatId,
@@ -223,6 +226,12 @@ async fn edit_or_send(
             }
             e => {
                 tracing::debug!(error = %e, "edit_message_text не удался — отправляю новое");
+                // Снимаем клавиатуру со старого сообщения — ниже уйдёт новое с
+                // живой клавиатурой, и двух активных рядом быть не должно.
+                let _ = bot
+                    .edit_message_reply_markup(chat, msg_id)
+                    .reply_markup(InlineKeyboardMarkup::default())
+                    .await;
                 let _ = bot
                     .send_message(chat, text)
                     .reply_markup(kb)
