@@ -248,6 +248,10 @@ pub fn client_card(lang: Lang, name: &str) -> InlineKeyboardMarkup {
         Lang::Ru => "📄 Конфиг",
         Lang::En => "📄 Config",
     };
+    let del_txt = match lang {
+        Lang::Ru => "🗑 Удалить",
+        Lang::En => "🗑 Delete",
+    };
     InlineKeyboardMarkup::new(vec![
         vec![
             cb(conf_txt, &format!("conf:{name}")),
@@ -257,7 +261,10 @@ pub fn client_card(lang: Lang, name: &str) -> InlineKeyboardMarkup {
             cb(&i18n::btn_card_link(lang), &format!("uri:{name}")),
             cb(&i18n::btn_card_all(lang), &format!("all:{name}")),
         ],
-        vec![cb(&i18n::btn_regen(lang), &format!("regen:{name}"))],
+        vec![
+            cb(&i18n::btn_regen(lang), &format!("regen:{name}")),
+            cb(del_txt, &format!("del:{name}")),
+        ],
         vec![cb(&i18n::btn_modify(lang), &format!("mod:{name}"))],
         vec![cb(&i18n::btn_back(lang), "menu")],
     ])
@@ -709,6 +716,7 @@ mod tests {
         assert!(data.contains(&"qr:alice".to_string()));
         assert!(data.contains(&"uri:alice".to_string()));
         assert!(data.contains(&"all:alice".to_string()));
+        assert!(data.contains(&"del:alice".to_string()));
     }
 
     #[test]
