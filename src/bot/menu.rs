@@ -148,16 +148,20 @@ pub fn clients_list(
         .collect();
 
     let total_pages = clients.len().div_ceil(per_page).max(1);
+    // 🔄 всегда в nav-ряду: перерисовывает ТЕКУЩУЮ страницу со свежими данными.
+    // Callback `page:{page}` → Action::Page (он заново зовёт vpn.list()), поэтому
+    // refresh сохраняет страницу, а не сбрасывает на 0. На одностраничном списке
+    // это единственная кнопка ряда; на многостраничном встаёт между пагинацией:
+    // [◀️] [🔄] [▶️].
     let mut nav = Vec::new();
     if page > 0 {
         nav.push(cb("◀️", &format!("page:{}", page - 1)));
     }
+    nav.push(cb(&i18n::btn_refresh(lang), &format!("page:{page}")));
     if page + 1 < total_pages {
         nav.push(cb("▶️", &format!("page:{}", page + 1)));
     }
-    if !nav.is_empty() {
-        rows.push(nav);
-    }
+    rows.push(nav);
     rows.push(vec![cb(&i18n::btn_regen_all(lang), "regen_all")]);
     rows.push(vec![cb(&i18n::btn_back(lang), "menu")]);
     InlineKeyboardMarkup::new(rows)
@@ -383,6 +387,87 @@ mod tests {
         }];
         let data = all_callback_data(&clients_list(Lang::Ru, &clients, &[], 0, 0, 10));
         assert!(data.contains(&"regen_all".to_string()));
+    }
+
+    #[test]
+    fn clients_list_has_refresh_button() {
+        // 🔄 «Обновить» эмитит `page:{page}` (Action::Page → edit-in-place с сохранением
+        // текущей страницы). На странице 0 это `page:0`. Кнопка должна быть всегда —
+        // даже на одностраничном списке (иначе обновить статусы нельзя).
+        let clients = vec![Client {
+            name: "a".into(),
+            ip: String::new(),
+            client_ipv6: String::new(),
+            status: String::new(),
+            status_code: "active".into(),
+            rx: 0,
+            tx: 0,
+            last_handshake: None,
+        }];
+        let data = all_callback_data(&clients_list(Lang::Ru, &clients, &[], 0, 0, 10));
+        assert!(
+            data.contains(&"page:0".to_string()),
+            "refresh button (page:0) missing: {data:?}"
+        );
+    }
+
+    #[test]
+    fn clients_list_refresh_between_pagination() {
+        // На многостраничном списке nav-ряд выглядит [◀️] [🔄] [▶️]:
+        let clients: Vec<Client> = (0..20)
+            .map(|i| Client {
+                name: format!("c{i}"),
+                ip: String::new(),
+                client_ipv6: String::new(),
+                status: String::new(),
+                status_code: "active".into(),
+                rx: 0,
+                tx: 0,
+                last_handshake: None,
+            })
+            .collect();
+        let kb = clients_list(Lang::Ru, &clients, &[], 0, 0, 8);
+        // nav-ряд — первый после клиентских (8 клиентов на странице → ряд с индексом 8).
+        let nav_row = &kb.inline_keyboard[8];
+        let data: Vec<&str> = nav_row
+            .iter()
+            .filter_map(|b| match &b.kind {
+                teloxide::types::InlineKeyboardButtonKind::CallbackData(d) => Some(d.as_str()),
+                _ => None,
+            })
+            .collect();
+        // [🔄 page:0] [▶️ page:1] — refresh на странице 0 сохраняет её:
+        assert_eq!(data, vec!["page:0", "page:1"]);
+    }
+
+    #[test]
+    fn clients_list_refresh_preserves_page() {
+        // 🔄 на странице N эмитит `page:N` — обновляет данные, не сбрасывая на 0.
+        // 24 клиента / 8 на странице → 3 страницы; на странице 2 nav-ряд:
+        // [◀️ page:1] [🔄 page:2] (▶️ нет, т.к. последняя страница).
+        let clients: Vec<Client> = (0..24)
+            .map(|i| Client {
+                name: format!("c{i}"),
+                ip: String::new(),
+                client_ipv6: String::new(),
+                status: String::new(),
+                status_code: "active".into(),
+                rx: 0,
+                tx: 0,
+                last_handshake: None,
+            })
+            .collect();
+        let kb = clients_list(Lang::Ru, &clients, &[], 0, 2, 8);
+        // Страница 2: клиентские ряды 16..23 (8 шт.) → nav-ряд с индексом 8.
+        let nav_row = &kb.inline_keyboard[8];
+        let data: Vec<&str> = nav_row
+            .iter()
+            .filter_map(|b| match &b.kind {
+                teloxide::types::InlineKeyboardButtonKind::CallbackData(d) => Some(d.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(data, vec!["page:1", "page:2"]);
     }
 
     #[test]
