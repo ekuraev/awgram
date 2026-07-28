@@ -57,6 +57,13 @@ pub fn btn_add(lang: Lang) -> String {
     }
     .to_string()
 }
+pub fn btn_refresh(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "🔄 Обновить",
+        Lang::En => "🔄 Refresh",
+    }
+    .to_string()
+}
 pub fn btn_stats(lang: Lang) -> String {
     match lang {
         Lang::Ru => "📊 Статистика",
@@ -987,6 +994,13 @@ mod tests {
         for l in [Lang::Ru, Lang::En] {
             assert!(!btn_regen(l).is_empty());
             assert!(!regen_running(l).is_empty());
+        }
+    }
+
+    #[test]
+    fn btn_refresh_nonempty_both_langs() {
+        for l in [Lang::Ru, Lang::En] {
+            assert!(!btn_refresh(l).is_empty());
         }
     }
 

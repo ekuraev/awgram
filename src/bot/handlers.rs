@@ -3,7 +3,7 @@ use std::sync::Arc;
 use teloxide::dispatching::dialogue::InMemStorage;
 use teloxide::dispatching::{HandlerExt, UpdateFilterExt};
 use teloxide::prelude::*;
-use teloxide::types::{CallbackQuery, InputFile, ParseMode};
+use teloxide::types::{CallbackQuery, InlineKeyboardMarkup, InputFile, MessageId, ParseMode};
 
 use crate::auth::is_admin;
 use crate::bot::menu;
@@ -189,6 +189,47 @@ fn unknown_action_text(lang: Lang) -> &'static str {
     match lang {
         Lang::Ru => "Неизвестное действие.",
         Lang::En => "Unknown action.",
+    }
+}
+
+/// Рендер экрана навигации (меню / список клиентов / страница списка)
+/// редактированием сообщения, на кнопке которого нажали (`msg_id` — это
+/// `q.message`). Применяется в `Action::Menu`, `Action::List`, `Action::Page`:
+/// меню↔список↔пагинация эволюционируют в одном сообщении — без спама и без
+/// глобального HashMap с message_id (его предлагал issue #16, но источник
+/// редактируемого сообщения у нас уже есть — это само `q.message`).
+///
+/// Поведение при ошибках:
+/// · `MessageNotModified` (контент не изменился — напр. 🔄 без изменений)
+///   — глотаем, это успешный no-op;
+/// · любая иная ошибка (сообщение удалено/не текст/устарело) — откат к
+///   `send_message`, чтобы навигация не зависела от редактируемости сообщения.
+async fn edit_or_send(
+    bot: &Bot,
+    chat: ChatId,
+    msg_id: MessageId,
+    text: String,
+    kb: InlineKeyboardMarkup,
+) {
+    let edit = bot
+        .edit_message_text(chat, msg_id, text.clone())
+        .reply_markup(kb.clone())
+        .parse_mode(ParseMode::Html)
+        .await;
+    if let Err(e) = edit {
+        match e {
+            teloxide::errors::RequestError::Api(teloxide::errors::ApiError::MessageNotModified) => {
+                // Контент не изменился (нажали 🔄 без изменений) — норма.
+            }
+            e => {
+                tracing::debug!(error = %e, "edit_message_text не удался — отправляю новое");
+                let _ = bot
+                    .send_message(chat, text)
+                    .reply_markup(kb)
+                    .parse_mode(ParseMode::Html)
+                    .await;
+            }
+        }
     }
 }
 
@@ -441,17 +482,21 @@ async fn callback_handler(
 ) -> HandlerResult {
     bot.answer_callback_query(q.id.clone()).await.ok();
 
-    let chat = match &q.message {
-        Some(m) => m.chat(),
+    let src = match &q.message {
+        Some(m) => m,
         None => return Ok(()),
     };
-    if !chat.is_private() {
+    if !src.chat().is_private() {
         // Секреты (конфиги, QR, ссылки, бэкапы, диагностика) уходят в чат
         // апдейта — в группе они утекли бы всем участникам. Callback уже
         // отвечен выше, тут просто молча отказываем без запуска VPN-действий.
         return Ok(());
     }
-    let chat = chat.id;
+    let chat = src.chat().id;
+    // Сообщение-источник кнопки: навигация (меню/список/страница) редактирует
+    // его на месте через edit_or_send, а не отправляет новое — так меню↔список
+    // живут в одном сообщении без спама и без глобального хранилища message_id.
+    let msg_id = src.id();
 
     let uid = user_id_of_cb(&q);
     if !is_admin(uid, &cfg.admin_ids) {
@@ -464,16 +509,25 @@ async fn callback_handler(
     match parse_callback(&data) {
         Action::Menu => {
             dialogue.update(State::Idle).await?;
-            bot.send_message(chat, i18n::menu_title(lang))
-                .reply_markup(menu::main_menu(lang))
-                .parse_mode(ParseMode::Html)
-                .await?;
+            edit_or_send(
+                &bot,
+                chat,
+                msg_id,
+                i18n::menu_title(lang),
+                menu::main_menu(lang),
+            )
+            .await;
         }
         Action::List => match vpn.list().await {
             Ok(clients) if clients.is_empty() => {
-                bot.send_message(chat, i18n::clients_empty(lang))
-                    .reply_markup(menu::main_menu(lang))
-                    .await?;
+                edit_or_send(
+                    &bot,
+                    chat,
+                    msg_id,
+                    i18n::clients_empty(lang),
+                    menu::main_menu(lang),
+                )
+                .await;
             }
             Ok(clients) => {
                 // Полный вектор (не только текущая страница): clients_list
@@ -481,17 +535,14 @@ async fn callback_handler(
                 // дал бы сдвиг меток на страницах > 0.
                 let expiries: Vec<Option<i64>> =
                     clients.iter().map(|c| vpn.client_expiry(&c.name)).collect();
-                bot.send_message(chat, i18n::clients_title(lang))
-                    .reply_markup(menu::clients_list(
-                        lang,
-                        &clients,
-                        &expiries,
-                        now_epoch(),
-                        0,
-                        8,
-                    ))
-                    .parse_mode(ParseMode::Html)
-                    .await?;
+                edit_or_send(
+                    &bot,
+                    chat,
+                    msg_id,
+                    i18n::clients_title(lang),
+                    menu::clients_list(lang, &clients, &expiries, now_epoch(), 0, 8),
+                )
+                .await;
             }
             Err(e) => {
                 tracing::error!(error = %e, "list провалился");
@@ -503,17 +554,14 @@ async fn callback_handler(
                 // См. комментарий в Action::List: вектор обязан быть полным.
                 let expiries: Vec<Option<i64>> =
                     clients.iter().map(|c| vpn.client_expiry(&c.name)).collect();
-                bot.send_message(chat, i18n::clients_title(lang))
-                    .reply_markup(menu::clients_list(
-                        lang,
-                        &clients,
-                        &expiries,
-                        now_epoch(),
-                        p,
-                        8,
-                    ))
-                    .parse_mode(ParseMode::Html)
-                    .await?;
+                edit_or_send(
+                    &bot,
+                    chat,
+                    msg_id,
+                    i18n::clients_title(lang),
+                    menu::clients_list(lang, &clients, &expiries, now_epoch(), p, 8),
+                )
+                .await;
             }
             Err(e) => {
                 bot.send_message(chat, i18n::error_text(lang, &e)).await?;

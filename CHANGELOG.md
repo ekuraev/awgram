@@ -7,6 +7,15 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
 
 ### 🇷🇺 Русский
 
+#### ✨ Добавлено
+
+- Навигация по меню/списку клиентов (меню ↔ список ↔ страницы) теперь
+  обновляет сообщение на месте через `editMessageText`, а не отправляет
+  новое — чат больше не захламляется копиями
+  ([#16](https://github.com/ekuraev/awgram/issues/16)).
+- Кнопка 🔄 «Обновить» в списке клиентов: перерисовывает актуальные статусы
+  и метки срока действия в том же сообщении.
+
 #### ♻️ Изменено
 
 - Поддержка инсталлера расширена до
@@ -20,6 +29,15 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
   `tokio`, `serde`.
 
 ### 🇬🇧 English
+
+#### ✨ Added
+
+- Menu/clients navigation (menu ↔ list ↔ pages) now updates the message
+  in place via `editMessageText` instead of sending a new one — the chat
+  no longer gets cluttered with duplicate copies
+  ([#16](https://github.com/ekuraev/awgram/issues/16)).
+- 🔄 "Refresh" button in the clients list: redraws current statuses and
+  expiry badges in the same message.
 
 #### ♻️ Changed
 
