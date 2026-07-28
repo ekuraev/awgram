@@ -550,6 +550,18 @@ async fn callback_handler(
             }
         },
         Action::Page(p) => match vpn.list().await {
+            // Пустой список (напр. всех клиентов удалили, пока смотрели страницу) —
+            // показываем friendly-сообщение, как в Action::List, а не пустую страницу.
+            Ok(clients) if clients.is_empty() => {
+                edit_or_send(
+                    &bot,
+                    chat,
+                    msg_id,
+                    i18n::clients_empty(lang),
+                    menu::main_menu(lang),
+                )
+                .await;
+            }
             Ok(clients) => {
                 // См. комментарий в Action::List: вектор обязан быть полным.
                 let expiries: Vec<Option<i64>> =
