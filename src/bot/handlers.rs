@@ -50,6 +50,19 @@ pub enum Action {
     Restart,
     RestartRun,
     RepairModule,
+    // --- Массовая генерация (#22) ---
+    AddBulk,
+    AddBulkRun(usize), // N клиентов для генерации (1..=MAX_BULK, валидируется в обработчике)
+    BulkExpiry(String), // "none" | "1d" | ... | "custom" — общий срок для всей пачки
+    AddBulkPsk(bool),  // true = включить PSK для генерируемых клиентов
+    // --- Артефакты существующего клиента (повторная выдача) ---
+    SendQr(String),
+    SendLink(String),
+    SendAll(String),
+    // --- Тумблеры выдачи артефактов в настройках ---
+    SetConf(bool),
+    SetQr(bool),
+    SetLink(bool),
     Unknown,
 }
 
@@ -58,6 +71,7 @@ fn parse_callback(data: &str) -> Action {
         "menu" => Action::Menu,
         "list" => Action::List,
         "add" => Action::Add,
+        "addbulk" => Action::AddBulk,
         "stats" => Action::Stats,
         "settings" => Action::Settings,
         "backup" => Action::Backup,
@@ -78,6 +92,24 @@ fn parse_callback(data: &str) -> Action {
                 Action::ShowClient(v.to_string())
             } else if let Some(v) = data.strip_prefix("conf:") {
                 Action::SendConf(v.to_string())
+            } else if let Some(v) = data.strip_prefix("qr:") {
+                Action::SendQr(v.to_string())
+            } else if let Some(v) = data.strip_prefix("uri:") {
+                Action::SendLink(v.to_string())
+            } else if let Some(v) = data.strip_prefix("all:") {
+                Action::SendAll(v.to_string())
+            } else if let Some(v) = data.strip_prefix("bulkadd:psk:") {
+                // Must be checked before "bulk:" — same reason as delyes:/del:
+                // ("bulkadd:..." also starts with "bulk", so "bulk:" would
+                // prefix-match it and misparse as AddBulkRun("add:psk:on")).
+                Action::AddBulkPsk(v == "on")
+            } else if let Some(v) = data.strip_prefix("bulkexp:") {
+                // Must be checked before "bulk:" — same reason as delyes:/del:
+                // ("bulkexp:..." also starts with "bulk").
+                Action::BulkExpiry(v.to_string())
+            } else if let Some(v) = data.strip_prefix("bulk:") {
+                // Проверяется ПОСЛЕ bulkadd:/bulkexp: (см. выше).
+                v.parse().map(Action::AddBulkRun).unwrap_or(Action::Unknown)
             } else if let Some(v) = data.strip_prefix("delyes:") {
                 // Must be checked before "del:" — otherwise "del:" prefix-matches
                 // "delyes:..." and confirmed deletes get misparsed as delete-asks.
@@ -104,6 +136,12 @@ fn parse_callback(data: &str) -> Action {
                 Action::SetPsk(v == "on")
             } else if let Some(v) = data.strip_prefix("set:slug:") {
                 Action::SetSlug(v == "on")
+            } else if let Some(v) = data.strip_prefix("set:conf:") {
+                Action::SetConf(v == "on")
+            } else if let Some(v) = data.strip_prefix("set:qr:") {
+                Action::SetQr(v == "on")
+            } else if let Some(v) = data.strip_prefix("set:link:") {
+                Action::SetLink(v == "on")
             } else if let Some(v) = data.strip_prefix("lang:") {
                 Action::Lang(v.to_string())
             } else if let Some(v) = data.strip_prefix("bk:restore_yes:") {
@@ -1214,6 +1252,52 @@ mod tests {
         );
         // "regen_all…" не должен съедаться префиксом "regen:" (там двоеточие).
         assert_eq!(parse_callback("regen:alice"), Action::Regen("alice".into()));
+    }
+
+    #[test]
+    fn parses_bulk_and_artifact_actions() {
+        assert_eq!(parse_callback("bulk:1"), Action::AddBulkRun(1));
+        assert_eq!(parse_callback("bulk:10"), Action::AddBulkRun(10));
+        assert_eq!(parse_callback("qr:alice"), Action::SendQr("alice".into()));
+        assert_eq!(
+            parse_callback("uri:alice"),
+            Action::SendLink("alice".into())
+        );
+        assert_eq!(parse_callback("all:alice"), Action::SendAll("alice".into()));
+        assert_eq!(parse_callback("set:conf:on"), Action::SetConf(true));
+        assert_eq!(parse_callback("set:conf:off"), Action::SetConf(false));
+        assert_eq!(parse_callback("set:qr:on"), Action::SetQr(true));
+        assert_eq!(parse_callback("set:link:on"), Action::SetLink(true));
+    }
+
+    #[test]
+    fn parse_callback_addbulk_keyword() {
+        assert_eq!(parse_callback("addbulk"), Action::AddBulk);
+    }
+
+    #[test]
+    fn parse_callback_bulk_expiry_and_psk() {
+        assert_eq!(
+            parse_callback("bulkexp:none"),
+            Action::BulkExpiry("none".into())
+        );
+        assert_eq!(
+            parse_callback("bulkexp:30d"),
+            Action::BulkExpiry("30d".into())
+        );
+        assert_eq!(parse_callback("bulkadd:psk:on"), Action::AddBulkPsk(true));
+        assert_eq!(parse_callback("bulkadd:psk:off"), Action::AddBulkPsk(false));
+    }
+
+    #[test]
+    fn parse_callback_no_collision_uri_vs_other_prefixes() {
+        // "uri:" не должен коллизировать с существующими префиксами
+        assert_eq!(
+            parse_callback("uri:alice"),
+            Action::SendLink("alice".into())
+        );
+        // "all:" — тоже уникален
+        assert_eq!(parse_callback("all:alice"), Action::SendAll("alice".into()));
     }
 
     #[test]
