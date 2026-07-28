@@ -17,6 +17,11 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
   настройках. Действует на одиночное и массовое добавление.
 - **Карточка клиента**: отдельные кнопки для конфига, QR, ссылки и «всё»
   (раньше — одна кнопка «всё»).
+- **Трёхцветная индикация статуса**: 🟢 активен/недавно, 🟡 нет handshake
+  (никогда не подключался), 🔴 оффлайн/ошибка ключа — вместо прежнего
+  бинарного «зелёный/красный». Время последнего handshake теперь прямо в
+  кнопке списка клиентов; карточка перерисована в иконочном формате
+  ([#21](https://github.com/ekuraev/awgram/issues/21)).
 
 ### 🇬🇧 English
 
@@ -30,6 +35,11 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
   Applies to both single and bulk addition.
 - **Client card**: separate buttons for config, QR, link and "all"
   (previously a single "all" button).
+- **Three-color status indicators**: 🟢 active/recent, 🟡 no handshake
+  (never connected), 🔴 offline/key error — replacing the former binary
+  "green/red". Last handshake time now shown directly in the client list
+  button; the card was restyled to an icon-based layout
+  ([#21](https://github.com/ekuraev/awgram/issues/21)).
 
 ## [0.5.0] — 2026-07-28
 

@@ -25,6 +25,26 @@ impl Client {
     pub fn active(&self) -> bool {
         self.status_code == "active"
     }
+
+    /// Трёхцветная метка статуса для индикации в списке и карточке.
+    /// Опирается на стабильный `status_code` инсталлера (а не на handshake):
+    /// инсталлер уже считает эти градации корректно с учётом keepalive/недавности.
+    ///   🟢 `active` / `recent`      — подключён / был недавно
+    ///   🟡 `no_handshake` / `no_data` — никогда не подключался / нет данных
+    ///   🔴 прочее (`inactive`/`key_error`/...) — был, но давно / ошибка ключа
+    pub fn status_mark(&self) -> &'static str {
+        status_mark_code(&self.status_code)
+    }
+}
+
+/// Цвет статуса по строковому `status_code`. Вынесен из `Client::status_mark`,
+/// чтобы слой `i18n` мог выбрать эмодзи для карточки без владения `Client`.
+pub fn status_mark_code(status_code: &str) -> &'static str {
+    match status_code {
+        "active" | "recent" => "🟢",
+        "no_handshake" | "no_data" => "🟡",
+        _ => "🔴",
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -124,6 +144,43 @@ pub fn format_handshake(lang: Lang, now: i64, hs: i64) -> String {
         match lang {
             Lang::Ru => format!("{} дн назад", d / 86400),
             Lang::En => format!("{} d ago", d / 86400),
+        }
+    }
+}
+
+/// Компактная метка handshake для кнопки списка («5 мин», а не «5 мин назад»).
+/// Те же пороги, что у `format_handshake`, но без хвоста «назад»/«ago» — кнопки
+/// Telegram узкие, и каждая морфема на счету. `hs <= 0` → «никогда»/«never»
+/// (клиент с `no_handshake` по `status_code` плюс никогда не имевший handshake).
+pub fn format_handshake_compact(lang: Lang, now: i64, hs: i64) -> String {
+    if hs <= 0 {
+        return match lang {
+            Lang::Ru => "никогда",
+            Lang::En => "never",
+        }
+        .to_string();
+    }
+    let d = now - hs;
+    if d < 60 {
+        match lang {
+            Lang::Ru => "сейчас",
+            Lang::En => "now",
+        }
+        .to_string()
+    } else if d < 3600 {
+        match lang {
+            Lang::Ru => format!("{} мин", d / 60),
+            Lang::En => format!("{} min", d / 60),
+        }
+    } else if d < 86400 {
+        match lang {
+            Lang::Ru => format!("{} ч", d / 3600),
+            Lang::En => format!("{} h", d / 3600),
+        }
+    } else {
+        match lang {
+            Lang::Ru => format!("{} дн", d / 86400),
+            Lang::En => format!("{} d", d / 86400),
         }
     }
 }
@@ -382,6 +439,89 @@ mod tests {
             format_handshake(Lang::Ru, 1_700_000_000, 1_700_000_100),
             "только что"
         );
+    }
+
+    // --- format_handshake_compact: те же пороги, что у format_handshake,
+    // но без хвоста «назад»/«ago» — для узких кнопок списка клиентов. ---
+
+    #[test]
+    fn format_handshake_compact_never() {
+        assert_eq!(format_handshake_compact(Lang::Ru, 1_700_000_000, 0), "никогда");
+        assert_eq!(format_handshake_compact(Lang::En, 1_700_000_000, -5), "never");
+    }
+
+    #[test]
+    fn format_handshake_compact_now() {
+        let now = 1_700_000_000;
+        assert_eq!(format_handshake_compact(Lang::Ru, now, now - 30), "сейчас");
+        assert_eq!(format_handshake_compact(Lang::En, now, now + 10), "now");
+    }
+
+    #[test]
+    fn format_handshake_compact_minutes() {
+        let now = 1_700_000_000;
+        assert_eq!(format_handshake_compact(Lang::Ru, now, now - 600), "10 мин");
+        assert_eq!(format_handshake_compact(Lang::En, now, now - 600), "10 min");
+    }
+
+    #[test]
+    fn format_handshake_compact_hours() {
+        let now = 1_700_000_000;
+        assert_eq!(format_handshake_compact(Lang::Ru, now, now - 7200), "2 ч");
+        assert_eq!(format_handshake_compact(Lang::En, now, now - 7200), "2 h");
+    }
+
+    #[test]
+    fn format_handshake_compact_days() {
+        let now = 1_700_000_000;
+        assert_eq!(format_handshake_compact(Lang::Ru, now, now - 172800), "2 дн");
+        assert_eq!(format_handshake_compact(Lang::En, now, now - 172800), "2 d");
+    }
+
+    #[test]
+    fn format_handshake_compact_boundary_60_seconds() {
+        let now = 2_000_000;
+        assert_eq!(format_handshake_compact(Lang::Ru, now, now - 60), "1 мин");
+    }
+
+    // --- status_mark_code: трёхцветная карта по status_code инсталлера. ---
+
+    #[test]
+    fn status_mark_green_for_active_and_recent() {
+        assert_eq!(status_mark_code("active"), "🟢");
+        assert_eq!(status_mark_code("recent"), "🟢");
+    }
+
+    #[test]
+    fn status_mark_yellow_for_no_handshake_and_no_data() {
+        // Клиент, который НИКОГДА не подключался / нет данных — отличается от
+        // «был, но давно»: жёлтый, а не красный.
+        assert_eq!(status_mark_code("no_handshake"), "🟡");
+        assert_eq!(status_mark_code("no_data"), "🟡");
+    }
+
+    #[test]
+    fn status_mark_red_for_inactive_key_error_and_unknown() {
+        assert_eq!(status_mark_code("inactive"), "🔴");
+        assert_eq!(status_mark_code("key_error"), "🔴");
+        // Неизвестный код в будущей версии инсталлера — безопасный дефолт красный.
+        assert_eq!(status_mark_code("totally_new_code"), "🔴");
+        assert_eq!(status_mark_code(""), "🔴");
+    }
+
+    #[test]
+    fn client_status_mark_matches_helper() {
+        let c = Client {
+            name: "x".into(),
+            ip: String::new(),
+            client_ipv6: String::new(),
+            status: String::new(),
+            status_code: "no_handshake".into(),
+            rx: 0,
+            tx: 0,
+            last_handshake: None,
+        };
+        assert_eq!(c.status_mark(), "🟡");
     }
 
     #[test]

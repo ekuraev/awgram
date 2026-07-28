@@ -799,7 +799,9 @@ async fn callback_handler(
             )
             .await;
         }
-        Action::List => match vpn.list().await {
+        Action::List => match vpn.stats().await {
+            // stats --json вместо list: кнопки списка показывают handshake
+            // (last_handshake есть только в stats; list отдаёт лишь status_code).
             Ok(clients) if clients.is_empty() => {
                 edit_or_send(
                     &bot,
@@ -826,11 +828,14 @@ async fn callback_handler(
                 .await;
             }
             Err(e) => {
-                tracing::error!(error = %e, "list провалился");
+                tracing::error!(error = %e, "stats провалился");
                 bot.send_message(chat, i18n::error_text(lang, &e)).await?;
             }
         },
-        Action::Page(p) => match vpn.list().await {
+        Action::Page(p) => match vpn.stats().await {
+            // stats --json (см. Action::List): handshake в кнопках требует
+            // last_handshake, которого нет в list. refresh перерисовывает
+            // текущую страницу p со свежими данными.
             // Пустой список (напр. всех клиентов удалили, пока смотрели страницу) —
             // показываем friendly-сообщение, как в Action::List, а не пустую страницу.
             Ok(clients) if clients.is_empty() => {
