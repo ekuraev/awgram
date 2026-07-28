@@ -20,7 +20,7 @@ rand = "0.10"
 
 [dev-dependencies]
 tempfile = "3"
-serial_test = "3"
+serial_test = "4"
 
 [profile.release]
 # Символы срезает rustc при линковке — работает и при кросс-сборке,
