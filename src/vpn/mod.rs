@@ -257,6 +257,42 @@ impl Vpn {
         raw.trim().parse::<i64>().ok()
     }
 
+    /// Свободные адреса в подсети сервера для превентивной проверки массовой
+    /// генерации. `total` = usable-хостов v4-подсети (минус network+broadcast),
+    /// `free` = total − 1 (сервер) − existing. Берёт первый IPv4 из
+    /// `interface.addresses` (v6 /64 — безгранична, не ограничивает). Нет v4
+    /// или addresses пуст → `Err` (интерфейс не поднят / check недоступен).
+    pub async fn capacity(&self) -> Result<crate::vpn::model::CapacityInfo> {
+        let report = self.check().await?;
+        let cidr_v4 = report
+            .interface
+            .addresses
+            .iter()
+            .find(|a| !a.contains(':'))
+            .ok_or_else(|| {
+                crate::error::Error::Parse("capacity: нет IPv4-адреса интерфейса".into())
+            })?;
+        let prefix_len = cidr_v4
+            .rsplit('/')
+            .nth(0)
+            .and_then(|s| s.parse::<u32>().ok())
+            .filter(|&p| p <= 32)
+            .ok_or_else(|| {
+                crate::error::Error::Parse(format!("capacity: некорректный CIDR {cidr_v4}"))
+            })?;
+        // usable_hosts(/N) = 2^(32−N) − 2 (минус network + broadcast).
+        // /31 и /32 — вырожденные (point-to-point), но формула даёт 0/−1;
+        // берём max(0, ...) чтобы не уйти в underflow.
+        let total = if prefix_len >= 31 {
+            0
+        } else {
+            (1u32 << (32 - prefix_len)).saturating_sub(2)
+        };
+        let existing = self.list().await?.len() as u32;
+        let free = total.saturating_sub(1).saturating_sub(existing);
+        Ok(crate::vpn::model::CapacityInfo { free, total })
+    }
+
     fn backups_dir(&self) -> PathBuf {
         self.clients_dir.join("backups")
     }
@@ -1112,5 +1148,68 @@ exit 1
         let (_d, vpn) = vpn_with_script(stub);
         let out = vpn.repair_module().await.unwrap();
         assert_eq!(out.rc, 2);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn capacity_free_is_total_minus_server_minus_clients() {
+        // /24 → 254 usable; 3 клиента → free = 254 − 1 − 3 = 250
+        let stub = r#"#!/bin/sh
+case "$1" in
+  check) echo '{"command":"check","ok":true,"service":{"unit":"awg-quick@awg0","active":true},"interface":{"name":"awg0","present":true,"mtu":1280,"addresses":["10.9.9.1/24","fd00::1/64"]},"port":{"number":39743,"listening":true},"module":{"loaded":true},"clients":{"total":3},"firewall":{"ufw_active":true,"port_allowed":true}}' ;;
+  list)  echo '[{"name":"a","status_code":"active"},{"name":"b","status_code":"active"},{"name":"c","status_code":"active"}]' ;;
+  *) exit 1 ;;
+esac
+"#;
+        let (_d, vpn) = vpn_with_script(stub);
+        let cap = vpn.capacity().await.unwrap();
+        assert_eq!(cap.total, 254);
+        assert_eq!(cap.free, 250);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn capacity_small_subnet_29() {
+        // /29 → 6 usable; 1 клиент → free = 6 − 1 − 1 = 4
+        let stub = r#"#!/bin/sh
+case "$1" in
+  check) echo '{"ok":true,"interface":{"name":"awg0","present":true,"addresses":["10.8.0.1/29"]},"service":{"active":true},"port":{"listening":true},"module":{"loaded":true},"clients":{"total":1},"firewall":{"ufw_active":true,"port_allowed":true}}' ;;
+  list)  echo '[{"name":"a","status_code":"active"}]' ;;
+  *) exit 1 ;;
+esac
+"#;
+        let (_d, vpn) = vpn_with_script(stub);
+        let cap = vpn.capacity().await.unwrap();
+        assert_eq!(cap.total, 6);
+        assert_eq!(cap.free, 4);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn capacity_errors_when_no_ipv4_address() {
+        // только IPv6 → не можем посчитать v4-пул
+        let stub = r#"#!/bin/sh
+case "$1" in
+  check) echo '{"ok":true,"interface":{"name":"awg0","present":true,"addresses":["fd00::1/64"]},"service":{"active":true},"port":{"listening":true},"module":{"loaded":true},"clients":{"total":0},"firewall":{"ufw_active":true,"port_allowed":true}}' ;;
+  list)  echo '[]' ;;
+  *) exit 1 ;;
+esac
+"#;
+        let (_d, vpn) = vpn_with_script(stub);
+        assert!(vpn.capacity().await.is_err());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn capacity_errors_when_addresses_empty() {
+        let stub = r#"#!/bin/sh
+case "$1" in
+  check) echo '{"ok":true,"interface":{"name":"awg0","present":false,"addresses":[]},"service":{"active":false},"port":{"listening":false},"module":{"loaded":false},"clients":{"total":0},"firewall":{"ufw_active":false,"port_allowed":false}}' ;;
+  list)  echo '[]' ;;
+  *) exit 1 ;;
+esac
+"#;
+        let (_d, vpn) = vpn_with_script(stub);
+        assert!(vpn.capacity().await.is_err());
     }
 }
