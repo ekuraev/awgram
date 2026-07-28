@@ -33,6 +33,12 @@ tangible on budget VPS hosts.
 - 🔄 **Config re-issue**: one client or all at once (optionally with route
   reset).
 - 📊 **Stats**: total clients, active, aggregate traffic.
+- 📦 **Bulk generation** — create up to 10 clients at once by prefix
+  (`user-01 … user-10`) in a single action, delivering configs as an album.
+- 🎛️ **Delivery filter** — configure which artifacts (`.conf` / QR / link)
+  are automatically sent after creation.
+- 🧩 **Per-artifact delivery** — from the client card you can request config,
+  QR, link, or all of them separately.
 
 ### Server
 
