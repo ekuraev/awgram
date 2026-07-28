@@ -7,11 +7,29 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
 
 ### 🇷🇺 Русский
 
-_Пусто — изменений после v0.5.0 пока нет._
+#### ✨ Добавлено
+
+- **Массовая генерация клиентов**: префикс + количество (1/3/5/10, cap 10 —
+  лимит альбома Telegram). Один вызов инсталлера, выдача альбомом `.conf`.
+  Превентивная проверка свободных адресов подсети и коллизий имён
+  ([#22](https://github.com/ekuraev/awgram/issues/22)).
+- **Фильтр выдачи после создания**: тумблеры `.conf` / QR / ссылка в
+  настройках. Действует на одиночное и массовое добавление.
+- **Карточка клиента**: отдельные кнопки для конфига, QR, ссылки и «всё»
+  (раньше — одна кнопка «всё»).
 
 ### 🇬🇧 English
 
-_Empty — no changes since v0.5.0 yet._
+#### ✨ Added
+
+- **Bulk client generation**: prefix + count (1/3/5/10, cap 10 — Telegram
+  album limit). A single installer call, with configs delivered as an album
+  of `.conf` files. Pre-emptive check of free subnet addresses and name
+  collisions ([#22](https://github.com/ekuraev/awgram/issues/22)).
+- **Post-creation delivery filter**: `.conf` / QR / link toggles in settings.
+  Applies to both single and bulk addition.
+- **Client card**: separate buttons for config, QR, link and "all"
+  (previously a single "all" button).
 
 ## [0.5.0] — 2026-07-28
 

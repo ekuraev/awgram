@@ -50,6 +50,19 @@ pub enum Action {
     Restart,
     RestartRun,
     RepairModule,
+    // --- Массовая генерация (#22) ---
+    AddBulk,
+    AddBulkRun(usize), // N клиентов для генерации (1..=MAX_BULK, валидируется в обработчике)
+    BulkExpiry(String), // "none" | "1d" | ... | "custom" — общий срок для всей пачки
+    AddBulkPsk(bool),  // true = включить PSK для генерируемых клиентов
+    // --- Артефакты существующего клиента (повторная выдача) ---
+    SendQr(String),
+    SendLink(String),
+    SendAll(String),
+    // --- Тумблеры выдачи артефактов в настройках ---
+    SetConf(bool),
+    SetQr(bool),
+    SetLink(bool),
     Unknown,
 }
 
@@ -58,6 +71,7 @@ fn parse_callback(data: &str) -> Action {
         "menu" => Action::Menu,
         "list" => Action::List,
         "add" => Action::Add,
+        "addbulk" => Action::AddBulk,
         "stats" => Action::Stats,
         "settings" => Action::Settings,
         "backup" => Action::Backup,
@@ -78,6 +92,24 @@ fn parse_callback(data: &str) -> Action {
                 Action::ShowClient(v.to_string())
             } else if let Some(v) = data.strip_prefix("conf:") {
                 Action::SendConf(v.to_string())
+            } else if let Some(v) = data.strip_prefix("qr:") {
+                Action::SendQr(v.to_string())
+            } else if let Some(v) = data.strip_prefix("uri:") {
+                Action::SendLink(v.to_string())
+            } else if let Some(v) = data.strip_prefix("all:") {
+                Action::SendAll(v.to_string())
+            } else if let Some(v) = data.strip_prefix("bulkadd:psk:") {
+                // Must be checked before "bulk:" — same reason as delyes:/del:
+                // ("bulkadd:..." also starts with "bulk", so "bulk:" would
+                // prefix-match it and misparse as AddBulkRun("add:psk:on")).
+                Action::AddBulkPsk(v == "on")
+            } else if let Some(v) = data.strip_prefix("bulkexp:") {
+                // Must be checked before "bulk:" — same reason as delyes:/del:
+                // ("bulkexp:..." also starts with "bulk").
+                Action::BulkExpiry(v.to_string())
+            } else if let Some(v) = data.strip_prefix("bulk:") {
+                // Проверяется ПОСЛЕ bulkadd:/bulkexp: (см. выше).
+                v.parse().map(Action::AddBulkRun).unwrap_or(Action::Unknown)
             } else if let Some(v) = data.strip_prefix("delyes:") {
                 // Must be checked before "del:" — otherwise "del:" prefix-matches
                 // "delyes:..." and confirmed deletes get misparsed as delete-asks.
@@ -104,6 +136,12 @@ fn parse_callback(data: &str) -> Action {
                 Action::SetPsk(v == "on")
             } else if let Some(v) = data.strip_prefix("set:slug:") {
                 Action::SetSlug(v == "on")
+            } else if let Some(v) = data.strip_prefix("set:conf:") {
+                Action::SetConf(v == "on")
+            } else if let Some(v) = data.strip_prefix("set:qr:") {
+                Action::SetQr(v == "on")
+            } else if let Some(v) = data.strip_prefix("set:link:") {
+                Action::SetLink(v == "on")
             } else if let Some(v) = data.strip_prefix("lang:") {
                 Action::Lang(v.to_string())
             } else if let Some(v) = data.strip_prefix("bk:restore_yes:") {
@@ -240,6 +278,40 @@ async fn edit_or_send(
             }
         }
     }
+}
+
+/// Перерисовывает экран настроек: заголовок и клавиатура собираются из одних
+/// и тех же текущих значений тумблеров (единственное место, где они читаются
+/// для этого экрана).
+async fn show_settings(
+    bot: &Bot,
+    chat: ChatId,
+    msg_id: MessageId,
+    lang: Lang,
+    settings: &SettingsStore,
+) {
+    edit_or_send(
+        bot,
+        chat,
+        msg_id,
+        i18n::settings_title(
+            lang,
+            settings.psk_default(),
+            settings.name_slug(),
+            settings.deliver_conf(),
+            settings.deliver_qr(),
+            settings.deliver_link(),
+        ),
+        menu::settings_menu(
+            lang,
+            settings.psk_default(),
+            settings.name_slug(),
+            settings.deliver_conf(),
+            settings.deliver_qr(),
+            settings.deliver_link(),
+        ),
+    )
+    .await;
 }
 
 async fn message_handler(
@@ -401,6 +473,52 @@ async fn message_handler(
             .parse_mode(ParseMode::Html)
             .await?;
         }
+        State::AwaitingBulkPrefix => {
+            let prefix = msg.text().unwrap_or_default().to_string();
+            // Худший случай сразу (count=MAX_BULK, slug по текущей настройке):
+            // слишком длинный префикс отбивается на первом шаге, а не после
+            // выбора срока и PSK в finish_bulk.
+            let slug_enabled = settings.name_slug();
+            match crate::vpn::validate::validate_bulk_prefix(prefix.trim(), slug_enabled) {
+                Ok(()) => {
+                    bot.send_message(msg.chat.id, i18n::ask_bulk_count(lang))
+                        .reply_markup(menu::bulk_count_menu(lang))
+                        .await?;
+                    dialogue
+                        .update(State::AwaitingBulkCount {
+                            prefix: prefix.trim().to_string(),
+                        })
+                        .await?;
+                }
+                Err(_) => {
+                    let max = crate::vpn::validate::max_bulk_prefix_len(slug_enabled);
+                    bot.send_message(msg.chat.id, i18n::bad_bulk_prefix(lang, max))
+                        .await?;
+                }
+            }
+        }
+        State::AwaitingBulkCustomExpiry { prefix, count } => {
+            let raw = msg.text().unwrap_or_default().to_string();
+            match crate::vpn::validate::validate_expiry(&raw) {
+                Ok(exp) => {
+                    bot.send_message(msg.chat.id, i18n::psk_step(lang, settings.psk_default()))
+                        .reply_markup(menu::bulk_psk_step(lang, settings.psk_default()))
+                        .parse_mode(ParseMode::Html)
+                        .await?;
+                    dialogue
+                        .update(State::AwaitingBulkPsk {
+                            prefix,
+                            count,
+                            expires: Some(exp),
+                        })
+                        .await?;
+                }
+                Err(_) => {
+                    bot.send_message(msg.chat.id, i18n::bad_expiry(lang))
+                        .await?;
+                }
+            }
+        }
         _ => {
             // /start и всё прочее.
             if !settings.has_lang(uid) {
@@ -426,6 +544,7 @@ async fn finish_add(
     bot: &Bot,
     chat: ChatId,
     vpn: &Vpn,
+    settings: &SettingsStore,
     lang: Lang,
     name: &str,
     expires: Option<&str>,
@@ -447,7 +566,21 @@ async fn finish_add(
     }
     match vpn.add(name, expires, psk).await {
         Ok(res) => {
-            if let Err(e) = render::send_client_files(bot, chat, lang, &res).await {
+            // Фильтр выдачи по тумблерам настроек (deliver_conf/qr/link): после
+            // создания шлём только включённые артефакты. Ручная повторная выдача
+            // через карточку клиента (SendConf/SendQr/SendLink/SendAll) фильтр
+            // игнорирует — это явный запрос конкретного файла.
+            if let Err(e) = render::send_client_files_filtered(
+                bot,
+                chat,
+                lang,
+                &res,
+                settings.deliver_conf(),
+                settings.deliver_qr(),
+                settings.deliver_link(),
+            )
+            .await
+            {
                 tracing::error!(error = %e, "не удалось отправить файлы клиента");
                 let _ = bot.send_message(chat, i18n::error_text(lang, &e)).await;
             }
@@ -479,6 +612,145 @@ async fn finish_add(
         .reply_markup(menu::main_menu(lang))
         .parse_mode(ParseMode::Html)
         .await;
+}
+
+/// Завершающий шаг массовой генерации: превентивные проверки (вместо длинной
+/// паузы в скрипте, после которой пользователь видит «ошибка»), затем один
+/// вызов `add_many` и выдача альбома .conf одним `sendMediaGroup`.
+///
+/// Превентивный гейт состоит из трёх проверок до запуска скрипта:
+/// · **имена**: `gen_bulk_names` с актуальным slug (smoke-проверка длины/символов);
+/// · **capacity**: `vpn.capacity()` — `free == 0` или `free < count` не даём
+///   начинать (неинформативно падать внутри add-many-цикла);
+/// · **коллизии**: `vpn.list()` ∩ сгенерированные имена — хоть add_many и
+///   превратит коллизии в `Skip`, лучше подсветить это ДО создания (fail-fast),
+///   чтобы пользователь мог сменить префикс. `list` fail-open (warn + continue):
+///   временную недоступность check/list не превращаем в молчаливый отказ.
+///
+/// Сами клиенты создаются через `add_many` (один вызов скрипта, один apply_config
+/// в конце). Альбом .conf шлём только если включён тумблер `deliver_conf` и есть
+/// хоть один созданный клиент (пустой альбом Telegram отклонит).
+#[allow(clippy::too_many_arguments)]
+async fn finish_bulk(
+    bot: &Bot,
+    chat: ChatId,
+    vpn: &Vpn,
+    settings: &SettingsStore,
+    lang: Lang,
+    prefix: &str,
+    count: usize,
+    expires: Option<&str>,
+    psk: bool,
+) {
+    let waiting = bot.send_message(chat, i18n::bulk_creating(lang)).await.ok();
+
+    // 1. Генерация имён (slug из настроек — единый для всей пачки, как в add).
+    let slug = if settings.name_slug() {
+        Some(crate::vpn::validate::gen_slug())
+    } else {
+        None
+    };
+    let names = match crate::vpn::validate::gen_bulk_names(prefix, count as u32, slug.as_deref()) {
+        Ok(n) => n,
+        Err(_) => {
+            if let Some(m) = waiting {
+                let _ = bot.delete_message(chat, m.id).await;
+            }
+            let max = crate::vpn::validate::max_bulk_prefix_len(slug.is_some());
+            let _ = bot
+                .send_message(chat, i18n::bad_bulk_prefix(lang, max))
+                .await;
+            return;
+        }
+    };
+
+    // 2. Превентивная проверка свободных адресов (capacity учитывает v4-подсеть).
+    match vpn.capacity().await {
+        Ok(cap) => {
+            if cap.free == 0 {
+                if let Some(m) = waiting {
+                    let _ = bot.delete_message(chat, m.id).await;
+                }
+                let _ = bot.send_message(chat, i18n::capacity_exhausted(lang)).await;
+                return;
+            }
+            if (cap.free as usize) < count {
+                if let Some(m) = waiting {
+                    let _ = bot.delete_message(chat, m.id).await;
+                }
+                let _ = bot
+                    .send_message(
+                        chat,
+                        i18n::capacity_insufficient(lang, cap.free, count as u32),
+                    )
+                    .await;
+                return;
+            }
+        }
+        Err(_) => {
+            if let Some(m) = waiting {
+                let _ = bot.delete_message(chat, m.id).await;
+            }
+            let _ = bot
+                .send_message(chat, i18n::capacity_unavailable(lang))
+                .await;
+            return;
+        }
+    }
+
+    // 3. Превентивная проверка коллизий (сгенерированные имена ∩ существующие).
+    // list() fail-open: если упал, не блокируем создание (add_many сам соберёт
+    // коллизии в skipped и вернёт осмысленный результат).
+    match vpn.list().await {
+        Ok(existing) => {
+            let existing_names: std::collections::HashSet<&str> =
+                existing.iter().map(|c| c.name.as_str()).collect();
+            if let Some(collision) = names.iter().find(|n| existing_names.contains(n.as_str())) {
+                if let Some(m) = waiting {
+                    let _ = bot.delete_message(chat, m.id).await;
+                }
+                let _ = bot
+                    .send_message(chat, i18n::client_exists(lang, collision))
+                    .parse_mode(ParseMode::Html)
+                    .await;
+                return;
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "list для проверки коллизий упал — продолжаем (fail-open)");
+        }
+    }
+
+    // 4. Один вызов add_many (сразу со всеми именами). add_many возвращает
+    // BulkResult{created, skipped} — все результаты, не только первый.
+    match vpn.add_many(&names, expires, psk).await {
+        Ok(res) => {
+            // 5. Альбом .conf — одним sendMediaGroup (только если включён и есть
+            // что отправлять; пустой альбом Telegram отклонит).
+            if settings.deliver_conf() && !res.created.is_empty() {
+                let conf_paths: Vec<String> =
+                    res.created.iter().map(|c| c.conf_path.clone()).collect();
+                if let Err(e) = render::send_album(bot, chat, &conf_paths).await {
+                    tracing::error!(error = %e, "альбом .conf не отправлен");
+                    // Файлы созданы, но не доставлены — сообщаем как ошибку.
+                    let _ = bot.send_message(chat, i18n::error_text(lang, &e)).await;
+                }
+            }
+            // 6. Итог: «Создано N» (+ список пропущенных с причинами, если есть).
+            let _ = bot
+                .send_message(chat, i18n::bulk_result_summary(lang, &res))
+                .parse_mode(ParseMode::Html)
+                .reply_markup(menu::main_menu(lang))
+                .await;
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "add_many провалился");
+            let _ = bot.send_message(chat, i18n::error_text(lang, &e)).await;
+        }
+    }
+    if let Some(m) = waiting {
+        let _ = bot.delete_message(chat, m.id).await;
+    }
 }
 
 async fn callback_handler(
@@ -626,7 +898,59 @@ async fn callback_handler(
             }
         },
         Action::SendConf(name) => {
-            // Повторная выдача: читаем уже существующие .conf/.png/.vpnuri из clients_dir.
+            // 📄 Конфиг — только .conf, без QR/ссылки (фильтр выдачи не применяется:
+            // это ручная повторная выдача конкретного артефакта).
+            match vpn.existing_files(&name) {
+                Ok(res) => {
+                    if let Err(e) = bot
+                        .send_document(chat, InputFile::file(&res.conf_path))
+                        .await
+                    {
+                        let err = crate::error::Error::Telegram(e.to_string());
+                        bot.send_message(chat, i18n::error_text(lang, &err)).await?;
+                    }
+                }
+                Err(e) => {
+                    bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                }
+            }
+        }
+        Action::SendQr(name) => {
+            // 🖼 QR — опционален (qrencode может отсутствовать на сервере).
+            match vpn.existing_files(&name) {
+                Ok(res) if std::path::Path::new(&res.qr_path).exists() => {
+                    if let Err(e) = bot.send_photo(chat, InputFile::file(&res.qr_path)).await {
+                        let err = crate::error::Error::Telegram(e.to_string());
+                        bot.send_message(chat, i18n::error_text(lang, &err)).await?;
+                    }
+                }
+                Ok(_) => {
+                    bot.send_message(chat, i18n::qr_not_generated(lang)).await?;
+                }
+                Err(e) => {
+                    bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                }
+            }
+        }
+        Action::SendLink(name) => {
+            // 🔗 Ссылка vpn:// — опциональна (qrencode генерирует её заодно с QR).
+            match vpn.existing_files(&name) {
+                Ok(res) if !res.uri.is_empty() => {
+                    bot.send_message(chat, i18n::import_link(lang, &res.uri))
+                        .parse_mode(ParseMode::Html)
+                        .await?;
+                }
+                Ok(_) => {
+                    bot.send_message(chat, i18n::link_unavailable(lang)).await?;
+                }
+                Err(e) => {
+                    bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                }
+            }
+        }
+        Action::SendAll(name) => {
+            // 📦 Всё — безусловная выдача conf+QR+ссылка (фильтр настроек игнорируется:
+            // пользователь явно запросил всё через карточку клиента).
             match vpn.existing_files(&name) {
                 Ok(res) => {
                     if let Err(e) = render::send_client_files(&bot, chat, lang, &res).await {
@@ -797,6 +1121,7 @@ async fn callback_handler(
                 &bot,
                 chat,
                 &vpn,
+                &settings,
                 lang,
                 &name,
                 expires.as_deref(),
@@ -806,15 +1131,114 @@ async fn callback_handler(
             .await;
             dialogue.exit().await?;
         }
-        Action::Settings => {
-            edit_or_send(
+        Action::AddBulk => {
+            // Шаг 1/4 массового диалога: запрос префикса (текстовый ввод, а не
+            // кнопка). Валидация префикса — на следующем шаге (gen_bulk_names с
+            // count=1 как smoke-проверка), тут только приглашение к вводу.
+            bot.send_message(chat, i18n::ask_bulk_prefix(lang)).await?;
+            dialogue.update(State::AwaitingBulkPrefix).await?;
+        }
+        Action::AddBulkRun(count) => {
+            // callback_data — untrusted input (craftable). Клавиатура эмитит
+            // только 1/3/5/10, но защищаемся от crafted bulk:N извне.
+            if count == 0 || count > crate::vpn::validate::MAX_BULK as usize {
+                bot.send_message(chat, session_expired_text(lang))
+                    .reply_markup(menu::main_menu(lang))
+                    .parse_mode(ParseMode::Html)
+                    .await?;
+                return Ok(());
+            }
+            // Шаг 2/4: префикс уже введён (AwaitingBulkCount хранит его) —
+            // переходим к выбору срока. Кол-во пришло из кнопки bulk_count_menu
+            // (1/3/5/10 — префикс уже валиден, max=MAX_BULK держит клавиатура).
+            let prefix = match dialogue.get().await?.unwrap_or_default() {
+                State::AwaitingBulkCount { prefix } => prefix,
+                _ => {
+                    bot.send_message(chat, session_expired_text(lang))
+                        .reply_markup(menu::main_menu(lang))
+                        .parse_mode(ParseMode::Html)
+                        .await?;
+                    return Ok(());
+                }
+            };
+            bot.send_message(chat, i18n::ask_expiry(lang))
+                .reply_markup(menu::bulk_expiry_menu(lang))
+                .await?;
+            dialogue
+                .update(State::AwaitingBulkExpiry { prefix, count })
+                .await?;
+        }
+        Action::BulkExpiry(kind) => {
+            // Шаг 3/4: срок выбран. «custom» → текстовый ввод срока,
+            // иначе — переход к выбору PSK с уже готовым expires.
+            let (prefix, count) = match dialogue.get().await?.unwrap_or_default() {
+                State::AwaitingBulkExpiry { prefix, count } => (prefix, count),
+                _ => {
+                    bot.send_message(chat, session_expired_text(lang))
+                        .reply_markup(menu::main_menu(lang))
+                        .parse_mode(ParseMode::Html)
+                        .await?;
+                    return Ok(());
+                }
+            };
+            if kind == "custom" {
+                bot.send_message(chat, i18n::ask_custom_expiry(lang))
+                    .await?;
+                dialogue
+                    .update(State::AwaitingBulkCustomExpiry { prefix, count })
+                    .await?;
+            } else {
+                let expires = if kind == "none" {
+                    None
+                } else {
+                    Some(kind.clone())
+                };
+                bot.send_message(chat, i18n::psk_step(lang, settings.psk_default()))
+                    .reply_markup(menu::bulk_psk_step(lang, settings.psk_default()))
+                    .parse_mode(ParseMode::Html)
+                    .await?;
+                dialogue
+                    .update(State::AwaitingBulkPsk {
+                        prefix,
+                        count,
+                        expires,
+                    })
+                    .await?;
+            }
+        }
+        Action::AddBulkPsk(psk) => {
+            // Шаг 4/4: PSK выбран — финальный забег (превентивные проверки +
+            // add_many + альбом). После finish_bulk диалог закрывается.
+            let (prefix, count, expires) = match dialogue.get().await?.unwrap_or_default() {
+                State::AwaitingBulkPsk {
+                    prefix,
+                    count,
+                    expires,
+                } => (prefix, count, expires),
+                _ => {
+                    bot.send_message(chat, session_expired_text(lang))
+                        .reply_markup(menu::main_menu(lang))
+                        .parse_mode(ParseMode::Html)
+                        .await?;
+                    return Ok(());
+                }
+            };
+            finish_bulk(
                 &bot,
                 chat,
-                msg_id,
-                i18n::settings_title(lang, settings.psk_default(), settings.name_slug()),
-                menu::settings_menu(lang, settings.psk_default(), settings.name_slug()),
+                &vpn,
+                &settings,
+                lang,
+                &prefix,
+                count,
+                expires.as_deref(),
+                psk,
             )
             .await;
+            dialogue.exit().await?;
+        }
+        Action::Settings => {
+            show_settings(&bot, chat, msg_id, lang, &settings).await;
         }
         Action::Modify(name) => {
             edit_or_send(
@@ -905,36 +1329,27 @@ async fn callback_handler(
                 settings.set_lang(uid, l);
             }
             let lang = settings.lang(uid);
-            edit_or_send(
-                &bot,
-                chat,
-                msg_id,
-                i18n::settings_title(lang, settings.psk_default(), settings.name_slug()),
-                menu::settings_menu(lang, settings.psk_default(), settings.name_slug()),
-            )
-            .await;
+            show_settings(&bot, chat, msg_id, lang, &settings).await;
         }
         Action::SetPsk(on) => {
             settings.set_psk_default(on);
-            edit_or_send(
-                &bot,
-                chat,
-                msg_id,
-                i18n::settings_title(lang, settings.psk_default(), settings.name_slug()),
-                menu::settings_menu(lang, settings.psk_default(), settings.name_slug()),
-            )
-            .await;
+            show_settings(&bot, chat, msg_id, lang, &settings).await;
         }
         Action::SetSlug(on) => {
             settings.set_name_slug(on);
-            edit_or_send(
-                &bot,
-                chat,
-                msg_id,
-                i18n::settings_title(lang, settings.psk_default(), settings.name_slug()),
-                menu::settings_menu(lang, settings.psk_default(), settings.name_slug()),
-            )
-            .await;
+            show_settings(&bot, chat, msg_id, lang, &settings).await;
+        }
+        Action::SetConf(on) => {
+            settings.set_deliver_conf(on);
+            show_settings(&bot, chat, msg_id, lang, &settings).await;
+        }
+        Action::SetQr(on) => {
+            settings.set_deliver_qr(on);
+            show_settings(&bot, chat, msg_id, lang, &settings).await;
+        }
+        Action::SetLink(on) => {
+            settings.set_deliver_link(on);
+            show_settings(&bot, chat, msg_id, lang, &settings).await;
         }
         Action::Backup => {
             edit_or_send(
@@ -1217,6 +1632,52 @@ mod tests {
     }
 
     #[test]
+    fn parses_bulk_and_artifact_actions() {
+        assert_eq!(parse_callback("bulk:1"), Action::AddBulkRun(1));
+        assert_eq!(parse_callback("bulk:10"), Action::AddBulkRun(10));
+        assert_eq!(parse_callback("qr:alice"), Action::SendQr("alice".into()));
+        assert_eq!(
+            parse_callback("uri:alice"),
+            Action::SendLink("alice".into())
+        );
+        assert_eq!(parse_callback("all:alice"), Action::SendAll("alice".into()));
+        assert_eq!(parse_callback("set:conf:on"), Action::SetConf(true));
+        assert_eq!(parse_callback("set:conf:off"), Action::SetConf(false));
+        assert_eq!(parse_callback("set:qr:on"), Action::SetQr(true));
+        assert_eq!(parse_callback("set:link:on"), Action::SetLink(true));
+    }
+
+    #[test]
+    fn parse_callback_addbulk_keyword() {
+        assert_eq!(parse_callback("addbulk"), Action::AddBulk);
+    }
+
+    #[test]
+    fn parse_callback_bulk_expiry_and_psk() {
+        assert_eq!(
+            parse_callback("bulkexp:none"),
+            Action::BulkExpiry("none".into())
+        );
+        assert_eq!(
+            parse_callback("bulkexp:30d"),
+            Action::BulkExpiry("30d".into())
+        );
+        assert_eq!(parse_callback("bulkadd:psk:on"), Action::AddBulkPsk(true));
+        assert_eq!(parse_callback("bulkadd:psk:off"), Action::AddBulkPsk(false));
+    }
+
+    #[test]
+    fn parse_callback_no_collision_uri_vs_other_prefixes() {
+        // "uri:" не должен коллизировать с существующими префиксами
+        assert_eq!(
+            parse_callback("uri:alice"),
+            Action::SendLink("alice".into())
+        );
+        // "all:" — тоже уникален
+        assert_eq!(parse_callback("all:alice"), Action::SendAll("alice".into()));
+    }
+
+    #[test]
     fn parse_callback_modify_and_restart_and_repair() {
         assert_eq!(parse_callback("mod:alice"), Action::Modify("alice".into()));
         // modparam: должен парситься ДО mod: (длинный префикс), но mod:alice не
@@ -1297,8 +1758,10 @@ mod tests {
             menu::confirm_recreate(Lang::Ru, "alice"),
             menu::clients_list(Lang::Ru, &[sample_client], &[], 0, 0, 8),
             menu::language_select(),
-            menu::settings_menu(Lang::Ru, false, false),
-            menu::settings_menu(Lang::Ru, true, true),
+            menu::settings_menu(Lang::Ru, false, false, false, false, false),
+            menu::settings_menu(Lang::Ru, true, true, true, true, true),
+            menu::bulk_count_menu(Lang::Ru),
+            menu::bulk_expiry_menu(Lang::Ru),
             menu::psk_step(Lang::Ru, false),
             menu::psk_step(Lang::Ru, true),
             menu::backup_menu(Lang::Ru),

@@ -6,7 +6,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::i18n::Lang;
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BotState {
     #[serde(default)]
     pub psk_default: bool,
@@ -14,6 +18,25 @@ pub struct BotState {
     pub name_slug: bool,
     #[serde(default)]
     pub langs: HashMap<i64, Lang>,
+    #[serde(default = "default_true")]
+    pub deliver_conf: bool,
+    #[serde(default = "default_true")]
+    pub deliver_qr: bool,
+    #[serde(default = "default_true")]
+    pub deliver_link: bool,
+}
+
+impl Default for BotState {
+    fn default() -> Self {
+        BotState {
+            psk_default: false,
+            name_slug: false,
+            langs: HashMap::new(),
+            deliver_conf: true,
+            deliver_qr: true,
+            deliver_link: true,
+        }
+    }
 }
 
 pub struct SettingsStore {
@@ -93,6 +116,42 @@ impl SettingsStore {
         drop(s);
         self.persist(&snapshot);
     }
+
+    pub fn deliver_conf(&self) -> bool {
+        self.state.lock().unwrap().deliver_conf
+    }
+
+    pub fn set_deliver_conf(&self, v: bool) {
+        let mut s = self.state.lock().unwrap();
+        s.deliver_conf = v;
+        let snapshot = s.clone();
+        drop(s);
+        self.persist(&snapshot);
+    }
+
+    pub fn deliver_qr(&self) -> bool {
+        self.state.lock().unwrap().deliver_qr
+    }
+
+    pub fn set_deliver_qr(&self, v: bool) {
+        let mut s = self.state.lock().unwrap();
+        s.deliver_qr = v;
+        let snapshot = s.clone();
+        drop(s);
+        self.persist(&snapshot);
+    }
+
+    pub fn deliver_link(&self) -> bool {
+        self.state.lock().unwrap().deliver_link
+    }
+
+    pub fn set_deliver_link(&self, v: bool) {
+        let mut s = self.state.lock().unwrap();
+        s.deliver_link = v;
+        let snapshot = s.clone();
+        drop(s);
+        self.persist(&snapshot);
+    }
 }
 
 #[cfg(test)]
@@ -152,5 +211,58 @@ mod tests {
         }
         let s2 = SettingsStore::load(path);
         assert!(s2.name_slug()); // пережил перезагрузку
+    }
+
+    #[test]
+    fn deliver_toggles_default_true() {
+        let (_d, s) = store();
+        assert!(s.deliver_conf());
+        assert!(s.deliver_qr());
+        assert!(s.deliver_link());
+    }
+
+    #[test]
+    fn deliver_toggles_set_and_get() {
+        let (_d, s) = store();
+        s.set_deliver_conf(false);
+        s.set_deliver_qr(false);
+        s.set_deliver_link(false);
+        assert!(!s.deliver_conf());
+        assert!(!s.deliver_qr());
+        assert!(!s.deliver_link());
+    }
+
+    #[test]
+    fn deliver_toggles_persist_across_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        {
+            let s = SettingsStore::load(path.clone());
+            s.set_deliver_conf(false);
+            s.set_deliver_qr(true);
+            s.set_deliver_link(false);
+        }
+        let s2 = SettingsStore::load(path);
+        assert!(!s2.deliver_conf());
+        assert!(s2.deliver_qr());
+        assert!(!s2.deliver_link());
+        // старые настройки тоже пережили перезагрузку
+        assert!(!s2.psk_default());
+    }
+
+    #[test]
+    fn deliver_toggles_default_true_when_missing_in_old_state() {
+        // Старый state.json без полей deliver_* должен десериализоваться с true.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        std::fs::write(
+            &path,
+            r#"{"psk_default":true,"name_slug":false,"langs":{}}"#,
+        )
+        .unwrap();
+        let s = SettingsStore::load(path);
+        assert!(s.deliver_conf());
+        assert!(s.deliver_qr());
+        assert!(s.deliver_link());
     }
 }

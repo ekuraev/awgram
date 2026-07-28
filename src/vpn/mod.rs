@@ -117,6 +117,79 @@ impl Vpn {
         }
     }
 
+    /// Массовое создание: один вызов `add n1 n2 … nN --expires=.. [--psk] --json`.
+    /// Инсталлер v5.21.2 создаёт каждого в цикле с одним `apply_config` в конце.
+    /// Итерирует ВСЕ `results[]` (в отличие от `add`, берущего только первый):
+    /// `created` → `AddResult` с путями, прочие статусы → `Skip`. Стандартный
+    /// таймаут `op_timeout_secs` (N≤10 укладывается с запасом).
+    pub async fn add_many(
+        &self,
+        names: &[String],
+        expires: Option<&str>,
+        psk: bool,
+    ) -> Result<crate::vpn::model::BulkResult> {
+        use crate::vpn::model::{BulkResult, Skip, SkipReason};
+        // Валидируем каждое имя до запуска скрипта (argument-injection guard).
+        // `Result` алиас тут = crate::error::Result, поэтому турбофиш ограничиваем
+        // ошибкой validate::ValidateError явно, а затем маппим в Error::Parse.
+        let validated: Vec<String> = names
+            .iter()
+            .map(|n| validate::validate_name(n))
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| crate::error::Error::Parse(e.to_string()))?;
+        let mut args: Vec<String> = vec!["add".into()];
+        args.extend(validated);
+        args.push("--json".into());
+        if let Some(exp) = expires {
+            let exp = validate::validate_expiry(exp)
+                .map_err(|e| crate::error::Error::Parse(e.to_string()))?;
+            args.push(format!("--expires={exp}"));
+        }
+        if psk {
+            args.push("--psk".into());
+        }
+        let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        let (out, code) = run(&self.spec(), &arg_refs).await?;
+        if out.trim().is_empty() {
+            return Err(crate::error::Error::ScriptFailed {
+                code: Some(code),
+                stderr: format!("add_many: пустой stdout (exit {code})"),
+            });
+        }
+        let parsed =
+            wire::parse_add(&out).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
+        if parsed.results.is_empty() {
+            return Err(crate::error::Error::Parse(
+                "add_many: пустой results[]".into(),
+            ));
+        }
+        let mut created = Vec::new();
+        let mut skipped = Vec::new();
+        for entry in parsed.results {
+            match entry.status {
+                wire::AddStatus::Created => created.push(crate::vpn::model::AddResult {
+                    name: entry.name,
+                    conf_path: entry.conf.unwrap_or_default(),
+                    qr_path: entry.qr.unwrap_or_default(),
+                    uri: read_vpnuri_content(&entry.vpnuri.unwrap_or_default()),
+                }),
+                wire::AddStatus::Exists => skipped.push(Skip {
+                    name: entry.name,
+                    reason: SkipReason::Exists,
+                }),
+                wire::AddStatus::InvalidName => skipped.push(Skip {
+                    name: entry.name,
+                    reason: SkipReason::InvalidName,
+                }),
+                wire::AddStatus::Error | wire::AddStatus::Unknown => skipped.push(Skip {
+                    name: entry.name,
+                    reason: SkipReason::Error,
+                }),
+            }
+        }
+        Ok(BulkResult { created, skipped })
+    }
+
     pub async fn remove(&self, name: &str) -> Result<()> {
         let name =
             validate::validate_name(name).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
@@ -255,6 +328,44 @@ impl Vpn {
         let path = self.clients_dir.join("expiry").join(&name);
         let raw = std::fs::read_to_string(path).ok()?;
         raw.trim().parse::<i64>().ok()
+    }
+
+    /// Свободные адреса в подсети сервера для превентивной проверки массовой
+    /// генерации. `total` = usable-хостов v4-подсети (минус network+broadcast),
+    /// `free` = total − 1 (сервер) − existing. Берёт первый IPv4 из
+    /// `interface.addresses` (v6 /64 — безгранична, не ограничивает); кол-во
+    /// существующих — из `clients.total` того же check-отчёта (один вызов
+    /// скрипта, без отдельного `list`). Нет v4 или addresses пуст → `Err`
+    /// (интерфейс не поднят / check недоступен).
+    pub async fn capacity(&self) -> Result<crate::vpn::model::CapacityInfo> {
+        let report = self.check().await?;
+        let cidr_v4 = report
+            .interface
+            .addresses
+            .iter()
+            .find(|a| !a.contains(':'))
+            .ok_or_else(|| {
+                crate::error::Error::Parse("capacity: нет IPv4-адреса интерфейса".into())
+            })?;
+        let prefix_len = cidr_v4
+            .rsplit('/')
+            .nth(0)
+            .and_then(|s| s.parse::<u32>().ok())
+            .filter(|&p| p <= 32)
+            .ok_or_else(|| {
+                crate::error::Error::Parse(format!("capacity: некорректный CIDR {cidr_v4}"))
+            })?;
+        // usable_hosts(/N) = 2^(32−N) − 2 (минус network + broadcast).
+        // /31 и /32 — вырожденные (point-to-point), но формула даёт 0/−1;
+        // берём max(0, ...) чтобы не уйти в underflow.
+        let total = if prefix_len >= 31 {
+            0
+        } else {
+            (1u32 << (32 - prefix_len)).saturating_sub(2)
+        };
+        let existing = report.clients.total;
+        let free = total.saturating_sub(1).saturating_sub(existing);
+        Ok(crate::vpn::model::CapacityInfo { free, total })
     }
 
     fn backups_dir(&self) -> PathBuf {
@@ -1112,5 +1223,183 @@ exit 1
         let (_d, vpn) = vpn_with_script(stub);
         let out = vpn.repair_module().await.unwrap();
         assert_eq!(out.rc, 2);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn capacity_free_is_total_minus_server_minus_clients() {
+        // /24 → 254 usable; 3 клиента → free = 254 − 1 − 3 = 250
+        let stub = r#"#!/bin/sh
+case "$1" in
+  check) echo '{"command":"check","ok":true,"service":{"unit":"awg-quick@awg0","active":true},"interface":{"name":"awg0","present":true,"mtu":1280,"addresses":["10.9.9.1/24","fd00::1/64"]},"port":{"number":39743,"listening":true},"module":{"loaded":true},"clients":{"total":3},"firewall":{"ufw_active":true,"port_allowed":true}}' ;;
+  list)  echo '[{"name":"a","status_code":"active"},{"name":"b","status_code":"active"},{"name":"c","status_code":"active"}]' ;;
+  *) exit 1 ;;
+esac
+"#;
+        let (_d, vpn) = vpn_with_script(stub);
+        let cap = vpn.capacity().await.unwrap();
+        assert_eq!(cap.total, 254);
+        assert_eq!(cap.free, 250);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn capacity_small_subnet_29() {
+        // /29 → 6 usable; 1 клиент → free = 6 − 1 − 1 = 4
+        let stub = r#"#!/bin/sh
+case "$1" in
+  check) echo '{"ok":true,"interface":{"name":"awg0","present":true,"addresses":["10.8.0.1/29"]},"service":{"active":true},"port":{"listening":true},"module":{"loaded":true},"clients":{"total":1},"firewall":{"ufw_active":true,"port_allowed":true}}' ;;
+  list)  echo '[{"name":"a","status_code":"active"}]' ;;
+  *) exit 1 ;;
+esac
+"#;
+        let (_d, vpn) = vpn_with_script(stub);
+        let cap = vpn.capacity().await.unwrap();
+        assert_eq!(cap.total, 6);
+        assert_eq!(cap.free, 4);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn capacity_uses_check_clients_total_without_calling_list() {
+        // Кол-во существующих берётся из check.clients.total — отдельный вызов
+        // list не нужен (и его отказ не должен ронять capacity).
+        let stub = r#"#!/bin/sh
+case "$1" in
+  check) echo '{"command":"check","ok":true,"service":{"unit":"awg-quick@awg0","active":true},"interface":{"name":"awg0","present":true,"mtu":1280,"addresses":["10.9.9.1/24","fd00::1/64"]},"port":{"number":39743,"listening":true},"module":{"loaded":true},"clients":{"total":3},"firewall":{"ufw_active":true,"port_allowed":true}}' ;;
+  *) exit 1 ;;
+esac
+"#;
+        let (_d, vpn) = vpn_with_script(stub);
+        let cap = vpn.capacity().await.unwrap();
+        assert_eq!(cap.total, 254);
+        assert_eq!(cap.free, 250);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn capacity_errors_when_no_ipv4_address() {
+        // только IPv6 → не можем посчитать v4-пул
+        let stub = r#"#!/bin/sh
+case "$1" in
+  check) echo '{"ok":true,"interface":{"name":"awg0","present":true,"addresses":["fd00::1/64"]},"service":{"active":true},"port":{"listening":true},"module":{"loaded":true},"clients":{"total":0},"firewall":{"ufw_active":true,"port_allowed":true}}' ;;
+  list)  echo '[]' ;;
+  *) exit 1 ;;
+esac
+"#;
+        let (_d, vpn) = vpn_with_script(stub);
+        assert!(vpn.capacity().await.is_err());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn capacity_errors_when_addresses_empty() {
+        let stub = r#"#!/bin/sh
+case "$1" in
+  check) echo '{"ok":true,"interface":{"name":"awg0","present":false,"addresses":[]},"service":{"active":false},"port":{"listening":false},"module":{"loaded":false},"clients":{"total":0},"firewall":{"ufw_active":false,"port_allowed":false}}' ;;
+  list)  echo '[]' ;;
+  *) exit 1 ;;
+esac
+"#;
+        let (_d, vpn) = vpn_with_script(stub);
+        assert!(vpn.capacity().await.is_err());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn add_many_collects_created_and_skipped() {
+        // 3 имени: 2 created, 1 exists → BulkResult{created:2, skipped:1}
+        let dir = tempfile::tempdir().unwrap();
+        let vpnuri_path = dir.path().join("a.vpnuri");
+        let vpnuri_str = vpnuri_path.to_string_lossy().to_string();
+        std::fs::write(&vpnuri_path, "vpn://x\n").unwrap();
+        let stub = format!(
+            r#"#!/bin/sh
+[ "$1" = add ] || exit 1
+echo '{{"command":"add","ok":true,"added":2,"failed":1,"applied":true,"results":[{{"name":"a","status":"created","conf":"/tmp/a.conf","qr":null,"vpnuri":"{vpnuri_str}"}},{{"name":"b","status":"created","conf":"/tmp/b.conf","qr":null,"vpnuri":null}},{{"name":"c","status":"exists"}}]}}'
+"#,
+        );
+        let script_path = dir.path().join("stub.sh");
+        std::fs::write(&script_path, &stub).unwrap();
+        let mut perm = std::fs::metadata(&script_path).unwrap().permissions();
+        perm.set_mode(0o755);
+        std::fs::set_permissions(&script_path, perm).unwrap();
+        let vpn = Vpn {
+            script: script_path,
+            sudo_prefix: String::new(),
+            timeout_secs: 5,
+            clients_dir: dir.path().to_path_buf(),
+        };
+        let res = vpn
+            .add_many(
+                &["a".to_string(), "b".to_string(), "c".to_string()],
+                None,
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.created.len(), 2);
+        assert_eq!(res.created[0].name, "a");
+        assert_eq!(res.created[0].uri, "vpn://x");
+        assert_eq!(res.skipped.len(), 1);
+        assert_eq!(res.skipped[0].name, "c");
+        assert_eq!(res.skipped[0].reason, crate::vpn::model::SkipReason::Exists);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn add_many_all_created_no_skipped() {
+        let stub = r#"#!/bin/sh
+[ "$1" = add ] || exit 1
+echo '{"command":"add","ok":true,"added":2,"failed":0,"applied":true,"results":[{"name":"a","status":"created","conf":"/tmp/a.conf"},{"name":"b","status":"created","conf":"/tmp/b.conf"}]}'
+"#;
+        let (_d, vpn) = vpn_with_script(stub);
+        let res = vpn
+            .add_many(&["a".to_string(), "b".to_string()], None, false)
+            .await
+            .unwrap();
+        assert_eq!(res.created.len(), 2);
+        assert!(res.skipped.is_empty());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn add_many_passes_expires_and_psk_flags() {
+        const STUB: &str = r#"#!/bin/sh
+[ "$1" = add ] || exit 1
+psk=0; exp=0
+for a in "$@"; do
+  case "$a" in --psk) psk=1 ;; --expires=*) exp=1 ;; esac
+done
+[ "$psk" = 1 ] && [ "$exp" = 1 ] || exit 1
+echo '{"ok":true,"added":1,"failed":0,"applied":true,"results":[{"name":"a","status":"created","conf":"/tmp/a.conf"}]}'
+"#;
+        let (_d, vpn) = vpn_with_script(STUB);
+        assert!(vpn
+            .add_many(&["a".to_string()], Some("30d"), true)
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn add_many_rejects_bad_name_before_running() {
+        let (_d, vpn) = vpn_with_script("#!/bin/sh\necho should-not-run 1>&2\nexit 1\n");
+        let err = vpn
+            .add_many(&["bad name;rm".to_string()], None, false)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, crate::error::Error::Parse(_)));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn add_many_errors_on_empty_results() {
+        let stub = r#"#!/bin/sh
+[ "$1" = add ] || exit 1
+echo '{"ok":true,"added":0,"failed":0,"applied":false,"results":[]}'
+"#;
+        let (_d, vpn) = vpn_with_script(stub);
+        assert!(vpn.add_many(&["a".to_string()], None, false).await.is_err());
     }
 }

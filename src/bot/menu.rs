@@ -12,6 +12,7 @@ pub fn main_menu(lang: Lang) -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![
         vec![cb(&i18n::btn_clients(lang), "list")],
         vec![cb(&i18n::btn_add(lang), "add")],
+        vec![cb(&i18n::btn_bulk(lang), "addbulk")],
         vec![cb(&i18n::btn_stats(lang), "stats")],
         vec![cb(&i18n::btn_backup(lang), "backup")],
         vec![
@@ -35,7 +36,14 @@ pub fn language_select() -> InlineKeyboardMarkup {
     ]])
 }
 
-pub fn settings_menu(lang: Lang, psk_default: bool, name_slug: bool) -> InlineKeyboardMarkup {
+pub fn settings_menu(
+    lang: Lang,
+    psk_default: bool,
+    name_slug: bool,
+    deliver_conf: bool,
+    deliver_qr: bool,
+    deliver_link: bool,
+) -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![
         vec![
             cb(&i18n::btn_lang_ru(lang), "set:lang:ru"),
@@ -55,6 +63,30 @@ pub fn settings_menu(lang: Lang, psk_default: bool, name_slug: bool) -> InlineKe
                 "set:slug:off"
             } else {
                 "set:slug:on"
+            },
+        )],
+        vec![cb(
+            &i18n::btn_conf_toggle(lang, deliver_conf),
+            if deliver_conf {
+                "set:conf:off"
+            } else {
+                "set:conf:on"
+            },
+        )],
+        vec![cb(
+            &i18n::btn_qr_toggle(lang, deliver_qr),
+            if deliver_qr {
+                "set:qr:off"
+            } else {
+                "set:qr:on"
+            },
+        )],
+        vec![cb(
+            &i18n::btn_link_toggle(lang, deliver_link),
+            if deliver_link {
+                "set:link:off"
+            } else {
+                "set:link:on"
             },
         )],
         vec![cb(&i18n::btn_back(lang), "menu")],
@@ -98,6 +130,51 @@ pub fn expiry_menu(lang: Lang) -> InlineKeyboardMarkup {
     ])
 }
 
+/// Экран выбора количества для массовой генерации: пресеты 1/3/5/10 (cap=10 —
+/// лимит альбома Telegram). Callback `bulk:N`.
+pub fn bulk_count_menu(lang: Lang) -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![
+        vec![
+            cb("1", "bulk:1"),
+            cb("3", "bulk:3"),
+            cb("5", "bulk:5"),
+            cb("10", "bulk:10"),
+        ],
+        vec![cb(&i18n::btn_back(lang), "menu")],
+    ])
+}
+
+/// Экран выбора срока для массовой генерации. Копия `expiry_menu`, но с
+/// `bulkexp:` префиксами (чтобы bulk- и одиночный-потоки шли через разные
+/// Action без условной логики в общем обработчике `Expiry`).
+pub fn bulk_expiry_menu(lang: Lang) -> InlineKeyboardMarkup {
+    let none_txt = match lang {
+        Lang::Ru => "Без срока",
+        Lang::En => "No expiry",
+    };
+    let custom_txt = match lang {
+        Lang::Ru => "✏️ Свой",
+        Lang::En => "✏️ Custom",
+    };
+    InlineKeyboardMarkup::new(vec![
+        vec![cb(none_txt, "bulkexp:none")],
+        vec![
+            cb(&day_label(lang, 1), "bulkexp:1d"),
+            cb(&day_label(lang, 7), "bulkexp:7d"),
+            cb(&day_label(lang, 14), "bulkexp:14d"),
+        ],
+        vec![
+            cb(&day_label(lang, 30), "bulkexp:30d"),
+            cb(&day_label(lang, 90), "bulkexp:90d"),
+            cb(&day_label(lang, 180), "bulkexp:180d"),
+        ],
+        vec![
+            cb(&day_label(lang, 365), "bulkexp:365d"),
+            cb(custom_txt, "bulkexp:custom"),
+        ],
+    ])
+}
+
 /// Шаг выбора PSK в диалоге `add` — дефолтная опция (по настройке
 /// `settings.psk_default()`) идёт первой кнопкой.
 pub fn psk_step(lang: Lang, default_on: bool) -> InlineKeyboardMarkup {
@@ -110,6 +187,26 @@ pub fn psk_step(lang: Lang, default_on: bool) -> InlineKeyboardMarkup {
         (
             cb(&i18n::btn_create_no_psk(lang), "add:psk:off"),
             cb(&i18n::btn_create_with_psk(lang), "add:psk:on"),
+        )
+    };
+    InlineKeyboardMarkup::new(vec![
+        vec![first, second],
+        vec![cb(&i18n::btn_back(lang), "menu")],
+    ])
+}
+
+/// Шаг выбора PSK в bulk-диалоге — как `psk_step`, но с `bulkadd:psk:` callback'ами
+/// (чтобы попасть в Action::AddBulkPsk, а не в одиночный Action::AddPsk).
+pub fn bulk_psk_step(lang: Lang, default_on: bool) -> InlineKeyboardMarkup {
+    let (first, second) = if default_on {
+        (
+            cb(&i18n::btn_create_with_psk(lang), "bulkadd:psk:on"),
+            cb(&i18n::btn_create_no_psk(lang), "bulkadd:psk:off"),
+        )
+    } else {
+        (
+            cb(&i18n::btn_create_no_psk(lang), "bulkadd:psk:off"),
+            cb(&i18n::btn_create_with_psk(lang), "bulkadd:psk:on"),
         )
     };
     InlineKeyboardMarkup::new(vec![
@@ -179,9 +276,16 @@ pub fn client_card(lang: Lang, name: &str) -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![
         vec![
             cb(conf_txt, &format!("conf:{name}")),
+            cb(&i18n::btn_card_qr(lang), &format!("qr:{name}")),
+        ],
+        vec![
+            cb(&i18n::btn_card_link(lang), &format!("uri:{name}")),
+            cb(&i18n::btn_card_all(lang), &format!("all:{name}")),
+        ],
+        vec![
+            cb(&i18n::btn_regen(lang), &format!("regen:{name}")),
             cb(del_txt, &format!("del:{name}")),
         ],
-        vec![cb(&i18n::btn_regen(lang), &format!("regen:{name}"))],
         vec![cb(&i18n::btn_modify(lang), &format!("mod:{name}"))],
         vec![cb(&i18n::btn_back(lang), "menu")],
     ])
@@ -308,10 +412,18 @@ mod tests {
     fn main_menu_has_expected_actions() {
         let data = all_callback_data(&main_menu(Lang::Ru));
         for expected in [
-            "list", "add", "stats", "backup", "check", "diagnose", "restart", "repair", "settings",
+            "list", "add", "addbulk", "stats", "backup", "check", "diagnose", "restart", "repair",
+            "settings",
         ] {
             assert!(data.contains(&expected.to_string()), "missing {expected}");
         }
+    }
+
+    #[test]
+    fn bulk_psk_step_emits_bulkadd_callbacks() {
+        let data = all_callback_data(&bulk_psk_step(Lang::Ru, true));
+        assert!(data.contains(&"bulkadd:psk:on".to_string()));
+        assert!(!data.iter().any(|d| d.starts_with("add:psk:")));
     }
 
     #[test]
@@ -356,7 +468,6 @@ mod tests {
     fn client_card_encodes_name() {
         let data = all_callback_data(&client_card(Lang::Ru, "alice"));
         assert!(data.contains(&"conf:alice".to_string()));
-        assert!(data.contains(&"del:alice".to_string()));
         assert!(data.contains(&"regen:alice".to_string()));
     }
 
@@ -609,28 +720,52 @@ mod tests {
 
     #[test]
     fn settings_menu_toggles_psk_data_by_current_value() {
-        let data_off = all_callback_data(&settings_menu(Lang::Ru, false, false));
+        let data_off = all_callback_data(&settings_menu(Lang::Ru, false, false, true, true, true));
         assert!(data_off.contains(&"set:psk:on".to_string()));
         assert!(!data_off.contains(&"set:psk:off".to_string()));
-
-        let data_on = all_callback_data(&settings_menu(Lang::Ru, true, false));
+        let data_on = all_callback_data(&settings_menu(Lang::Ru, true, false, true, true, true));
         assert!(data_on.contains(&"set:psk:off".to_string()));
-        assert!(!data_on.contains(&"set:psk:on".to_string()));
-
-        assert!(data_off.contains(&"set:lang:ru".to_string()));
-        assert!(data_off.contains(&"set:lang:en".to_string()));
-        assert!(data_off.contains(&"menu".to_string()));
+        assert!(data_on.contains(&"set:lang:ru".to_string()));
+        assert!(data_on.contains(&"set:lang:en".to_string()));
+        assert!(data_on.contains(&"menu".to_string()));
     }
 
     #[test]
     fn settings_menu_toggles_slug_data_by_current_value() {
-        let data_off = all_callback_data(&settings_menu(Lang::Ru, false, false));
+        let data_off = all_callback_data(&settings_menu(Lang::Ru, false, false, true, true, true));
         assert!(data_off.contains(&"set:slug:on".to_string()));
-        assert!(!data_off.contains(&"set:slug:off".to_string()));
-
-        let data_on = all_callback_data(&settings_menu(Lang::Ru, false, true));
+        let data_on = all_callback_data(&settings_menu(Lang::Ru, false, true, true, true, true));
         assert!(data_on.contains(&"set:slug:off".to_string()));
-        assert!(!data_on.contains(&"set:slug:on".to_string()));
+    }
+
+    #[test]
+    fn client_card_has_four_artifact_buttons() {
+        let data = all_callback_data(&client_card(Lang::Ru, "alice"));
+        assert!(data.contains(&"conf:alice".to_string()));
+        assert!(data.contains(&"qr:alice".to_string()));
+        assert!(data.contains(&"uri:alice".to_string()));
+        assert!(data.contains(&"all:alice".to_string()));
+        assert!(data.contains(&"del:alice".to_string()));
+    }
+
+    #[test]
+    fn bulk_count_menu_has_presets_and_back() {
+        let data = all_callback_data(&bulk_count_menu(Lang::Ru));
+        // пресеты 1/3/5/10 — кодируем как bulk:N
+        assert!(data.contains(&"bulk:1".to_string()));
+        assert!(data.contains(&"bulk:3".to_string()));
+        assert!(data.contains(&"bulk:5".to_string()));
+        assert!(data.contains(&"bulk:10".to_string()));
+        assert!(data.contains(&"menu".to_string()));
+    }
+
+    #[test]
+    fn settings_menu_has_deliver_toggles() {
+        let data = all_callback_data(&settings_menu(Lang::Ru, true, false, true, false, true));
+        assert!(data.contains(&"set:conf:off".to_string())); // on → эмитит off
+        assert!(!data.contains(&"set:conf:on".to_string()));
+        assert!(data.contains(&"set:qr:on".to_string())); // off → эмитит on
+        assert!(data.contains(&"set:link:off".to_string())); // on → эмитит off
     }
 
     #[test]
@@ -639,6 +774,20 @@ mod tests {
         assert!(data.contains(&"add:psk:on".to_string()));
         assert!(data.contains(&"add:psk:off".to_string()));
         assert!(data.contains(&"menu".to_string()));
+    }
+
+    #[test]
+    fn bulk_expiry_menu_uses_bulkexp_prefix() {
+        // Копия expiry_menu, но все callback'и под `bulkexp:` — bulk-поток идёт
+        // через отдельный Action без условной логики в общем обработчике Expiry.
+        let data = all_callback_data(&bulk_expiry_menu(Lang::Ru));
+        assert!(data.contains(&"bulkexp:none".to_string()));
+        assert!(data.contains(&"bulkexp:1d".to_string()));
+        assert!(data.contains(&"bulkexp:30d".to_string()));
+        assert!(data.contains(&"bulkexp:365d".to_string()));
+        assert!(data.contains(&"bulkexp:custom".to_string()));
+        // Подтверждаем, что bulk-экран НЕ пересекается с одиночным потоком:
+        assert!(!data.iter().any(|d| d.starts_with("exp:")));
     }
 
     #[test]

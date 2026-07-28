@@ -205,6 +205,176 @@ pub fn import_link(lang: Lang, uri: &str) -> String {
     }
 }
 
+// --- массовая генерация ---
+pub fn btn_bulk(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "📦 Пакет",
+        Lang::En => "📦 Bulk",
+    }
+    .to_string()
+}
+pub fn ask_bulk_prefix(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "Введите префикс для имён (напр. «user» → user-01 … user-10):",
+        Lang::En => "Enter a name prefix (e.g. \"user\" → user-01 … user-10):",
+    }
+    .to_string()
+}
+/// `max_len` — фактический предел длины префикса (зависит от настройки
+/// ID-префикса, см. `validate::max_bulk_prefix_len`).
+pub fn bad_bulk_prefix(lang: Lang, max_len: usize) -> String {
+    match lang {
+        Lang::Ru => {
+            format!("⚠️ Префикс: латиница/цифры/-/_, 1–{max_len} символов. Попробуйте ещё раз:")
+        }
+        Lang::En => format!("⚠️ Prefix: a-z0-9 -_, 1–{max_len} chars. Try again:"),
+    }
+}
+pub fn ask_bulk_count(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "Выберите количество (максимум 10 — лимит альбома Telegram):",
+        Lang::En => "Choose quantity (max 10 — Telegram album limit):",
+    }
+    .to_string()
+}
+pub fn bulk_creating(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "⏳ Создаю клиентов…",
+        Lang::En => "⏳ Creating clients…",
+    }
+    .to_string()
+}
+/// Итог массовой генерации: «Создано N» (+ «, пропущено: b (существует)…» если есть).
+pub fn bulk_result_summary(lang: Lang, res: &crate::vpn::model::BulkResult) -> String {
+    use crate::vpn::model::SkipReason;
+    let created = res.created.len();
+    if res.skipped.is_empty() {
+        return match lang {
+            Lang::Ru => format!("✅ Создано клиентов: {created}."),
+            Lang::En => format!("✅ Created {created} clients."),
+        };
+    }
+    let skip_lines: Vec<String> = res
+        .skipped
+        .iter()
+        .map(|s| {
+            let reason = match (lang, s.reason) {
+                (Lang::Ru, SkipReason::Exists) => "существует",
+                (Lang::En, SkipReason::Exists) => "exists",
+                (Lang::Ru, SkipReason::InvalidName) => "невалидное имя",
+                (Lang::En, SkipReason::InvalidName) => "invalid name",
+                (Lang::Ru, SkipReason::Error) => "ошибка",
+                (Lang::En, SkipReason::Error) => "error",
+            };
+            format!("• {} ({})", html_escape(&s.name), reason)
+        })
+        .collect();
+    match lang {
+        Lang::Ru => format!(
+            "✅ Создано: {created}.\n⚠️ Пропущено:\n{}",
+            skip_lines.join("\n")
+        ),
+        Lang::En => format!(
+            "✅ Created: {created}.\n⚠️ Skipped:\n{}",
+            skip_lines.join("\n")
+        ),
+    }
+}
+
+// --- capacity-ошибки ---
+pub fn capacity_insufficient(lang: Lang, free: u32, needed: u32) -> String {
+    match lang {
+        Lang::Ru => {
+            format!("⚠️ Свободно адресов: {free}, запрошено {needed}. Уменьшите количество.")
+        }
+        Lang::En => {
+            format!("⚠️ Only {free} addresses free, {needed} requested. Reduce the quantity.")
+        }
+    }
+}
+pub fn capacity_exhausted(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "⚠️ Свободные адреса исчерпаны. Удалите неиспользуемых клиентов.",
+        Lang::En => "⚠️ No free addresses left. Remove unused clients.",
+    }
+    .to_string()
+}
+pub fn capacity_unavailable(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => {
+            "⚠️ Не удалось получить информацию об интерфейсе. Проверьте сервер («🩺 Проверка»)."
+        }
+        Lang::En => "⚠️ Could not get interface info. Check the server (\"🩺 Check\").",
+    }
+    .to_string()
+}
+
+// --- тумблеры выдачи (экран настроек) ---
+pub fn btn_conf_toggle(lang: Lang, on: bool) -> String {
+    match (lang, on) {
+        (Lang::Ru, true) => "📄 Конфиг: вкл ✅",
+        (Lang::Ru, false) => "📄 Конфиг: выкл ⬜",
+        (Lang::En, true) => "📄 Config: on ✅",
+        (Lang::En, false) => "📄 Config: off ⬜",
+    }
+    .to_string()
+}
+pub fn btn_qr_toggle(lang: Lang, on: bool) -> String {
+    match (lang, on) {
+        (Lang::Ru, true) => "🖼 QR: вкл ✅",
+        (Lang::Ru, false) => "🖼 QR: выкл ⬜",
+        (Lang::En, true) => "🖼 QR: on ✅",
+        (Lang::En, false) => "🖼 QR: off ⬜",
+    }
+    .to_string()
+}
+pub fn btn_link_toggle(lang: Lang, on: bool) -> String {
+    match (lang, on) {
+        (Lang::Ru, true) => "🔗 Ссылка: вкл ✅",
+        (Lang::Ru, false) => "🔗 Ссылка: выкл ⬜",
+        (Lang::En, true) => "🔗 Link: on ✅",
+        (Lang::En, false) => "🔗 Link: off ⬜",
+    }
+    .to_string()
+}
+
+// --- карточка клиента: отдельные артефакты ---
+pub fn btn_card_qr(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "🖼 QR",
+        Lang::En => "🖼 QR",
+    }
+    .to_string()
+}
+pub fn btn_card_link(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "🔗 Ссылка",
+        Lang::En => "🔗 Link",
+    }
+    .to_string()
+}
+pub fn btn_card_all(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "📦 Всё",
+        Lang::En => "📦 All",
+    }
+    .to_string()
+}
+pub fn qr_not_generated(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "⚠️ QR не сгенерирован (возможно, qrencode не установлен на сервере).",
+        Lang::En => "⚠️ QR was not generated (qrencode may be missing on the server).",
+    }
+    .to_string()
+}
+pub fn link_unavailable(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "⚠️ Ссылка для импорта недоступна.",
+        Lang::En => "⚠️ Import link is unavailable.",
+    }
+    .to_string()
+}
+
 // --- карточка/статистика (динамика экранируется) ---
 #[allow(clippy::too_many_arguments)]
 pub fn client_card(
@@ -357,23 +527,36 @@ pub fn client_exists(lang: Lang, name: &str) -> String {
 }
 
 // --- настройки ---
-pub fn settings_title(lang: Lang, psk_default: bool, name_slug: bool) -> String {
-    let psk = if psk_default {
-        "вкл/on"
-    } else {
-        "выкл/off"
-    };
-    let slug = if name_slug {
-        "вкл/on"
-    } else {
-        "выкл/off"
+pub fn settings_title(
+    lang: Lang,
+    psk_default: bool,
+    name_slug: bool,
+    deliver_conf: bool,
+    deliver_qr: bool,
+    deliver_link: bool,
+) -> String {
+    let onoff = |b: bool| match (lang, b) {
+        (Lang::Ru, true) => "вкл",
+        (Lang::Ru, false) => "выкл",
+        (Lang::En, true) => "on",
+        (Lang::En, false) => "off",
     };
     match lang {
         Lang::Ru => format!(
-            "⚙️ <b>Настройки</b>\nЯзык: русский\nPSK по умолчанию: {psk}\nID-префикс имён: {slug}"
+            "⚙️ <b>Настройки</b>\nЯзык: русский\nPSK по умолчанию: {}\nID-префикс имён: {}\n📄 Выдача конфига: {}\n🖼 Выдача QR: {}\n🔗 Выдача ссылки: {}",
+            onoff(psk_default),
+            onoff(name_slug),
+            onoff(deliver_conf),
+            onoff(deliver_qr),
+            onoff(deliver_link)
         ),
         Lang::En => format!(
-            "⚙️ <b>Settings</b>\nLanguage: English\nDefault PSK: {psk}\nName ID prefix: {slug}"
+            "⚙️ <b>Settings</b>\nLanguage: English\nDefault PSK: {}\nName ID prefix: {}\n📄 Deliver config: {}\n🖼 Deliver QR: {}\n🔗 Deliver link: {}",
+            onoff(psk_default),
+            onoff(name_slug),
+            onoff(deliver_conf),
+            onoff(deliver_qr),
+            onoff(deliver_link)
         ),
     }
 }
@@ -899,7 +1082,7 @@ mod tests {
             assert!(!access_denied(l).is_empty());
             assert!(!ask_client_name(l, true).is_empty());
             assert!(!ask_expiry(l).is_empty());
-            assert!(!settings_title(l, true, true).is_empty());
+            assert!(!settings_title(l, true, true, true, true, true).is_empty());
             assert!(!backups_empty(l).is_empty());
             assert!(!restore_done(l).is_empty());
             // карточка: имя экранируется
@@ -1113,5 +1296,105 @@ mod tests {
         };
         let bad_text = check_card(Lang::Ru, &bad);
         assert!(bad_text.contains("❌"));
+    }
+
+    #[test]
+    fn bulk_strings_nonempty_both_langs() {
+        for l in [Lang::Ru, Lang::En] {
+            assert!(!ask_bulk_prefix(l).is_empty());
+            assert!(!ask_bulk_count(l).is_empty());
+            assert!(!btn_bulk(l).is_empty());
+            assert!(!bulk_creating(l).is_empty());
+        }
+    }
+
+    #[test]
+    fn bad_bulk_prefix_shows_actual_limit() {
+        // Лимит зависит от slug-настройки — сообщение должно показывать
+        // фактическую границу, а не захардкоженную.
+        assert!(bad_bulk_prefix(Lang::Ru, 29).contains("29"));
+        assert!(bad_bulk_prefix(Lang::En, 23).contains("23"));
+    }
+
+    #[test]
+    fn bulk_result_summary_created_only() {
+        use crate::vpn::model::{AddResult, BulkResult};
+        let res = BulkResult {
+            created: vec![
+                AddResult {
+                    name: "a".into(),
+                    conf_path: "/x".into(),
+                    qr_path: "".into(),
+                    uri: "".into(),
+                },
+                AddResult {
+                    name: "b".into(),
+                    conf_path: "/y".into(),
+                    qr_path: "".into(),
+                    uri: "".into(),
+                },
+            ],
+            skipped: vec![],
+        };
+        let ru = bulk_result_summary(Lang::Ru, &res);
+        let en = bulk_result_summary(Lang::En, &res);
+        assert!(ru.contains("2"));
+        assert!(en.contains("2"));
+    }
+
+    #[test]
+    fn bulk_result_summary_with_skipped() {
+        use crate::vpn::model::{AddResult, BulkResult, Skip, SkipReason};
+        let res = BulkResult {
+            created: vec![AddResult {
+                name: "a".into(),
+                conf_path: "/x".into(),
+                qr_path: "".into(),
+                uri: "".into(),
+            }],
+            skipped: vec![Skip {
+                name: "b".into(),
+                reason: SkipReason::Exists,
+            }],
+        };
+        let ru = bulk_result_summary(Lang::Ru, &res);
+        assert!(ru.contains("1"));
+        assert!(ru.contains("b"));
+    }
+
+    #[test]
+    fn capacity_messages_nonempty_both_langs() {
+        for l in [Lang::Ru, Lang::En] {
+            assert!(!capacity_insufficient(l, 4, 10).is_empty());
+            assert!(!capacity_exhausted(l).is_empty());
+            assert!(!capacity_unavailable(l).is_empty());
+        }
+    }
+
+    #[test]
+    fn deliver_toggle_buttons_nonempty() {
+        for l in [Lang::Ru, Lang::En] {
+            assert!(!btn_conf_toggle(l, true).is_empty());
+            assert!(!btn_conf_toggle(l, false).is_empty());
+            assert!(!btn_qr_toggle(l, true).is_empty());
+            assert!(!btn_link_toggle(l, true).is_empty());
+        }
+    }
+
+    #[test]
+    fn card_artifact_buttons_nonempty() {
+        for l in [Lang::Ru, Lang::En] {
+            assert!(!btn_card_qr(l).is_empty());
+            assert!(!btn_card_link(l).is_empty());
+            assert!(!btn_card_all(l).is_empty());
+        }
+    }
+
+    #[test]
+    fn artifact_missing_messages_nonempty() {
+        for l in [Lang::Ru, Lang::En] {
+            assert!(!qr_not_generated(l).is_empty());
+            assert!(!link_unavailable(l).is_empty());
+        }
     }
 }
