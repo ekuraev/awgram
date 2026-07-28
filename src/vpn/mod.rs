@@ -333,8 +333,10 @@ impl Vpn {
     /// Свободные адреса в подсети сервера для превентивной проверки массовой
     /// генерации. `total` = usable-хостов v4-подсети (минус network+broadcast),
     /// `free` = total − 1 (сервер) − existing. Берёт первый IPv4 из
-    /// `interface.addresses` (v6 /64 — безгранична, не ограничивает). Нет v4
-    /// или addresses пуст → `Err` (интерфейс не поднят / check недоступен).
+    /// `interface.addresses` (v6 /64 — безгранична, не ограничивает); кол-во
+    /// существующих — из `clients.total` того же check-отчёта (один вызов
+    /// скрипта, без отдельного `list`). Нет v4 или addresses пуст → `Err`
+    /// (интерфейс не поднят / check недоступен).
     pub async fn capacity(&self) -> Result<crate::vpn::model::CapacityInfo> {
         let report = self.check().await?;
         let cidr_v4 = report
@@ -361,7 +363,7 @@ impl Vpn {
         } else {
             (1u32 << (32 - prefix_len)).saturating_sub(2)
         };
-        let existing = self.list().await?.len() as u32;
+        let existing = report.clients.total;
         let free = total.saturating_sub(1).saturating_sub(existing);
         Ok(crate::vpn::model::CapacityInfo { free, total })
     }
@@ -1255,6 +1257,23 @@ esac
         let cap = vpn.capacity().await.unwrap();
         assert_eq!(cap.total, 6);
         assert_eq!(cap.free, 4);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn capacity_uses_check_clients_total_without_calling_list() {
+        // Кол-во существующих берётся из check.clients.total — отдельный вызов
+        // list не нужен (и его отказ не должен ронять capacity).
+        let stub = r#"#!/bin/sh
+case "$1" in
+  check) echo '{"command":"check","ok":true,"service":{"unit":"awg-quick@awg0","active":true},"interface":{"name":"awg0","present":true,"mtu":1280,"addresses":["10.9.9.1/24","fd00::1/64"]},"port":{"number":39743,"listening":true},"module":{"loaded":true},"clients":{"total":3},"firewall":{"ufw_active":true,"port_allowed":true}}' ;;
+  *) exit 1 ;;
+esac
+"#;
+        let (_d, vpn) = vpn_with_script(stub);
+        let cap = vpn.capacity().await.unwrap();
+        assert_eq!(cap.total, 254);
+        assert_eq!(cap.free, 250);
     }
 
     #[tokio::test]

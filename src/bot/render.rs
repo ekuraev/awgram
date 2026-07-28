@@ -204,7 +204,7 @@ mod tests {
     fn send_album_and_filtered_signatures_compile() {
         // Compile-time check: функции существуют с правильными сигнатурами.
         // Реальная отправка тестируется вручную (нужен живой Bot).
-        // Оба брала привязаны к одному `'a`, чтобы boxed future жил не дольше.
+        // Оба заимствования привязаны к одному `'a`, чтобы boxed future жил не дольше.
         fn _assert_send_album<'a>(
             bot: &'a teloxide::Bot,
             chat: teloxide::types::ChatId,

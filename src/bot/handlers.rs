@@ -280,6 +280,40 @@ async fn edit_or_send(
     }
 }
 
+/// Перерисовывает экран настроек: заголовок и клавиатура собираются из одних
+/// и тех же текущих значений тумблеров (единственное место, где они читаются
+/// для этого экрана).
+async fn show_settings(
+    bot: &Bot,
+    chat: ChatId,
+    msg_id: MessageId,
+    lang: Lang,
+    settings: &SettingsStore,
+) {
+    edit_or_send(
+        bot,
+        chat,
+        msg_id,
+        i18n::settings_title(
+            lang,
+            settings.psk_default(),
+            settings.name_slug(),
+            settings.deliver_conf(),
+            settings.deliver_qr(),
+            settings.deliver_link(),
+        ),
+        menu::settings_menu(
+            lang,
+            settings.psk_default(),
+            settings.name_slug(),
+            settings.deliver_conf(),
+            settings.deliver_qr(),
+            settings.deliver_link(),
+        ),
+    )
+    .await;
+}
+
 async fn message_handler(
     bot: Bot,
     dialogue: MyDialogue,
@@ -441,10 +475,12 @@ async fn message_handler(
         }
         State::AwaitingBulkPrefix => {
             let prefix = msg.text().unwrap_or_default().to_string();
-            // Префикс валидируется как часть имени (gen_bulk_names с count=1 —
-            // smoke-проверка длины/символов без генерации всей пачки).
-            match crate::vpn::validate::gen_bulk_names(prefix.trim(), 1, None) {
-                Ok(_) => {
+            // Худший случай сразу (count=MAX_BULK, slug по текущей настройке):
+            // слишком длинный префикс отбивается на первом шаге, а не после
+            // выбора срока и PSK в finish_bulk.
+            let slug_enabled = settings.name_slug();
+            match crate::vpn::validate::validate_bulk_prefix(prefix.trim(), slug_enabled) {
+                Ok(()) => {
                     bot.send_message(msg.chat.id, i18n::ask_bulk_count(lang))
                         .reply_markup(menu::bulk_count_menu(lang))
                         .await?;
@@ -455,7 +491,8 @@ async fn message_handler(
                         .await?;
                 }
                 Err(_) => {
-                    bot.send_message(msg.chat.id, i18n::bad_bulk_prefix(lang))
+                    let max = crate::vpn::validate::max_bulk_prefix_len(slug_enabled);
+                    bot.send_message(msg.chat.id, i18n::bad_bulk_prefix(lang, max))
                         .await?;
                 }
             }
@@ -619,7 +656,10 @@ async fn finish_bulk(
             if let Some(m) = waiting {
                 let _ = bot.delete_message(chat, m.id).await;
             }
-            let _ = bot.send_message(chat, i18n::bad_bulk_prefix(lang)).await;
+            let max = crate::vpn::validate::max_bulk_prefix_len(slug.is_some());
+            let _ = bot
+                .send_message(chat, i18n::bad_bulk_prefix(lang, max))
+                .await;
             return;
         }
     };
@@ -1198,28 +1238,7 @@ async fn callback_handler(
             dialogue.exit().await?;
         }
         Action::Settings => {
-            edit_or_send(
-                &bot,
-                chat,
-                msg_id,
-                i18n::settings_title(
-                    lang,
-                    settings.psk_default(),
-                    settings.name_slug(),
-                    settings.deliver_conf(),
-                    settings.deliver_qr(),
-                    settings.deliver_link(),
-                ),
-                menu::settings_menu(
-                    lang,
-                    settings.psk_default(),
-                    settings.name_slug(),
-                    settings.deliver_conf(),
-                    settings.deliver_qr(),
-                    settings.deliver_link(),
-                ),
-            )
-            .await;
+            show_settings(&bot, chat, msg_id, lang, &settings).await;
         }
         Action::Modify(name) => {
             edit_or_send(
@@ -1310,153 +1329,27 @@ async fn callback_handler(
                 settings.set_lang(uid, l);
             }
             let lang = settings.lang(uid);
-            edit_or_send(
-                &bot,
-                chat,
-                msg_id,
-                i18n::settings_title(
-                    lang,
-                    settings.psk_default(),
-                    settings.name_slug(),
-                    settings.deliver_conf(),
-                    settings.deliver_qr(),
-                    settings.deliver_link(),
-                ),
-                menu::settings_menu(
-                    lang,
-                    settings.psk_default(),
-                    settings.name_slug(),
-                    settings.deliver_conf(),
-                    settings.deliver_qr(),
-                    settings.deliver_link(),
-                ),
-            )
-            .await;
+            show_settings(&bot, chat, msg_id, lang, &settings).await;
         }
         Action::SetPsk(on) => {
             settings.set_psk_default(on);
-            edit_or_send(
-                &bot,
-                chat,
-                msg_id,
-                i18n::settings_title(
-                    lang,
-                    settings.psk_default(),
-                    settings.name_slug(),
-                    settings.deliver_conf(),
-                    settings.deliver_qr(),
-                    settings.deliver_link(),
-                ),
-                menu::settings_menu(
-                    lang,
-                    settings.psk_default(),
-                    settings.name_slug(),
-                    settings.deliver_conf(),
-                    settings.deliver_qr(),
-                    settings.deliver_link(),
-                ),
-            )
-            .await;
+            show_settings(&bot, chat, msg_id, lang, &settings).await;
         }
         Action::SetSlug(on) => {
             settings.set_name_slug(on);
-            edit_or_send(
-                &bot,
-                chat,
-                msg_id,
-                i18n::settings_title(
-                    lang,
-                    settings.psk_default(),
-                    settings.name_slug(),
-                    settings.deliver_conf(),
-                    settings.deliver_qr(),
-                    settings.deliver_link(),
-                ),
-                menu::settings_menu(
-                    lang,
-                    settings.psk_default(),
-                    settings.name_slug(),
-                    settings.deliver_conf(),
-                    settings.deliver_qr(),
-                    settings.deliver_link(),
-                ),
-            )
-            .await;
+            show_settings(&bot, chat, msg_id, lang, &settings).await;
         }
         Action::SetConf(on) => {
             settings.set_deliver_conf(on);
-            edit_or_send(
-                &bot,
-                chat,
-                msg_id,
-                i18n::settings_title(
-                    lang,
-                    settings.psk_default(),
-                    settings.name_slug(),
-                    settings.deliver_conf(),
-                    settings.deliver_qr(),
-                    settings.deliver_link(),
-                ),
-                menu::settings_menu(
-                    lang,
-                    settings.psk_default(),
-                    settings.name_slug(),
-                    settings.deliver_conf(),
-                    settings.deliver_qr(),
-                    settings.deliver_link(),
-                ),
-            )
-            .await;
+            show_settings(&bot, chat, msg_id, lang, &settings).await;
         }
         Action::SetQr(on) => {
             settings.set_deliver_qr(on);
-            edit_or_send(
-                &bot,
-                chat,
-                msg_id,
-                i18n::settings_title(
-                    lang,
-                    settings.psk_default(),
-                    settings.name_slug(),
-                    settings.deliver_conf(),
-                    settings.deliver_qr(),
-                    settings.deliver_link(),
-                ),
-                menu::settings_menu(
-                    lang,
-                    settings.psk_default(),
-                    settings.name_slug(),
-                    settings.deliver_conf(),
-                    settings.deliver_qr(),
-                    settings.deliver_link(),
-                ),
-            )
-            .await;
+            show_settings(&bot, chat, msg_id, lang, &settings).await;
         }
         Action::SetLink(on) => {
             settings.set_deliver_link(on);
-            edit_or_send(
-                &bot,
-                chat,
-                msg_id,
-                i18n::settings_title(
-                    lang,
-                    settings.psk_default(),
-                    settings.name_slug(),
-                    settings.deliver_conf(),
-                    settings.deliver_qr(),
-                    settings.deliver_link(),
-                ),
-                menu::settings_menu(
-                    lang,
-                    settings.psk_default(),
-                    settings.name_slug(),
-                    settings.deliver_conf(),
-                    settings.deliver_qr(),
-                    settings.deliver_link(),
-                ),
-            )
-            .await;
+            show_settings(&bot, chat, msg_id, lang, &settings).await;
         }
         Action::Backup => {
             edit_or_send(

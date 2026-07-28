@@ -220,12 +220,15 @@ pub fn ask_bulk_prefix(lang: Lang) -> String {
     }
     .to_string()
 }
-pub fn bad_bulk_prefix(lang: Lang) -> String {
+/// `max_len` — фактический предел длины префикса (зависит от настройки
+/// ID-префикса, см. `validate::max_bulk_prefix_len`).
+pub fn bad_bulk_prefix(lang: Lang, max_len: usize) -> String {
     match lang {
-        Lang::Ru => "⚠️ Префикс: латиница/цифры/-/_, 1–26 символов. Попробуйте ещё раз:",
-        Lang::En => "⚠️ Prefix: a-z0-9 -_, 1–26 chars. Try again:",
+        Lang::Ru => {
+            format!("⚠️ Префикс: латиница/цифры/-/_, 1–{max_len} символов. Попробуйте ещё раз:")
+        }
+        Lang::En => format!("⚠️ Prefix: a-z0-9 -_, 1–{max_len} chars. Try again:"),
     }
-    .to_string()
 }
 pub fn ask_bulk_count(lang: Lang) -> String {
     match lang {
@@ -1303,6 +1306,14 @@ mod tests {
             assert!(!btn_bulk(l).is_empty());
             assert!(!bulk_creating(l).is_empty());
         }
+    }
+
+    #[test]
+    fn bad_bulk_prefix_shows_actual_limit() {
+        // Лимит зависит от slug-настройки — сообщение должно показывать
+        // фактическую границу, а не захардкоженную.
+        assert!(bad_bulk_prefix(Lang::Ru, 29).contains("29"));
+        assert!(bad_bulk_prefix(Lang::En, 23).contains("23"));
     }
 
     #[test]

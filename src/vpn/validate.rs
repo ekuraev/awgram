@@ -68,10 +68,38 @@ pub fn gen_slug() -> String {
 /// 2–10 элементов одного типа). Больше нельзя выдать одним альбомом.
 pub const MAX_BULK: u32 = 10;
 
+/// Длина слага из `gen_slug` (5 символов a-z0-9).
+const SLUG_LEN: usize = 5;
+
+/// Ширина числового суффикса — всегда по `MAX_BULK` (2 знака), независимо от
+/// count: повторные генерации с одним префиксом дают единообразные имена.
+fn bulk_suffix_width() -> usize {
+    MAX_BULK.to_string().len()
+}
+
+/// Максимальная длина префикса массовой генерации: 32 (лимит `name_re`) минус
+/// суффикс `-NN` и, при включённом ID-префиксе, минус `slug-`.
+pub fn max_bulk_prefix_len(slug_enabled: bool) -> usize {
+    let mut max = 32 - (1 + bulk_suffix_width()); // "-NN"
+    if slug_enabled {
+        max -= SLUG_LEN + 1; // "slug-"
+    }
+    max
+}
+
+/// Проверка префикса на худший случай (count = MAX_BULK, slug при включённой
+/// настройке) — для ранней валидации на первом шаге диалога, чтобы пользователь
+/// не узнавал о слишком длинном префиксе только после выбора срока и PSK.
+pub fn validate_bulk_prefix(prefix: &str, slug_enabled: bool) -> Result<(), ValidateError> {
+    let slug_placeholder = "0".repeat(SLUG_LEN);
+    let slug = slug_enabled.then_some(slug_placeholder.as_str());
+    gen_bulk_names(prefix, MAX_BULK, slug).map(|_| ())
+}
+
 /// Генерирует `count` имён вида `prefix-NN` (без slug) или `slug-prefix-NN`
 /// (со slug, slug первым — как в `normalize_name`). Нумерация zero-padded по
-/// ширине `count` (1..=9 → 1 символ, 10 → 2 символа: 01..10), чтобы
-/// лексикографическая сортировка совпадала с числовой.
+/// ширине `MAX_BULK` (2 знака: 01..10), чтобы лексикографическая сортировка
+/// совпадала с числовой и имена разных генераций были единообразны.
 ///
 /// Каждое имя проходит `name_re()` (≤32 символа). Слишком длинный префикс
 /// (с учётом slug и суффикса) → `Err(BadName)` — без молчаливой обрезки.
@@ -93,7 +121,7 @@ pub fn gen_bulk_names(
     {
         return Err(ValidateError::BadName);
     }
-    let width = count.to_string().len();
+    let width = bulk_suffix_width();
     let mut out = Vec::with_capacity(count as usize);
     for i in 1..=count {
         let suffix = format!("{:0width$}", i, width = width);
@@ -509,16 +537,41 @@ mod tests {
     }
 
     #[test]
-    fn gen_bulk_names_small_count_single_digit() {
-        // N=3 → ширина 1, без лидирующего нуля
+    fn gen_bulk_names_small_count_pads_to_max_bulk_width() {
+        // Ширина суффикса всегда по MAX_BULK (=2), а не по count: повторные
+        // генерации с одним префиксом дают единообразные имена (user-01,
+        // а не user-1 vs user-01) и одинаковую сортировку.
         let names = gen_bulk_names("user", 3, None).unwrap();
-        assert_eq!(names, vec!["user-1", "user-2", "user-3"]);
+        assert_eq!(names, vec!["user-01", "user-02", "user-03"]);
     }
 
     #[test]
     fn gen_bulk_names_with_slug_prefix_first() {
         let names = gen_bulk_names("user", 2, Some("k3x9f")).unwrap();
-        assert_eq!(names, vec!["k3x9f-user-1", "k3x9f-user-2"]);
+        assert_eq!(names, vec!["k3x9f-user-01", "k3x9f-user-02"]);
+    }
+
+    #[test]
+    fn max_bulk_prefix_len_accounts_for_slug_and_suffix() {
+        // 32 − "-NN"(3) = 29 без slug; минус "k3x9f-"(6) = 23 со slug.
+        assert_eq!(max_bulk_prefix_len(false), 29);
+        assert_eq!(max_bulk_prefix_len(true), 23);
+    }
+
+    #[test]
+    fn validate_bulk_prefix_checks_worst_case_length() {
+        // Граница без slug: 29 ок, 30 — уже нет (29+3 = 32, 30+3 = 33).
+        assert!(validate_bulk_prefix(&"a".repeat(29), false).is_ok());
+        assert!(validate_bulk_prefix(&"a".repeat(30), false).is_err());
+        // Со slug граница сдвигается: 23 ок, 24 — нет.
+        assert!(validate_bulk_prefix(&"a".repeat(23), true).is_ok());
+        assert!(validate_bulk_prefix(&"a".repeat(24), true).is_err());
+    }
+
+    #[test]
+    fn validate_bulk_prefix_rejects_bad_charset() {
+        assert!(validate_bulk_prefix("user;rm", false).is_err());
+        assert!(validate_bulk_prefix("", false).is_err());
     }
 
     #[test]
