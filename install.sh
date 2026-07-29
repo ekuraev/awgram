@@ -287,7 +287,8 @@ load_setup_conf() {
   v="$(sed -n 's/^LANG=//p' "$SETUP_CONF" | head -1)";           [ -n "$UI_LANG" ] || UI_LANG="$v"
   v="$(sed -n 's/^MODE=//p' "$SETUP_CONF" | head -1)";           PREV_MODE="$v"; [ -n "$MODE" ] || MODE="$v"
   v="$(sed -n 's/^VERSION=//p' "$SETUP_CONF" | head -1)";        INSTALLED_VERSION="$v"
-  v="$(sed -n 's/^CHANNEL=//p' "$SETUP_CONF" | head -1)";        [ -n "$CHANNEL" ] || CHANNEL="$v"
+  v="$(sed -n 's/^CHANNEL=//p' "$SETUP_CONF" | head -1)"
+  case "$v" in stable|rc|beta|alpha) [ -n "$CHANNEL" ] || CHANNEL="$v" ;; esac
   v="$(sed -n 's/^MANAGE_SCRIPT=//p' "$SETUP_CONF" | head -1)";  [ -n "$MANAGE_SCRIPT" ] || MANAGE_SCRIPT="$v"
   v="$(sed -n 's/^CLIENTS_DIR=//p' "$SETUP_CONF" | head -1)";    [ -n "$CLIENTS_DIR" ] || CLIENTS_DIR="$v"
 }
@@ -717,6 +718,7 @@ cmd_update() {
   elif [ -n "$BINARY_FILE" ]; then tag="local"
   else tag="$(fetch_latest_tag "${CHANNEL:-stable}")"; fi
   if [ "$tag" = "$INSTALLED_VERSION" ] && [ -z "$BINARY_FILE" ] && [ -z "$PIN_VERSION" ]; then
+    [ ! -f "$SETUP_CONF" ] || save_setup_conf
     info up_to_date "$tag"; return 0
   fi
   TMPD="$(mktemp -d)"

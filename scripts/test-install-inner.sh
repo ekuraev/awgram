@@ -237,11 +237,23 @@ grep -q '^VERSION=v0.7.0-rc.1$' /etc/awgram/setup.conf || fail "rc version not i
 upd_out="$(/usr/local/bin/awgram-setup update --yes --no-systemd 2>&1)"
 grep -q 'v0.7.0-rc.1' <<<"$upd_out" || fail "sticky channel must resolve rc tag"
 grep -q '^VERSION=v0.7.0-rc.1$' /etc/awgram/setup.conf || fail "sticky update must stay on rc"
+# смена канала на up-to-date-пути: beta тоже резолвит уже установленный rc.1 —
+# канал обязан персистится, даже когда бинарник не меняется (регрессия к finding 1)
+/usr/local/bin/awgram-setup update --channel beta --yes --no-systemd
+grep -q '^CHANNEL=beta$' /etc/awgram/setup.conf || fail "channel must persist on up-to-date path"
+grep -q '^VERSION=v0.7.0-rc.1$' /etc/awgram/setup.conf || fail "version must stay unchanged on up-to-date path"
+# возвращаем канал на rc (тоже up-to-date-путь) перед проверкой status
+/usr/local/bin/awgram-setup update --channel rc --yes --no-systemd
+grep -q '^CHANNEL=rc$' /etc/awgram/setup.conf || fail "channel must persist back to rc on up-to-date path"
 # status: показывает канал и последний релиз СВОЕГО канала
 status_out="$(/usr/local/bin/awgram-setup status --no-systemd 2>&1)"
 grep -qi 'channel: rc' <<<"$status_out" || fail "status lacks channel line"
 grep -q 'v0.7.0-rc.1' <<<"$status_out" || fail "status latest must be per-channel"
-# возврат на stable — осознанный даунгрейд до v0.6.0
+# --version не должен трогать сохранённый канал (channel-neutrality)
+/usr/local/bin/awgram-setup update --version v0.6.0 --yes --no-systemd
+grep -q '^CHANNEL=rc$' /etc/awgram/setup.conf || fail "explicit --version must not change channel"
+grep -q '^VERSION=v0.6.0$' /etc/awgram/setup.conf || fail "explicit --version must install pinned version"
+# возврат на stable — канал резолвит уже установленную v0.6.0 (снова up-to-date-путь)
 /usr/local/bin/awgram-setup update --channel stable --yes --no-systemd
 grep -q '^CHANNEL=stable$' /etc/awgram/setup.conf || fail "channel not reset to stable"
 grep -q '^VERSION=v0.6.0$' /etc/awgram/setup.conf || fail "stable downgrade not applied"
