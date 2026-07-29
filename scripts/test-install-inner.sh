@@ -200,4 +200,52 @@ tags=$'v0.7.0-alpha.2\nv0.7.0-rc.1\nv0.6.0'
 [ "$(pick_channel_tag alpha  <<<"$tags")" = "v0.7.0-alpha.2" ] || fail "pick alpha"
 pick_channel_tag rc <<<"v0.1.0-nightly.1" && fail "pick must fail when nothing matches"
 
+# --- сценарий 8b: каналы end-to-end через фейковый curl (без сети) ---
+# после сценария 7 всё удалено — ставим заново локальным бинарником
+bash /repo/install.sh install --yes --lang en --mode root \
+  --token TESTTOKEN --admins 1 --binary-file /tmp/fakebin --no-systemd
+printf '#!/bin/sh\necho rc1\n' > /tmp/fakebin3; chmod +x /tmp/fakebin3
+sha256sum < /tmp/fakebin3 | cut -d' ' -f1 > /tmp/fakebin3.hash
+# фейковый GitHub: /releases/latest → v0.6.0 (stable), /releases → rc.1 сверху;
+# бинарники/чек-суммы/install.sh отдаются локально (тот же приём, что fake systemctl)
+cat > /usr/local/bin/curl <<'FAKE'
+#!/bin/bash
+out=""; url=""; prev=""
+for a in "$@"; do
+  [ "$prev" = "-o" ] && out="$a"
+  case "$a" in http*) url="$a" ;; esac
+  prev="$a"
+done
+emit() { if [ -n "$out" ]; then cat > "$out"; else cat; fi; }
+case "$url" in
+  *api.github.com*releases/latest*) printf '{"tag_name": "v0.6.0"}\n' | emit ;;
+  *api.github.com*per_page*) printf '[{"tag_name": "v0.7.0-rc.1"},{"tag_name": "v0.6.0"}]\n' | emit ;;
+  *.sha256) f="${url##*/}"; printf '%s  %s\n' "$(cat /tmp/fakebin3.hash)" "${f%.sha256}" | emit ;;
+  *awgram-linux-*) emit < /tmp/fakebin3 ;;
+  *install.sh) emit < /repo/install.sh ;;
+  *) exit 22 ;;
+esac
+FAKE
+chmod +x /usr/local/bin/curl
+# переход на rc-канал: резолвится v0.7.0-rc.1, канал персистится
+/usr/local/bin/awgram-setup update --channel rc --yes --no-systemd
+grep -q '^CHANNEL=rc$' /etc/awgram/setup.conf || fail "channel not persisted"
+grep -q '^VERSION=v0.7.0-rc.1$' /etc/awgram/setup.conf || fail "rc version not installed"
+[ "$(sha256sum < /usr/local/bin/awgram)" = "$(sha256sum < /tmp/fakebin3)" ] || fail "rc binary content"
+# обычный update следует сохранённому каналу (rc.1 уже стоит → up to date)
+upd_out="$(/usr/local/bin/awgram-setup update --yes --no-systemd 2>&1)"
+grep -q 'v0.7.0-rc.1' <<<"$upd_out" || fail "sticky channel must resolve rc tag"
+grep -q '^VERSION=v0.7.0-rc.1$' /etc/awgram/setup.conf || fail "sticky update must stay on rc"
+# status: показывает канал и последний релиз СВОЕГО канала
+status_out="$(/usr/local/bin/awgram-setup status --no-systemd 2>&1)"
+grep -qi 'channel: rc' <<<"$status_out" || fail "status lacks channel line"
+grep -q 'v0.7.0-rc.1' <<<"$status_out" || fail "status latest must be per-channel"
+# возврат на stable — осознанный даунгрейд до v0.6.0
+/usr/local/bin/awgram-setup update --channel stable --yes --no-systemd
+grep -q '^CHANNEL=stable$' /etc/awgram/setup.conf || fail "channel not reset to stable"
+grep -q '^VERSION=v0.6.0$' /etc/awgram/setup.conf || fail "stable downgrade not applied"
+rm -f /usr/local/bin/curl /tmp/fakebin3 /tmp/fakebin3.hash
+/usr/local/bin/awgram-setup uninstall --yes --purge --no-systemd
+[ ! -e /etc/awgram ] || fail "cleanup after scenario 8b"
+
 echo "OK: all scenarios passed"

@@ -154,6 +154,8 @@ MSG_RU[err_locked]="Другой запуск awgram-setup ещё не заве�
 MSG_EN[err_locked]="Another awgram-setup run is still in progress (lock: %s)"
 MSG_RU[err_bad_channel]="Недопустимое значение --channel: %s (stable|rc|beta|alpha)"
 MSG_EN[err_bad_channel]="Invalid --channel value: %s (stable|rc|beta|alpha)"
+MSG_RU[st_channel]="Канал обновлений: %s"
+MSG_EN[st_channel]="Update channel: %s"
 
 msg() {
   local key="$1"; shift || true
@@ -555,7 +557,7 @@ cmd_install() {
   local tag staged
   if [ -n "$PIN_VERSION" ]; then tag="$PIN_VERSION"
   elif [ -n "$BINARY_FILE" ]; then tag="local"
-  else tag="$(fetch_latest_tag)"; fi
+  else tag="$(fetch_latest_tag "${CHANNEL:-stable}")"; fi
   TMPD="$(mktemp -d)"
   staged="$(fetch_binary "$tag")"
   install_binary "$staged"
@@ -705,7 +707,7 @@ cmd_update() {
   local tag staged
   if [ -n "$PIN_VERSION" ]; then tag="$PIN_VERSION"
   elif [ -n "$BINARY_FILE" ]; then tag="local"
-  else tag="$(fetch_latest_tag)"; fi
+  else tag="$(fetch_latest_tag "${CHANNEL:-stable}")"; fi
   if [ "$tag" = "$INSTALLED_VERSION" ] && [ -z "$BINARY_FILE" ] && [ -z "$PIN_VERSION" ]; then
     info up_to_date "$tag"; return 0
   fi
@@ -832,11 +834,12 @@ cmd_status() {
   init_tty; load_setup_conf; choose_language
   if [ ! -x "$BIN_PATH" ]; then msg st_none >&2; return 0; fi
   local latest svc
-  latest="$(fetch_latest_tag 2>/dev/null)" || latest=""
+  latest="$(fetch_latest_tag "${CHANNEL:-stable}" 2>/dev/null)" || latest=""
   [ -n "$latest" ] || latest="$(msg unknown)"
   if is_systemd; then svc="$(systemctl is-active awgram 2>/dev/null || true)"; else svc="$(msg unknown)"; fi
   msg st_installed "${INSTALLED_VERSION:-$(msg unknown)}" "$latest" >&2
   msg st_service "${svc:-$(msg unknown)}" "${MODE:-$(msg unknown)}" >&2
+  msg st_channel "${CHANNEL:-stable}" >&2
   if [ -r "$CFG_FILE" ]; then
     show_current || true
   fi
