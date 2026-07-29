@@ -16,6 +16,15 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
   что каналы доступны начиная с v0.7.0, и добавлена инструкция обновления
   для серверов со скриптом старше v0.7.0.
 
+#### 🐛 Исправлено
+
+- **Цвет статуса клиентов в списке**: клиенты, никогда не подключавшиеся или
+  давно отключившиеся, снова корректно показываются как 🟡, а не 🔴. Экран
+  списка (#27) был переключён на `stats --json`, который не различает «никогда
+  не подключался» и «был, но давно» — обоим он ставит `inactive` (🔴). Теперь
+  `status_code` берётся из `list --json` (детальная классификация), а
+  `last_handshake`/трафик — из `stats --json`.
+
 ### 🇬🇧 English
 
 #### ♻️ Changed
@@ -26,6 +35,15 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
   treated as `stable`. README and `awgram-setup help` now state that
   channels are available since v0.7.0 and include upgrade instructions
   for servers running a pre-v0.7.0 script.
+
+#### 🐛 Fixed
+
+- **Client status color in the list**: clients that never connected or
+  disconnected long ago are correctly shown as 🟡 again, not 🔴. The list
+  screen (#27) was switched to `stats --json`, which does not distinguish
+  "never connected" from "was connected long ago" — both get `inactive` (🔴).
+  Now `status_code` is taken from `list --json` (detailed classification),
+  while `last_handshake`/traffic come from `stats --json`.
 
 ## [0.7.0] — 2026-07-29
 
