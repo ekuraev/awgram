@@ -85,9 +85,17 @@ history) — `export AWGRAM_TOKEN='TOKEN'` before the same command without
 
 Post-install management: `awgram-setup update | config | status | uninstall`.
 
-Pre-release builds: `awgram-setup update --channel rc` (channels
-`stable|rc|beta|alpha`, the choice is sticky; to return run
-`awgram-setup update --channel stable`).
+Pre-release builds — available since **v0.7.0**: `awgram-setup update
+--channel rc` (the choice is sticky, the rc channel also sees stable
+releases; to return run `awgram-setup update --channel stable`). If the
+server's `awgram-setup` is older than v0.7.0, it has no `--channel` flag
+yet — either run a plain `awgram-setup update` (it updates the script
+itself too), or install an rc right away with a one-liner from the release:
+
+```bash
+curl -fsSL https://github.com/ekuraev/awgram/releases/download/vX.Y.Z-rc.N/install.sh \
+  | bash -s -- update --channel rc
+```
 
 ## How it works
 
