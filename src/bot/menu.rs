@@ -795,11 +795,15 @@ mod tests {
         ];
         let texts = all_button_texts(&clients_list(Lang::Ru, &clients, &[], now, 0, 10));
         assert!(
-            texts.iter().any(|t| t.contains("recent") && t.contains("10 мин")),
+            texts
+                .iter()
+                .any(|t| t.contains("recent") && t.contains("10 мин")),
             "recent должен показывать handshake: {texts:?}"
         );
         assert!(
-            texts.iter().any(|t| t.contains("fresh") && t.contains("никогда")),
+            texts
+                .iter()
+                .any(|t| t.contains("fresh") && t.contains("никогда")),
             "fresh (last_handshake=0) должен показывать «никогда»: {texts:?}"
         );
     }

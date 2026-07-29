@@ -446,8 +446,14 @@ mod tests {
 
     #[test]
     fn format_handshake_compact_never() {
-        assert_eq!(format_handshake_compact(Lang::Ru, 1_700_000_000, 0), "никогда");
-        assert_eq!(format_handshake_compact(Lang::En, 1_700_000_000, -5), "never");
+        assert_eq!(
+            format_handshake_compact(Lang::Ru, 1_700_000_000, 0),
+            "никогда"
+        );
+        assert_eq!(
+            format_handshake_compact(Lang::En, 1_700_000_000, -5),
+            "never"
+        );
     }
 
     #[test]
@@ -474,7 +480,10 @@ mod tests {
     #[test]
     fn format_handshake_compact_days() {
         let now = 1_700_000_000;
-        assert_eq!(format_handshake_compact(Lang::Ru, now, now - 172800), "2 дн");
+        assert_eq!(
+            format_handshake_compact(Lang::Ru, now, now - 172800),
+            "2 дн"
+        );
         assert_eq!(format_handshake_compact(Lang::En, now, now - 172800), "2 d");
     }
 
