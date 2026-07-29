@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::i18n::Lang;
 
@@ -45,6 +45,91 @@ pub fn status_mark_code(status_code: &str) -> &'static str {
         "no_handshake" | "no_data" => "🟡",
         _ => "🔴",
     }
+}
+
+/// Фильтр списка клиентов по цветовому статусу. Хранится персистентно в
+/// `BotState` (как `name_slug`/`deliver_*`), серилизуется snake_case.
+/// `as_str`/`from_str` — для callback_data кнопок (`listfilter:online`…).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ClientFilter {
+    #[default]
+    All,
+    Online,
+    Offline,
+    Never,
+}
+
+impl ClientFilter {
+    /// Строковое представление для callback_data и сериализации.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ClientFilter::All => "all",
+            ClientFilter::Online => "online",
+            ClientFilter::Offline => "offline",
+            ClientFilter::Never => "never",
+        }
+    }
+
+    /// Парсинг из callback_data. Unknown → None (вызывающий код → Action::Unknown).
+    /// Имя `parse_str`, а не `from_str`, чтобы не конфликтовать с
+    /// `std::str::FromStr::from_str` (clippy::should_implement_trait).
+    pub fn parse_str(s: &str) -> Option<ClientFilter> {
+        match s {
+            "all" => Some(ClientFilter::All),
+            "online" => Some(ClientFilter::Online),
+            "offline" => Some(ClientFilter::Offline),
+            "never" => Some(ClientFilter::Never),
+            _ => None,
+        }
+    }
+
+    /// Подходит ли клиент под этот фильтр (по `status_mark_code`).
+    pub fn matches(self, c: &Client) -> bool {
+        match self {
+            ClientFilter::All => true,
+            ClientFilter::Online => c.status_mark() == "🟢",
+            ClientFilter::Offline => c.status_mark() == "🔴",
+            ClientFilter::Never => c.status_mark() == "🟡",
+        }
+    }
+
+    /// Цветной эмодзи фильтра — для кнопок и заголовка списка.
+    pub fn mark(self) -> &'static str {
+        match self {
+            ClientFilter::All => "👥",
+            ClientFilter::Online => "🟢",
+            ClientFilter::Offline => "🔴",
+            ClientFilter::Never => "🟡",
+        }
+    }
+}
+
+/// Приоритет цвета для сортировки «онлайн вперёд»: 🟢(0) → 🔴(1) → 🟡(2).
+fn color_priority(mark: &str) -> u8 {
+    match mark {
+        "🟢" => 0,
+        "🔴" => 1,
+        _ => 2,
+    }
+}
+
+/// Фильтрует клиентов по `filter` и сортирует «онлайн вперёд» (🟢 → 🔴 → 🟡),
+/// внутри группы — по имени. Клонирует (handler передаёт owned Vec в clients_list).
+/// `All` пропускает всех, но сортировку применяет всегда — это режим по умолчанию
+/// из issue #28 («сначала онлайн, потом оффлайн»).
+pub fn apply_filter_and_sort(clients: &[Client], filter: ClientFilter) -> Vec<Client> {
+    let mut out: Vec<Client> = clients
+        .iter()
+        .filter(|c| filter.matches(c))
+        .cloned()
+        .collect();
+    out.sort_by(|a, b| {
+        color_priority(a.status_mark())
+            .cmp(&color_priority(b.status_mark()))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    out
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -531,6 +616,126 @@ mod tests {
             last_handshake: None,
         };
         assert_eq!(c.status_mark(), "🟡");
+    }
+
+    // --- ClientFilter: as_str/from_str roundtrip + mark --- //
+
+    #[test]
+    fn client_filter_str_roundtrip() {
+        for f in [
+            ClientFilter::All,
+            ClientFilter::Online,
+            ClientFilter::Offline,
+            ClientFilter::Never,
+        ] {
+            assert_eq!(ClientFilter::parse_str(f.as_str()), Some(f));
+        }
+        assert_eq!(ClientFilter::parse_str("garbage"), None);
+    }
+
+    #[test]
+    fn client_filter_default_is_all() {
+        assert_eq!(ClientFilter::default(), ClientFilter::All);
+    }
+
+    #[test]
+    fn client_filter_marks() {
+        assert_eq!(ClientFilter::All.mark(), "👥");
+        assert_eq!(ClientFilter::Online.mark(), "🟢");
+        assert_eq!(ClientFilter::Offline.mark(), "🔴");
+        assert_eq!(ClientFilter::Never.mark(), "🟡");
+    }
+
+    fn mk_client(name: &str, code: &str) -> Client {
+        Client {
+            name: name.into(),
+            ip: String::new(),
+            client_ipv6: String::new(),
+            status: String::new(),
+            status_code: code.into(),
+            rx: 0,
+            tx: 0,
+            last_handshake: None,
+        }
+    }
+
+    #[test]
+    fn client_filter_matches_by_status_color() {
+        let online = mk_client("a", "active");
+        let recent = mk_client("b", "recent");
+        let offline = mk_client("c", "inactive");
+        let key_err = mk_client("d", "key_error");
+        let never = mk_client("e", "no_handshake");
+        let nodata = mk_client("f", "no_data");
+
+        // All пропускает всех
+        for c in [&online, &recent, &offline, &key_err, &never, &nodata] {
+            assert!(ClientFilter::All.matches(c));
+        }
+        // Online — только 🟢
+        assert!(ClientFilter::Online.matches(&online));
+        assert!(ClientFilter::Online.matches(&recent));
+        assert!(!ClientFilter::Online.matches(&offline));
+        assert!(!ClientFilter::Online.matches(&never));
+        // Offline — только 🔴
+        assert!(ClientFilter::Offline.matches(&offline));
+        assert!(ClientFilter::Offline.matches(&key_err));
+        assert!(!ClientFilter::Offline.matches(&online));
+        assert!(!ClientFilter::Offline.matches(&never));
+        // Never — только 🟡
+        assert!(ClientFilter::Never.matches(&never));
+        assert!(ClientFilter::Never.matches(&nodata));
+        assert!(!ClientFilter::Never.matches(&online));
+        assert!(!ClientFilter::Never.matches(&offline));
+    }
+
+    #[test]
+    fn apply_filter_online_leaves_only_green() {
+        let clients = vec![
+            mk_client("a", "active"),
+            mk_client("b", "inactive"),
+            mk_client("c", "no_handshake"),
+            mk_client("d", "recent"),
+        ];
+        let out = apply_filter_and_sort(&clients, ClientFilter::Online);
+        let names: Vec<&str> = out.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, vec!["a", "d"]);
+    }
+
+    #[test]
+    fn apply_filter_sorts_online_first_then_offline_then_never() {
+        // Перемешанный порядок → 🟢(a,d) → 🔴(b) → 🟡(c)
+        let clients = vec![
+            mk_client("b", "inactive"),
+            mk_client("c", "no_handshake"),
+            mk_client("a", "active"),
+            mk_client("d", "recent"),
+        ];
+        let out = apply_filter_and_sort(&clients, ClientFilter::All);
+        let names: Vec<&str> = out.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, vec!["a", "d", "b", "c"]);
+    }
+
+    #[test]
+    fn apply_filter_sorts_by_name_within_color_group() {
+        // Два 🟢, два 🔴 — внутри группы по имени.
+        let clients = vec![
+            mk_client("zoe", "active"),
+            mk_client("amy", "active"),
+            mk_client("zack", "inactive"),
+            mk_client("abe", "inactive"),
+        ];
+        let out = apply_filter_and_sort(&clients, ClientFilter::All);
+        let names: Vec<&str> = out.iter().map(|c| c.name.as_str()).collect();
+        // 🟢: amy, zoe (по имени); 🔴: abe, zack (по имени)
+        assert_eq!(names, vec!["amy", "zoe", "abe", "zack"]);
+    }
+
+    #[test]
+    fn apply_filter_empty_when_no_match() {
+        let clients = vec![mk_client("a", "active")];
+        let out = apply_filter_and_sort(&clients, ClientFilter::Never);
+        assert!(out.is_empty());
     }
 
     #[test]
