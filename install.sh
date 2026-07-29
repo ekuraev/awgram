@@ -19,7 +19,7 @@ SUDOERS_FILE="/etc/sudoers.d/awgram"
 SVC_USER="awgram"
 
 UI_LANG=""; MODE=""; TOKEN=""; ADMINS=""; MANAGE_SCRIPT=""; CLIENTS_DIR=""
-PIN_VERSION=""; ASSUME_YES=0; NO_SYSTEMD=0; BINARY_FILE=""; PURGE=0
+PIN_VERSION=""; ASSUME_YES=0; NO_SYSTEMD=0; BINARY_FILE=""; PURGE=0; CHANNEL=""
 COMMAND=""; HELP_TOPIC=""; PKG=""; ARCH=""; INSTALLED_VERSION=""; TTY_IN=""
 PREV_MODE=""  # режим из setup.conf до этого запуска — для миграции state при смене
 STATE_DIR="/var/lib/awgram"
@@ -152,6 +152,8 @@ MSG_RU[state_migrated]="Файл состояния перенесён: %s -> %s
 MSG_EN[state_migrated]="State file migrated: %s -> %s"
 MSG_RU[err_locked]="Другой запуск awgram-setup ещё не завершился (lock: %s)"
 MSG_EN[err_locked]="Another awgram-setup run is still in progress (lock: %s)"
+MSG_RU[err_bad_channel]="Недопустимое значение --channel: %s (stable|rc|beta|alpha)"
+MSG_EN[err_bad_channel]="Invalid --channel value: %s (stable|rc|beta|alpha)"
 
 msg() {
   local key="$1"; shift || true
@@ -283,6 +285,7 @@ load_setup_conf() {
   v="$(sed -n 's/^LANG=//p' "$SETUP_CONF" | head -1)";           [ -n "$UI_LANG" ] || UI_LANG="$v"
   v="$(sed -n 's/^MODE=//p' "$SETUP_CONF" | head -1)";           PREV_MODE="$v"; [ -n "$MODE" ] || MODE="$v"
   v="$(sed -n 's/^VERSION=//p' "$SETUP_CONF" | head -1)";        INSTALLED_VERSION="$v"
+  v="$(sed -n 's/^CHANNEL=//p' "$SETUP_CONF" | head -1)";        [ -n "$CHANNEL" ] || CHANNEL="$v"
   v="$(sed -n 's/^MANAGE_SCRIPT=//p' "$SETUP_CONF" | head -1)";  [ -n "$MANAGE_SCRIPT" ] || MANAGE_SCRIPT="$v"
   v="$(sed -n 's/^CLIENTS_DIR=//p' "$SETUP_CONF" | head -1)";    [ -n "$CLIENTS_DIR" ] || CLIENTS_DIR="$v"
 }
@@ -293,6 +296,7 @@ save_setup_conf() {
 LANG=$UI_LANG
 MODE=$MODE
 VERSION=$INSTALLED_VERSION
+CHANNEL=${CHANNEL:-stable}
 MANAGE_SCRIPT=$MANAGE_SCRIPT
 CLIENTS_DIR=$CLIENTS_DIR
 EOF
@@ -319,10 +323,40 @@ ensure_deps() {
 # общие опции curl: не виснуть на плохой сети, пару повторов на сбой
 CURL_BASE=(--connect-timeout 10 --retry 2)
 
-fetch_latest_tag() {
-  local tag
-  tag="$(curl -fsSL "${CURL_BASE[@]}" --max-time 30 "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null \
-        | grep -o '"tag_name": *"[^"]*"' | head -1 | cut -d'"' -f4)" || true
+tag_matches_channel() { # $1=тег, $2=канал; 0 = тег допустим для канала
+  # канал = минимальный уровень стабильности: rc видит stable+rc,
+  # beta — stable+rc+beta, alpha — всё; незнакомый суффикс — никому
+  local tag="$1" ch="$2"
+  case "$tag" in
+    *-rc.*)    case "$ch" in rc|beta|alpha) return 0 ;; esac ;;
+    *-beta.*)  case "$ch" in beta|alpha)    return 0 ;; esac ;;
+    *-alpha.*) case "$ch" in alpha)         return 0 ;; esac ;;
+    *-*)       ;;
+    *)         return 0 ;;
+  esac
+  return 1
+}
+
+pick_channel_tag() { # $1=канал; stdin=теги по строке (новые сверху); stdout=первый подходящий
+  local ch="$1" t
+  while IFS= read -r t; do
+    if tag_matches_channel "$t" "$ch"; then printf '%s\n' "$t"; return 0; fi
+  done
+  return 1
+}
+
+fetch_latest_tag() { # $1=канал (пусто → stable)
+  local ch="${1:-stable}" tag
+  if [ "$ch" = "stable" ]; then
+    # /releases/latest игнорирует prerelease — прежнее поведение без изменений
+    tag="$(curl -fsSL "${CURL_BASE[@]}" --max-time 30 "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null \
+          | grep -o '"tag_name": *"[^"]*"' | head -1 | cut -d'"' -f4)" || true
+  else
+    # список отсортирован по дате создания (новые сверху) — берём первый тег,
+    # проходящий фильтр канала; prerelease-поле API не нужно, фильтр по суффиксу
+    tag="$(curl -fsSL "${CURL_BASE[@]}" --max-time 30 "https://api.github.com/repos/$REPO/releases?per_page=30" 2>/dev/null \
+          | grep -o '"tag_name": *"[^"]*"' | cut -d'"' -f4 | pick_channel_tag "$ch")" || true
+  fi
   [ -n "$tag" ] || die err_latest "$REPO"
   printf '%s\n' "$tag"
 }
@@ -842,6 +876,8 @@ main() {
       --script-path) MANAGE_SCRIPT="${2:?--script-path}"; shift 2 ;;
       --clients-dir) CLIENTS_DIR="${2:?--clients-dir}"; shift 2 ;;
       --version)     PIN_VERSION="${2:?--version}"; shift 2 ;;
+      --channel)     CHANNEL="${2:?--channel}"; shift 2
+                     case "$CHANNEL" in stable|rc|beta|alpha) ;; *) die err_bad_channel "$CHANNEL" ;; esac ;;
       --repo)        REPO="${2:?--repo}"; shift 2 ;;
       --binary-file) BINARY_FILE="${2:?--binary-file}"; shift 2 ;;
       --yes|-y)      ASSUME_YES=1; shift ;;

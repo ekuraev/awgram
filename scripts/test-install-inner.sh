@@ -176,4 +176,28 @@ rm -f /usr/local/bin/systemctl /usr/local/bin/journalctl
 /usr/local/bin/awgram-setup uninstall --yes --purge --no-systemd
 [ ! -e /etc/awgram ] || fail "cleanup after scenario 7"
 
+# --- сценарий 8: юниты канального фильтра (без сети) ---
+# main "$@" — последняя строка install.sh; отрезаем её и сорсим только функции
+sed '$d' /repo/install.sh > /tmp/install-funcs.sh
+# shellcheck disable=SC1091
+source /tmp/install-funcs.sh
+tag_matches_channel v0.6.0 stable          || fail "stable tag must match stable"
+tag_matches_channel v0.6.0 rc              || fail "stable tag must match rc"
+tag_matches_channel v0.6.0 alpha           || fail "stable tag must match alpha"
+tag_matches_channel v0.7.0-rc.1 stable     && fail "rc tag must not match stable"
+tag_matches_channel v0.7.0-rc.1 rc         || fail "rc tag must match rc"
+tag_matches_channel v0.7.0-rc.1 beta       || fail "rc tag must match beta"
+tag_matches_channel v0.7.0-rc.1 alpha      || fail "rc tag must match alpha"
+tag_matches_channel v0.7.0-beta.2 rc       && fail "beta tag must not match rc"
+tag_matches_channel v0.7.0-beta.2 beta     || fail "beta tag must match beta"
+tag_matches_channel v0.7.0-alpha.1 beta    && fail "alpha tag must not match beta"
+tag_matches_channel v0.7.0-alpha.1 alpha   || fail "alpha tag must match alpha"
+tag_matches_channel v0.7.0-nightly.1 alpha && fail "unknown suffix must match no channel"
+tags=$'v0.7.0-alpha.2\nv0.7.0-rc.1\nv0.6.0'
+[ "$(pick_channel_tag stable <<<"$tags")" = "v0.6.0" ]         || fail "pick stable"
+[ "$(pick_channel_tag rc     <<<"$tags")" = "v0.7.0-rc.1" ]    || fail "pick rc"
+[ "$(pick_channel_tag beta   <<<"$tags")" = "v0.7.0-rc.1" ]    || fail "pick beta falls to rc tag"
+[ "$(pick_channel_tag alpha  <<<"$tags")" = "v0.7.0-alpha.2" ] || fail "pick alpha"
+pick_channel_tag rc <<<"v0.1.0-nightly.1" && fail "pick must fail when nothing matches"
+
 echo "OK: all scenarios passed"
