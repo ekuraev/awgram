@@ -10,6 +10,7 @@ pub fn format_client_card(lang: Lang, c: &Client, now: i64, expiry: Option<i64>)
     i18n::client_card(
         lang,
         &c.name,
+        &c.status_code,
         &status,
         &c.ip,
         &human_bytes(c.rx),

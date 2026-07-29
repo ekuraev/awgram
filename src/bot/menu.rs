@@ -1,7 +1,7 @@
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 
 use crate::i18n::{self, Lang};
-use crate::vpn::model::Client;
+use crate::vpn::model::{format_handshake_compact, Client};
 use crate::vpn::BackupFile;
 
 fn cb(text: &str, data: &str) -> InlineKeyboardButton {
@@ -234,11 +234,14 @@ pub fn clients_list(
         .skip(start)
         .take(per_page)
         .map(|(i, c)| {
-            let mark = if c.active() { "🟢" } else { "🔴" };
+            let mark = c.status_mark();
+            // Компактный handshake («2 мин», «никогда») — требуется stats()
+            // (last_handshake есть только в stats --json, не в list --json).
+            let hs = format_handshake_compact(lang, now, c.last_handshake.unwrap_or(0));
             let exp = expiries.get(i).copied().flatten();
             let label = match crate::vpn::model::format_expiry_badge(lang, now, exp) {
-                Some(badge) => format!("{mark} {} {badge}", c.name),
-                None => format!("{mark} {}", c.name),
+                Some(badge) => format!("{mark} {} · {hs} {badge}", c.name),
+                None => format!("{mark} {} · {hs}", c.name),
             };
             vec![cb(&label, &format!("client:{}", c.name))]
         })
@@ -246,7 +249,8 @@ pub fn clients_list(
 
     let total_pages = clients.len().div_ceil(per_page).max(1);
     // 🔄 всегда в nav-ряду: перерисовывает ТЕКУЩУЮ страницу со свежими данными.
-    // Callback `page:{page}` → Action::Page (он заново зовёт vpn.list()), поэтому
+    // Callback `page:{page}` → Action::Page (он заново зовёт vpn.stats() —
+    // список переключён на stats ради last_handshake в кнопках), поэтому
     // refresh сохраняет страницу, а не сбрасывает на 0. На одностраничном списке
     // это единственная кнопка ряда; на многостраничном встаёт между пагинацией:
     // [◀️] [🔄] [▶️].
@@ -708,6 +712,99 @@ mod tests {
                 .iter()
                 .any(|t| t.contains("perm") && !t.contains("⏳")),
             "perm должен быть без метки: {texts:?}"
+        );
+    }
+
+    #[test]
+    fn clients_list_three_color_marks_by_status_code() {
+        // 🟢 active / 🟡 no_handshake / 🔴 inactive — трёхцветная индикация
+        // вместо прежнего бинарного active→🟢 / всё прочее→🔴.
+        let clients = vec![
+            Client {
+                name: "online".into(),
+                ip: String::new(),
+                client_ipv6: String::new(),
+                status: String::new(),
+                status_code: "active".into(),
+                rx: 0,
+                tx: 0,
+                last_handshake: None,
+            },
+            Client {
+                name: "never".into(),
+                ip: String::new(),
+                client_ipv6: String::new(),
+                status: String::new(),
+                status_code: "no_handshake".into(),
+                rx: 0,
+                tx: 0,
+                last_handshake: None,
+            },
+            Client {
+                name: "gone".into(),
+                ip: String::new(),
+                client_ipv6: String::new(),
+                status: String::new(),
+                status_code: "inactive".into(),
+                rx: 0,
+                tx: 0,
+                last_handshake: None,
+            },
+        ];
+        let texts = all_button_texts(&clients_list(Lang::Ru, &clients, &[], 0, 0, 10));
+        assert!(
+            texts.iter().any(|t| t.starts_with("🟢 online")),
+            "active должен быть зелёным: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t.starts_with("🟡 never")),
+            "no_handshake должен быть жёлтым: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t.starts_with("🔴 gone")),
+            "inactive должен быть красным: {texts:?}"
+        );
+    }
+
+    #[test]
+    fn clients_list_shows_compact_handshake() {
+        // handshake в кнопке — компактно («10 мин», «никогда»); last_handshake
+        // приходит из stats --json (экран списка переключён на stats).
+        let now = 1_700_000_000;
+        let clients = vec![
+            Client {
+                name: "recent".into(),
+                ip: String::new(),
+                client_ipv6: String::new(),
+                status: String::new(),
+                status_code: "active".into(),
+                rx: 0,
+                tx: 0,
+                last_handshake: Some(now - 600),
+            },
+            Client {
+                name: "fresh".into(),
+                ip: String::new(),
+                client_ipv6: String::new(),
+                status: String::new(),
+                status_code: "no_handshake".into(),
+                rx: 0,
+                tx: 0,
+                last_handshake: Some(0),
+            },
+        ];
+        let texts = all_button_texts(&clients_list(Lang::Ru, &clients, &[], now, 0, 10));
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.contains("recent") && t.contains("10 мин")),
+            "recent должен показывать handshake: {texts:?}"
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.contains("fresh") && t.contains("никогда")),
+            "fresh (last_handshake=0) должен показывать «никогда»: {texts:?}"
         );
     }
 

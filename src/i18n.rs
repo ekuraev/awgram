@@ -380,6 +380,7 @@ pub fn link_unavailable(lang: Lang) -> String {
 pub fn client_card(
     lang: Lang,
     name: &str,
+    status_code: &str,
     status: &str,
     ip: &str,
     rx: &str,
@@ -388,17 +389,18 @@ pub fn client_card(
     expires: &str,
 ) -> String {
     let (name, status, ip) = (html_escape(name), html_escape(status), html_escape(ip));
+    let mark = crate::vpn::model::status_mark_code(status_code);
     let ip_line = if ip.is_empty() {
         String::new()
     } else {
         match lang {
-            Lang::Ru => format!("IP: {ip}\n"),
-            Lang::En => format!("IP: {ip}\n"),
+            Lang::Ru => format!("🌐 IP: {ip}\n"),
+            Lang::En => format!("🌐 IP: {ip}\n"),
         }
     };
     match lang {
-        Lang::Ru => format!("👤 <b>{name}</b>\nСтатус: {status}\n{ip_line}Трафик:  ↓ {rx}   ↑ {tx}\nРукопожатие: {handshake}\nДействует: {expires}"),
-        Lang::En => format!("👤 <b>{name}</b>\nStatus: {status}\n{ip_line}Traffic:  ↓ {rx}   ↑ {tx}\nHandshake: {handshake}\nExpires: {expires}"),
+        Lang::Ru => format!("👤 <b>{name}</b>\n{mark} Статус: {status}\n{ip_line}📊 Трафик:  ↓ {rx} · ↑ {tx}\n⏱ Рукопожатие: {handshake}\n📅 Действует: {expires}"),
+        Lang::En => format!("👤 <b>{name}</b>\n{mark} Status: {status}\n{ip_line}📊 Traffic:  ↓ {rx} · ↑ {tx}\n⏱ Handshake: {handshake}\n📅 Expires: {expires}"),
     }
 }
 pub fn stats_summary(lang: Lang, total: usize, active: usize, rx: &str, tx: &str) -> String {
@@ -1089,6 +1091,7 @@ mod tests {
             let card = client_card(
                 l,
                 "a<b>",
+                "active",
                 "Активен",
                 "10.0.0.2",
                 "1 KB",
@@ -1098,6 +1101,7 @@ mod tests {
             );
             assert!(card.contains("a&lt;b&gt;"));
             assert!(!card.contains("a<b>"));
+            assert!(card.contains("🟢")); // цвет статуса по status_code
         }
     }
 
