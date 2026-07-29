@@ -602,7 +602,10 @@ awgram-setup — установка и управление awgram (Telegram-б�
   --admins 1,2,3        Telegram ID администраторов через запятую
   --script-path PATH    путь к manage_amneziawg.sh (по умолчанию /root/awg/manage_amneziawg.sh)
   --clients-dir PATH    каталог client-конфигов (по умолчанию каталог manage-скрипта)
-  --version vX.Y.Z      установить конкретный релиз вместо последнего
+  --version vX.Y.Z      установить конкретный релиз вместо последнего (канал не меняет)
+  --channel stable|rc|beta|alpha
+                        канал обновлений (запоминается); prerelease-каналы видят
+                        и стабильные релизы; вернуться: update --channel stable
   --yes | -y            без вопросов (для автоматизации; недостающий параметр — ошибка)
   --purge               (uninstall) удалить также конфиг и состояние
 
@@ -613,6 +616,7 @@ awgram-setup — установка и управление awgram (Telegram-б�
   curl -fsSL https://github.com/ekuraev/awgram/releases/latest/download/install.sh | bash
   curl -fsSL ... | bash -s -- install --lang ru --mode hardened --token 'X' --admins 1 --yes
   awgram-setup config --admins 1,2
+  awgram-setup update --channel rc
 EOF
 }
 help_en() {
@@ -637,7 +641,10 @@ Flags (install; config accepts --token/--admins/--script-path):
   --admins 1,2,3        comma-separated Telegram admin IDs
   --script-path PATH    path to manage_amneziawg.sh (default /root/awg/manage_amneziawg.sh)
   --clients-dir PATH    client-config dir (default: the manage-script directory)
-  --version vX.Y.Z      install a specific release instead of the latest
+  --version vX.Y.Z      install a specific release instead of the latest (does not change the channel)
+  --channel stable|rc|beta|alpha
+                        update channel (sticky); pre-release channels also see
+                        stable releases; to return: update --channel stable
   --yes | -y            no questions (for automation; a missing parameter is an error)
   --purge               (uninstall) also remove config and state
 
@@ -648,6 +655,7 @@ Examples:
   curl -fsSL https://github.com/ekuraev/awgram/releases/latest/download/install.sh | bash
   curl -fsSL ... | bash -s -- install --lang en --mode hardened --token 'X' --admins 1 --yes
   awgram-setup config --admins 1,2
+  awgram-setup update --channel rc
 EOF
 }
 cmd_help() {

@@ -129,6 +129,7 @@ grep -q '^admin_ids     = \[3\]$' /etc/awgram/config.toml || fail "config change
 # захват в переменную, не пайп в grep -q — см. комментарий к сценарию 5 (SIGPIPE)
 help_out="$(bash /repo/install.sh help)"
 grep -q 'AWGRAM_TOKEN' <<<"$help_out" || fail "help lacks AWGRAM_TOKEN"
+grep -q -- '--channel' <<<"$help_out" || fail "help lacks --channel"
 
 # --- сценарий 5e: невалидный токен отклоняется ---
 if bash /repo/install.sh config --token 'bad token!' --yes --no-systemd >/dev/null 2>&1; then
