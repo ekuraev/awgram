@@ -22,6 +22,11 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
   бинарного «зелёный/красный». Время последнего handshake теперь прямо в
   кнопке списка клиентов; карточка перерисована в иконочном формате
   ([#21](https://github.com/ekuraev/awgram/issues/21)).
+- **Фильтр и сортировка списка клиентов**: кнопки фильтра по статусу
+  (Все / 🟢 Онлайн / 🔴 Оффлайн / 🟡 Никогда) и сортировка «онлайн вперёд»
+  (🟢 → 🔴 → 🟡, внутри группы — по имени). Выбранный фильтр сохраняется
+  между сессиями и отображается в заголовке списка
+  ([#28](https://github.com/ekuraev/awgram/issues/28)).
 
 ### 🇬🇧 English
 
@@ -40,6 +45,11 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
   "green/red". Last handshake time now shown directly in the client list
   button; the card was restyled to an icon-based layout
   ([#21](https://github.com/ekuraev/awgram/issues/21)).
+- **Client list filter and sort**: status filter buttons
+  (All / 🟢 Online / 🔴 Offline / 🟡 Never) and "online-first" sorting
+  (🟢 → 🔴 → 🟡, by name within a group). The selected filter persists
+  across sessions and is shown in the list title
+  ([#28](https://github.com/ekuraev/awgram/issues/28)).
 
 ## [0.5.0] — 2026-07-28
 

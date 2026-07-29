@@ -423,6 +423,34 @@ pub fn clients_title(lang: Lang) -> String {
     }
     .to_string()
 }
+
+/// Заголовок списка клиентов с индикатором активного фильтра.
+/// `All` (или когда показаны все) → без пометки (как `clients_title`).
+/// Иначе → «👥 Клиенты — 🟢 онлайн (3 из 10)».
+pub fn clients_title_filtered(
+    lang: Lang,
+    filter: crate::vpn::model::ClientFilter,
+    shown: usize,
+    total: usize,
+) -> String {
+    if matches!(filter, crate::vpn::model::ClientFilter::All) || shown == total {
+        return clients_title(lang);
+    }
+    let mark = filter.mark();
+    let label = match (lang, filter) {
+        (Lang::Ru, crate::vpn::model::ClientFilter::Online) => "онлайн",
+        (Lang::En, crate::vpn::model::ClientFilter::Online) => "online",
+        (Lang::Ru, crate::vpn::model::ClientFilter::Offline) => "оффлайн",
+        (Lang::En, crate::vpn::model::ClientFilter::Offline) => "offline",
+        (Lang::Ru, crate::vpn::model::ClientFilter::Never) => "никогда",
+        (Lang::En, crate::vpn::model::ClientFilter::Never) => "never",
+        _ => "",
+    };
+    match lang {
+        Lang::Ru => format!("👥 <b>Клиенты</b> — {mark} {label} ({shown} из {total})"),
+        Lang::En => format!("👥 <b>Clients</b> — {mark} {label} ({shown} of {total})"),
+    }
+}
 pub fn not_found(lang: Lang) -> String {
     match lang {
         Lang::Ru => "Клиент не найден.",
@@ -1400,5 +1428,36 @@ mod tests {
             assert!(!qr_not_generated(l).is_empty());
             assert!(!link_unavailable(l).is_empty());
         }
+    }
+
+    #[test]
+    fn clients_title_all_has_no_filter_label() {
+        use crate::vpn::model::ClientFilter;
+        // All → как clients_title, без пометки фильтра.
+        let ru = clients_title_filtered(Lang::Ru, ClientFilter::All, 5, 10);
+        let en = clients_title_filtered(Lang::En, ClientFilter::All, 5, 10);
+        assert_eq!(ru, "👥 <b>Клиенты</b>:");
+        assert_eq!(en, "👥 <b>Clients</b>:");
+    }
+
+    #[test]
+    fn clients_title_filtered_shows_label_and_count() {
+        use crate::vpn::model::ClientFilter;
+        let ru = clients_title_filtered(Lang::Ru, ClientFilter::Online, 3, 10);
+        assert!(ru.contains("🟢"));
+        assert!(ru.contains("онлайн"));
+        assert!(ru.contains("(3 из 10)"));
+        let en = clients_title_filtered(Lang::En, ClientFilter::Never, 2, 8);
+        assert!(en.contains("🟡"));
+        assert!(en.contains("never"));
+        assert!(en.contains("(2 of 8)"));
+    }
+
+    #[test]
+    fn clients_title_filtered_shown_equals_total_drops_label() {
+        use crate::vpn::model::ClientFilter;
+        // Фильтр активен, но показаны все (напр. 3 из 3 онлайн) → без пометки.
+        let ru = clients_title_filtered(Lang::Ru, ClientFilter::Online, 3, 3);
+        assert_eq!(ru, "👥 <b>Клиенты</b>:");
     }
 }

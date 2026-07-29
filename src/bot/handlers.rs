@@ -63,6 +63,8 @@ pub enum Action {
     SetConf(bool),
     SetQr(bool),
     SetLink(bool),
+    // --- Фильтр списка клиентов (#28) ---
+    SetListFilter(crate::vpn::model::ClientFilter),
     Unknown,
 }
 
@@ -142,6 +144,12 @@ fn parse_callback(data: &str) -> Action {
                 Action::SetQr(v == "on")
             } else if let Some(v) = data.strip_prefix("set:link:") {
                 Action::SetLink(v == "on")
+            } else if let Some(v) = data.strip_prefix("listfilter:") {
+                // Фильтр списка клиентов (#28). "list" — точный match выше (не
+                // префикс), так что listfilter: с ним не коллизирует.
+                crate::vpn::model::ClientFilter::parse_str(v)
+                    .map(Action::SetListFilter)
+                    .unwrap_or(Action::Unknown)
             } else if let Some(v) = data.strip_prefix("lang:") {
                 Action::Lang(v.to_string())
             } else if let Some(v) = data.strip_prefix("bk:restore_yes:") {
@@ -753,6 +761,58 @@ async fn finish_bulk(
     }
 }
 
+/// Рендерит экран списка клиентов: stats → filter+sort → expiries → title →
+/// clients_list. Общая логика для Action::List / Action::Page / Action::SetListFilter
+/// (различаются только страницей и тем, кто читает/устанавливает фильтр из настроек).
+/// Пустой список (до или после фильтра) → friendly-сообщение + главное меню.
+async fn render_clients_list(
+    bot: &Bot,
+    chat: ChatId,
+    msg_id: MessageId,
+    lang: Lang,
+    vpn: &Vpn,
+    settings: &SettingsStore,
+    page: usize,
+) {
+    match vpn.stats().await {
+        Ok(all_clients) => {
+            // Фильтр + сортировка «онлайн вперёд» (🟢 → 🔴 → 🟡, внутри — по имени).
+            // apply_filter_and_sort возвращает owned Vec — clients_list берёт срез по странице.
+            let filter = settings.client_filter();
+            let clients = crate::vpn::model::apply_filter_and_sort(&all_clients, filter);
+            if clients.is_empty() {
+                edit_or_send(
+                    bot,
+                    chat,
+                    msg_id,
+                    i18n::clients_empty(lang),
+                    menu::main_menu(lang),
+                )
+                .await;
+                return;
+            }
+            // Полный вектор (не страница): clients_list индексирует expiries[i]
+            // по глобальному i, срез по странице дал бы сдвиг меток на страницах > 0.
+            let expiries: Vec<Option<i64>> =
+                clients.iter().map(|c| vpn.client_expiry(&c.name)).collect();
+            let title =
+                i18n::clients_title_filtered(lang, filter, clients.len(), all_clients.len());
+            edit_or_send(
+                bot,
+                chat,
+                msg_id,
+                title,
+                menu::clients_list(lang, &clients, &expiries, now_epoch(), page, 8, filter),
+            )
+            .await;
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "stats провалился");
+            let _ = bot.send_message(chat, i18n::error_text(lang, &e)).await;
+        }
+    }
+}
+
 async fn callback_handler(
     bot: Bot,
     dialogue: MyDialogue,
@@ -799,72 +859,16 @@ async fn callback_handler(
             )
             .await;
         }
-        Action::List => match vpn.stats().await {
-            // stats --json вместо list: кнопки списка показывают handshake
-            // (last_handshake есть только в stats; list отдаёт лишь status_code).
-            Ok(clients) if clients.is_empty() => {
-                edit_or_send(
-                    &bot,
-                    chat,
-                    msg_id,
-                    i18n::clients_empty(lang),
-                    menu::main_menu(lang),
-                )
-                .await;
-            }
-            Ok(clients) => {
-                // Полный вектор (не только текущая страница): clients_list
-                // индексирует expiries[i] по глобальному i, срез по странице
-                // дал бы сдвиг меток на страницах > 0.
-                let expiries: Vec<Option<i64>> =
-                    clients.iter().map(|c| vpn.client_expiry(&c.name)).collect();
-                edit_or_send(
-                    &bot,
-                    chat,
-                    msg_id,
-                    i18n::clients_title(lang),
-                    menu::clients_list(lang, &clients, &expiries, now_epoch(), 0, 8),
-                )
-                .await;
-            }
-            Err(e) => {
-                tracing::error!(error = %e, "stats провалился");
-                bot.send_message(chat, i18n::error_text(lang, &e)).await?;
-            }
-        },
-        Action::Page(p) => match vpn.stats().await {
-            // stats --json (см. Action::List): handshake в кнопках требует
-            // last_handshake, которого нет в list. refresh перерисовывает
-            // текущую страницу p со свежими данными.
-            // Пустой список (напр. всех клиентов удалили, пока смотрели страницу) —
-            // показываем friendly-сообщение, как в Action::List, а не пустую страницу.
-            Ok(clients) if clients.is_empty() => {
-                edit_or_send(
-                    &bot,
-                    chat,
-                    msg_id,
-                    i18n::clients_empty(lang),
-                    menu::main_menu(lang),
-                )
-                .await;
-            }
-            Ok(clients) => {
-                // См. комментарий в Action::List: вектор обязан быть полным.
-                let expiries: Vec<Option<i64>> =
-                    clients.iter().map(|c| vpn.client_expiry(&c.name)).collect();
-                edit_or_send(
-                    &bot,
-                    chat,
-                    msg_id,
-                    i18n::clients_title(lang),
-                    menu::clients_list(lang, &clients, &expiries, now_epoch(), p, 8),
-                )
-                .await;
-            }
-            Err(e) => {
-                bot.send_message(chat, i18n::error_text(lang, &e)).await?;
-            }
-        },
+        Action::List => {
+            // Экран списка: stats → filter+sort (фильтр из настроек) → рендер.
+            // Фильтр/сортировку см. render_clients_list.
+            render_clients_list(&bot, chat, msg_id, lang, &vpn, &settings, 0).await;
+        }
+        Action::Page(p) => {
+            // Пагинация: тот же рендер, но страница p. Фильтр из настроек —
+            // переживает навигацию по страницам (Action::Page его не меняет).
+            render_clients_list(&bot, chat, msg_id, lang, &vpn, &settings, p).await;
+        }
         Action::Stats => match vpn.stats().await {
             Ok(clients) => {
                 edit_or_send(
@@ -1356,6 +1360,13 @@ async fn callback_handler(
             settings.set_deliver_link(on);
             show_settings(&bot, chat, msg_id, lang, &settings).await;
         }
+        Action::SetListFilter(f) => {
+            // Сохраняем фильтр персистентно, затем перерисовываем список с
+            // НУЛЕВОЙ страницей — содержимое сменилось, старая страница могла
+            // стать невалидной (напр. был на стр.2 оффлайн, переключил на онлайн).
+            settings.set_client_filter(f);
+            render_clients_list(&bot, chat, msg_id, lang, &vpn, &settings, 0).await;
+        }
         Action::Backup => {
             edit_or_send(
                 &bot,
@@ -1615,6 +1626,40 @@ mod tests {
     }
 
     #[test]
+    fn parse_callback_listfilter_variants() {
+        use crate::vpn::model::ClientFilter;
+        assert_eq!(
+            parse_callback("listfilter:all"),
+            Action::SetListFilter(ClientFilter::All)
+        );
+        assert_eq!(
+            parse_callback("listfilter:online"),
+            Action::SetListFilter(ClientFilter::Online)
+        );
+        assert_eq!(
+            parse_callback("listfilter:offline"),
+            Action::SetListFilter(ClientFilter::Offline)
+        );
+        assert_eq!(
+            parse_callback("listfilter:never"),
+            Action::SetListFilter(ClientFilter::Never)
+        );
+        // Неизвестное значение фильтра → Unknown (craftable callback guard).
+        assert_eq!(parse_callback("listfilter:garbage"), Action::Unknown);
+    }
+
+    #[test]
+    fn parse_callback_listfilter_does_not_collide_with_list() {
+        // "list" — точный match (Action::List), "listfilter:..." — префикс.
+        // Они не должны пересекаться.
+        assert_eq!(parse_callback("list"), Action::List);
+        assert!(matches!(
+            parse_callback("listfilter:all"),
+            Action::SetListFilter(_)
+        ));
+    }
+
+    #[test]
     fn parse_callback_diagnose() {
         assert_eq!(parse_callback("diagnose"), Action::Diagnose);
     }
@@ -1761,7 +1806,15 @@ mod tests {
             menu::client_card(Lang::Ru, "alice"),
             menu::confirm_delete(Lang::Ru, "bob"),
             menu::confirm_recreate(Lang::Ru, "alice"),
-            menu::clients_list(Lang::Ru, &[sample_client], &[], 0, 0, 8),
+            menu::clients_list(
+                Lang::Ru,
+                &[sample_client],
+                &[],
+                0,
+                0,
+                8,
+                crate::vpn::model::ClientFilter::All,
+            ),
             menu::language_select(),
             menu::settings_menu(Lang::Ru, false, false, false, false, false),
             menu::settings_menu(Lang::Ru, true, true, true, true, true),

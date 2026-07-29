@@ -1,7 +1,7 @@
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 
 use crate::i18n::{self, Lang};
-use crate::vpn::model::{format_handshake_compact, Client};
+use crate::vpn::model::{format_handshake_compact, Client, ClientFilter};
 use crate::vpn::BackupFile;
 
 fn cb(text: &str, data: &str) -> InlineKeyboardButton {
@@ -215,6 +215,44 @@ pub fn bulk_psk_step(lang: Lang, default_on: bool) -> InlineKeyboardMarkup {
     ])
 }
 
+/// Ряд фильтра списка: [Все] [🟢 Онлайн] [🔴 Оффлайн] [🟡 Никогда].
+/// Активный фильтр помечается ✅-префиксом. Подписи локализуются здесь
+/// (как day_label), не входят в каталог i18n. Callback `listfilter:{as_str}`.
+fn filter_label(lang: Lang, f: ClientFilter) -> String {
+    let mark = f.mark();
+    let name = match (lang, f) {
+        (Lang::Ru, ClientFilter::All) => "Все",
+        (Lang::En, ClientFilter::All) => "All",
+        (Lang::Ru, ClientFilter::Online) => "Онлайн",
+        (Lang::En, ClientFilter::Online) => "Online",
+        (Lang::Ru, ClientFilter::Offline) => "Оффлайн",
+        (Lang::En, ClientFilter::Offline) => "Offline",
+        (Lang::Ru, ClientFilter::Never) => "Никогда",
+        (Lang::En, ClientFilter::Never) => "Never",
+    };
+    format!("{mark} {name}")
+}
+
+fn filter_row(lang: Lang, current: ClientFilter) -> Vec<InlineKeyboardButton> {
+    [
+        ClientFilter::All,
+        ClientFilter::Online,
+        ClientFilter::Offline,
+        ClientFilter::Never,
+    ]
+    .iter()
+    .map(|&f| {
+        // Активный фильтр помечается ✅ — кнопка-переключатель, неубираемый
+        // индикатор текущего режима просмотра списка.
+        let prefix = if f == current { "✅ " } else { "" };
+        cb(
+            &format!("{prefix}{}", filter_label(lang, f)),
+            &format!("listfilter:{}", f.as_str()),
+        )
+    })
+    .collect()
+}
+
 pub fn clients_list(
     lang: Lang,
     clients: &[Client],
@@ -222,6 +260,7 @@ pub fn clients_list(
     now: i64,
     page: usize,
     per_page: usize,
+    current_filter: ClientFilter,
 ) -> InlineKeyboardMarkup {
     if per_page == 0 {
         return InlineKeyboardMarkup::new(vec![vec![cb(&i18n::btn_back(lang), "menu")]]);
@@ -263,6 +302,7 @@ pub fn clients_list(
         nav.push(cb("▶️", &format!("page:{}", page + 1)));
     }
     rows.push(nav);
+    rows.push(filter_row(lang, current_filter));
     rows.push(vec![cb(&i18n::btn_regen_all(lang), "regen_all")]);
     rows.push(vec![cb(&i18n::btn_back(lang), "menu")]);
     InlineKeyboardMarkup::new(rows)
@@ -500,7 +540,15 @@ mod tests {
             tx: 0,
             last_handshake: None,
         }];
-        let data = all_callback_data(&clients_list(Lang::Ru, &clients, &[], 0, 0, 10));
+        let data = all_callback_data(&clients_list(
+            Lang::Ru,
+            &clients,
+            &[],
+            0,
+            0,
+            10,
+            ClientFilter::All,
+        ));
         assert!(data.contains(&"regen_all".to_string()));
     }
 
@@ -519,7 +567,15 @@ mod tests {
             tx: 0,
             last_handshake: None,
         }];
-        let data = all_callback_data(&clients_list(Lang::Ru, &clients, &[], 0, 0, 10));
+        let data = all_callback_data(&clients_list(
+            Lang::Ru,
+            &clients,
+            &[],
+            0,
+            0,
+            10,
+            ClientFilter::All,
+        ));
         assert!(
             data.contains(&"page:0".to_string()),
             "refresh button (page:0) missing: {data:?}"
@@ -541,7 +597,7 @@ mod tests {
                 last_handshake: None,
             })
             .collect();
-        let kb = clients_list(Lang::Ru, &clients, &[], 0, 0, 8);
+        let kb = clients_list(Lang::Ru, &clients, &[], 0, 0, 8, ClientFilter::All);
         // nav-ряд — первый после клиентских (8 клиентов на странице → ряд с индексом 8).
         let nav_row = &kb.inline_keyboard[8];
         let data: Vec<&str> = nav_row
@@ -572,7 +628,7 @@ mod tests {
                 last_handshake: None,
             })
             .collect();
-        let kb = clients_list(Lang::Ru, &clients, &[], 0, 2, 8);
+        let kb = clients_list(Lang::Ru, &clients, &[], 0, 2, 8, ClientFilter::All);
         // Страница 2: клиентские ряды 16..23 (8 шт.) → nav-ряд с индексом 8.
         let nav_row = &kb.inline_keyboard[8];
         let data: Vec<&str> = nav_row
@@ -625,7 +681,15 @@ mod tests {
                 last_handshake: None,
             },
         ];
-        let data = all_callback_data(&clients_list(Lang::Ru, &clients, &[], 0, 0, 10));
+        let data = all_callback_data(&clients_list(
+            Lang::Ru,
+            &clients,
+            &[],
+            0,
+            0,
+            10,
+            ClientFilter::All,
+        ));
         assert!(data.contains(&"client:a".to_string()));
         assert!(data.contains(&"client:b".to_string()));
     }
@@ -634,7 +698,7 @@ mod tests {
     fn clients_list_zero_per_page_no_panic() {
         // Test with empty clients
         let empty_clients: Vec<Client> = vec![];
-        let kb_empty = clients_list(Lang::Ru, &empty_clients, &[], 0, 0, 0);
+        let kb_empty = clients_list(Lang::Ru, &empty_clients, &[], 0, 0, 0, ClientFilter::All);
         let data_empty = all_callback_data(&kb_empty);
         assert_eq!(
             data_empty,
@@ -665,7 +729,7 @@ mod tests {
                 last_handshake: None,
             },
         ];
-        let kb_filled = clients_list(Lang::Ru, &clients, &[], 0, 0, 0);
+        let kb_filled = clients_list(Lang::Ru, &clients, &[], 0, 0, 0, ClientFilter::All);
         let data_filled = all_callback_data(&kb_filled);
         assert_eq!(
             data_filled,
@@ -700,7 +764,15 @@ mod tests {
         ];
         let now = 1_700_000_000;
         let expiries = vec![Some(now + 6 * 86400), None];
-        let texts = all_button_texts(&clients_list(Lang::Ru, &clients, &expiries, now, 0, 10));
+        let texts = all_button_texts(&clients_list(
+            Lang::Ru,
+            &clients,
+            &expiries,
+            now,
+            0,
+            10,
+            ClientFilter::All,
+        ));
         assert!(
             texts
                 .iter()
@@ -751,7 +823,15 @@ mod tests {
                 last_handshake: None,
             },
         ];
-        let texts = all_button_texts(&clients_list(Lang::Ru, &clients, &[], 0, 0, 10));
+        let texts = all_button_texts(&clients_list(
+            Lang::Ru,
+            &clients,
+            &[],
+            0,
+            0,
+            10,
+            ClientFilter::All,
+        ));
         assert!(
             texts.iter().any(|t| t.starts_with("🟢 online")),
             "active должен быть зелёным: {texts:?}"
@@ -793,7 +873,15 @@ mod tests {
                 last_handshake: Some(0),
             },
         ];
-        let texts = all_button_texts(&clients_list(Lang::Ru, &clients, &[], now, 0, 10));
+        let texts = all_button_texts(&clients_list(
+            Lang::Ru,
+            &clients,
+            &[],
+            now,
+            0,
+            10,
+            ClientFilter::All,
+        ));
         assert!(
             texts
                 .iter()
@@ -805,6 +893,73 @@ mod tests {
                 .iter()
                 .any(|t| t.contains("fresh") && t.contains("никогда")),
             "fresh (last_handshake=0) должен показывать «никогда»: {texts:?}"
+        );
+    }
+
+    #[test]
+    fn clients_list_has_filter_row_with_four_buttons() {
+        // Ряд фильтра: [Все] [🟢 Онлайн] [🔴 Оффлайн] [🟡 Никогда] —
+        // четыре callback `listfilter:*`.
+        let clients = vec![Client {
+            name: "a".into(),
+            ip: String::new(),
+            client_ipv6: String::new(),
+            status: String::new(),
+            status_code: "active".into(),
+            rx: 0,
+            tx: 0,
+            last_handshake: None,
+        }];
+        let data = all_callback_data(&clients_list(
+            Lang::Ru,
+            &clients,
+            &[],
+            0,
+            0,
+            10,
+            ClientFilter::All,
+        ));
+        assert!(data.contains(&"listfilter:all".to_string()));
+        assert!(data.contains(&"listfilter:online".to_string()));
+        assert!(data.contains(&"listfilter:offline".to_string()));
+        assert!(data.contains(&"listfilter:never".to_string()));
+    }
+
+    #[test]
+    fn clients_list_marks_active_filter_with_checkmark() {
+        // Активный фильтр помечается ✅-префиксом в подписи кнопки.
+        let clients = vec![Client {
+            name: "a".into(),
+            ip: String::new(),
+            client_ipv6: String::new(),
+            status: String::new(),
+            status_code: "active".into(),
+            rx: 0,
+            tx: 0,
+            last_handshake: None,
+        }];
+        let texts_online = all_button_texts(&clients_list(
+            Lang::Ru,
+            &clients,
+            &[],
+            0,
+            0,
+            10,
+            ClientFilter::Online,
+        ));
+        assert!(
+            texts_online
+                .iter()
+                .any(|t| t.contains("✅") && t.contains("Онлайн")),
+            "активный фильтр Online должен иметь ✅: {texts_online:?}"
+        );
+        // Все остальные фильтры — без ✅
+        assert!(
+            texts_online
+                .iter()
+                .filter(|t| t.contains("Оффлайн"))
+                .all(|t| !t.contains("✅")),
+            "неактивные фильтры не должны иметь ✅: {texts_online:?}"
         );
     }
 

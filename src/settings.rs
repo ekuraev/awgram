@@ -5,6 +5,7 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 
 use crate::i18n::Lang;
+use crate::vpn::model::ClientFilter;
 
 fn default_true() -> bool {
     true
@@ -24,6 +25,9 @@ pub struct BotState {
     pub deliver_qr: bool,
     #[serde(default = "default_true")]
     pub deliver_link: bool,
+    /// Фильтр списка клиентов по статусу (персистентный, как name_slug/deliver_*).
+    #[serde(default)]
+    pub client_filter: ClientFilter,
 }
 
 impl Default for BotState {
@@ -35,6 +39,7 @@ impl Default for BotState {
             deliver_conf: true,
             deliver_qr: true,
             deliver_link: true,
+            client_filter: ClientFilter::default(),
         }
     }
 }
@@ -152,6 +157,18 @@ impl SettingsStore {
         drop(s);
         self.persist(&snapshot);
     }
+
+    pub fn client_filter(&self) -> ClientFilter {
+        self.state.lock().unwrap().client_filter
+    }
+
+    pub fn set_client_filter(&self, f: ClientFilter) {
+        let mut s = self.state.lock().unwrap();
+        s.client_filter = f;
+        let snapshot = s.clone();
+        drop(s);
+        self.persist(&snapshot);
+    }
 }
 
 #[cfg(test)]
@@ -264,5 +281,46 @@ mod tests {
         assert!(s.deliver_conf());
         assert!(s.deliver_qr());
         assert!(s.deliver_link());
+    }
+
+    #[test]
+    fn client_filter_default_is_all() {
+        let (_d, s) = store();
+        assert_eq!(s.client_filter(), ClientFilter::All);
+    }
+
+    #[test]
+    fn client_filter_set_and_get() {
+        let (_d, s) = store();
+        s.set_client_filter(ClientFilter::Online);
+        assert_eq!(s.client_filter(), ClientFilter::Online);
+        s.set_client_filter(ClientFilter::Never);
+        assert_eq!(s.client_filter(), ClientFilter::Never);
+    }
+
+    #[test]
+    fn client_filter_persists_across_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        {
+            let s = SettingsStore::load(path.clone());
+            s.set_client_filter(ClientFilter::Offline);
+        }
+        let s2 = SettingsStore::load(path);
+        assert_eq!(s2.client_filter(), ClientFilter::Offline);
+    }
+
+    #[test]
+    fn client_filter_default_all_when_missing_in_old_state() {
+        // Старый state.json без client_filter должен десериализоваться как All.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        std::fs::write(
+            &path,
+            r#"{"psk_default":true,"name_slug":false,"langs":{}}"#,
+        )
+        .unwrap();
+        let s = SettingsStore::load(path);
+        assert_eq!(s.client_filter(), ClientFilter::All);
     }
 }
