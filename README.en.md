@@ -85,6 +85,10 @@ history) — `export AWGRAM_TOKEN='TOKEN'` before the same command without
 
 Post-install management: `awgram-setup update | config | status | uninstall`.
 
+Pre-release builds: `awgram-setup update --channel rc` (channels
+`stable|rc|beta|alpha`, the choice is sticky; to return run
+`awgram-setup update --channel stable`).
+
 ## How it works
 
 `awgram` is a single static binary (Rust, `teloxide`, long polling, no
