@@ -26,9 +26,11 @@ tangible on budget VPS hosts.
 
 - ➕ **Add**: expiry (1d–365d presets or custom), PSK, duplicate guard with
   recreate; you get back a `.conf`, a QR and an import link.
-- 👥 **List**: status, ↓/↑ traffic, ⏳ expiry badge; client card, config
-  re-delivery, deletion with confirmation; menu/page navigation and the 🔄
-  "Refresh" button edit the message in place — no duplicate copies.
+- 👥 **List**: three-color status (🟢 online / 🟡 no handshake / 🔴 offline)
+  with last-handshake time right in the button, ↓/↑ traffic, ⏳ expiry badge;
+  status filter and "online-first" sorting; client card, deletion with
+  confirmation; menu/page navigation and the 🔄 "Refresh" button edit the
+  message in place — no duplicate copies.
 - ⚙️ **Modify client parameters**: Keepalive, DNS, AllowedIPs, Endpoint.
 - 🔄 **Config re-issue**: one client or all at once (optionally with route
   reset).
