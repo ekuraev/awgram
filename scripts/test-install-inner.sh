@@ -184,21 +184,14 @@ sed '$d' /repo/install.sh > /tmp/install-funcs.sh
 source /tmp/install-funcs.sh
 tag_matches_channel v0.6.0 stable          || fail "stable tag must match stable"
 tag_matches_channel v0.6.0 rc              || fail "stable tag must match rc"
-tag_matches_channel v0.6.0 alpha           || fail "stable tag must match alpha"
 tag_matches_channel v0.7.0-rc.1 stable     && fail "rc tag must not match stable"
 tag_matches_channel v0.7.0-rc.1 rc         || fail "rc tag must match rc"
-tag_matches_channel v0.7.0-rc.1 beta       || fail "rc tag must match beta"
-tag_matches_channel v0.7.0-rc.1 alpha      || fail "rc tag must match alpha"
 tag_matches_channel v0.7.0-beta.2 rc       && fail "beta tag must not match rc"
-tag_matches_channel v0.7.0-beta.2 beta     || fail "beta tag must match beta"
-tag_matches_channel v0.7.0-alpha.1 beta    && fail "alpha tag must not match beta"
-tag_matches_channel v0.7.0-alpha.1 alpha   || fail "alpha tag must match alpha"
-tag_matches_channel v0.7.0-nightly.1 alpha && fail "unknown suffix must match no channel"
-tags=$'v0.7.0-alpha.2\nv0.7.0-rc.1\nv0.6.0'
-[ "$(pick_channel_tag stable <<<"$tags")" = "v0.6.0" ]         || fail "pick stable"
-[ "$(pick_channel_tag rc     <<<"$tags")" = "v0.7.0-rc.1" ]    || fail "pick rc"
-[ "$(pick_channel_tag beta   <<<"$tags")" = "v0.7.0-rc.1" ]    || fail "pick beta falls to rc tag"
-[ "$(pick_channel_tag alpha  <<<"$tags")" = "v0.7.0-alpha.2" ] || fail "pick alpha"
+tag_matches_channel v0.7.0-alpha.1 rc      && fail "alpha tag must not match rc"
+tag_matches_channel v0.7.0-nightly.1 rc    && fail "unknown suffix must match no channel"
+tags=$'v0.7.0-beta.2\nv0.7.0-rc.1\nv0.6.0'
+[ "$(pick_channel_tag stable <<<"$tags")" = "v0.6.0" ]      || fail "pick stable"
+[ "$(pick_channel_tag rc     <<<"$tags")" = "v0.7.0-rc.1" ] || fail "pick rc skips beta tag"
 pick_channel_tag rc <<<"v0.1.0-nightly.1" && fail "pick must fail when nothing matches"
 
 # --- сценарий 8b: каналы end-to-end через фейковый curl (без сети) ---
@@ -237,14 +230,10 @@ grep -q '^VERSION=v0.7.0-rc.1$' /etc/awgram/setup.conf || fail "rc version not i
 upd_out="$(/usr/local/bin/awgram-setup update --yes --no-systemd 2>&1)"
 grep -q 'v0.7.0-rc.1' <<<"$upd_out" || fail "sticky channel must resolve rc tag"
 grep -q '^VERSION=v0.7.0-rc.1$' /etc/awgram/setup.conf || fail "sticky update must stay on rc"
-# смена канала на up-to-date-пути: beta тоже резолвит уже установленный rc.1 —
-# канал обязан персистится, даже когда бинарник не меняется (регрессия к finding 1)
-/usr/local/bin/awgram-setup update --channel beta --yes --no-systemd
-grep -q '^CHANNEL=beta$' /etc/awgram/setup.conf || fail "channel must persist on up-to-date path"
-grep -q '^VERSION=v0.7.0-rc.1$' /etc/awgram/setup.conf || fail "version must stay unchanged on up-to-date path"
-# возвращаем канал на rc (тоже up-to-date-путь) перед проверкой status
-/usr/local/bin/awgram-setup update --channel rc --yes --no-systemd
-grep -q '^CHANNEL=rc$' /etc/awgram/setup.conf || fail "channel must persist back to rc on up-to-date path"
+# неизвестный канал (в т.ч. упразднённые beta/alpha) отклоняется валидацией флага
+/usr/local/bin/awgram-setup update --channel beta --yes --no-systemd >/dev/null 2>&1 \
+  && fail "removed channel beta must be rejected"
+grep -q '^CHANNEL=rc$' /etc/awgram/setup.conf || fail "rejected channel must not be persisted"
 # status: показывает канал и последний релиз СВОЕГО канала
 status_out="$(/usr/local/bin/awgram-setup status --no-systemd 2>&1)"
 grep -qi 'channel: rc' <<<"$status_out" || fail "status lacks channel line"
@@ -253,10 +242,11 @@ grep -q 'v0.7.0-rc.1' <<<"$status_out" || fail "status latest must be per-channe
 /usr/local/bin/awgram-setup update --version v0.6.0 --yes --no-systemd
 grep -q '^CHANNEL=rc$' /etc/awgram/setup.conf || fail "explicit --version must not change channel"
 grep -q '^VERSION=v0.6.0$' /etc/awgram/setup.conf || fail "explicit --version must install pinned version"
-# возврат на stable — канал резолвит уже установленную v0.6.0 (снова up-to-date-путь)
+# возврат на stable: канал резолвит уже установленную v0.6.0 — up-to-date-путь,
+# канал обязан персистится, даже когда бинарник не меняется (регрессия к finding 1)
 /usr/local/bin/awgram-setup update --channel stable --yes --no-systemd
-grep -q '^CHANNEL=stable$' /etc/awgram/setup.conf || fail "channel not reset to stable"
-grep -q '^VERSION=v0.6.0$' /etc/awgram/setup.conf || fail "stable downgrade not applied"
+grep -q '^CHANNEL=stable$' /etc/awgram/setup.conf || fail "channel must persist on up-to-date path"
+grep -q '^VERSION=v0.6.0$' /etc/awgram/setup.conf || fail "version must stay unchanged on up-to-date path"
 rm -f /usr/local/bin/curl /tmp/fakebin3 /tmp/fakebin3.hash
 /usr/local/bin/awgram-setup uninstall --yes --purge --no-systemd
 [ ! -e /etc/awgram ] || fail "cleanup after scenario 8b"
