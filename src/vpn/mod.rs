@@ -62,6 +62,39 @@ impl Vpn {
         model::parse_client_list(&out).map_err(|e| crate::error::Error::Parse(e.to_string()))
     }
 
+    /// Клиенты с детальным `status_code` (из `list`) + `last_handshake`/`rx`/`tx`
+    /// (из `stats`). Экрану списка нужны обе градации: `list` даёт корректную
+    /// трёхцветную классификацию (no_handshake/no_data/key_error), а `stats` —
+    /// только временную метку handshake для кнопки.
+    ///
+    /// Регрессия #27: переключение списка на `stats` ради `last_handshake`
+    /// потеряло жёлтый статус для клиентов, никогда не подключавшихся — `stats`
+    /// маркирует их `inactive` (🔴), а `list` — `no_handshake` (🟡). Здесь `list`
+    /// остаётся авторитетным источником `status_code`, а `stats` лишь обогащает
+    /// меткой времени и трафиком по имени.
+    ///
+    /// `stats` fail-open: при его отказе список показывается по `list` (status_code
+    /// корректен, handshake отсутствует) — лучше, чем полностью прятать список.
+    /// Отказ `list` пробрасывается как ошибка (показывать нечего).
+    pub async fn list_enriched(&self) -> Result<Vec<Client>> {
+        let mut base = self.list().await?;
+        match self.stats().await {
+            Ok(stats) => {
+                for c in &mut base {
+                    if let Some(s) = stats.iter().find(|s| s.name == c.name) {
+                        c.last_handshake = s.last_handshake;
+                        c.rx = s.rx;
+                        c.tx = s.tx;
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "list_enriched: stats недоступен, список без handshake");
+            }
+        }
+        Ok(base)
+    }
+
     /// Проверяет, существует ли клиент с таким именем (через `list --json`).
     /// Авторитетно: отражает реальное состояние WireGuard, а не только файлы на диске.
     pub async fn exists(&self, name: &str) -> Result<bool> {
@@ -691,6 +724,85 @@ mod tests {
     async fn exists_propagates_script_failure() {
         let (_d, vpn) = vpn_with_script("#!/bin/sh\nexit 1\n");
         assert!(vpn.exists("alice").await.is_err());
+    }
+
+    // --- list_enriched: статус из list + handshake/трафик из stats. Регрессия
+    // #27: экран списка переключили на stats, потеряв жёлтый статус для клиентов,
+    // никогда не подключавшихся (stats → inactive 🔴, list → no_handshake 🟡). ---
+
+    #[tokio::test]
+    #[serial] // гонка ETXTBSY: параллельный fork удерживает write-fd чужого fake-скрипта до execve
+    async fn list_enriched_never_connected_is_yellow_not_red() {
+        // list маркирует «никогда не подключался» как no_handshake (🟡),
+        // stats — как inactive (🔴). status_code обязан прийти из list.
+        let stub = r#"#!/bin/sh
+case "$1" in
+  list)  echo '[{"name":"alice","status_code":"no_handshake"}]' ;;
+  stats) echo '[{"name":"alice","status_code":"inactive","last_handshake":0,"rx":0,"tx":0}]' ;;
+  *) exit 1 ;;
+esac
+"#;
+        let (_d, vpn) = vpn_with_script(stub);
+        let clients = vpn.list_enriched().await.unwrap();
+        assert_eq!(clients.len(), 1);
+        // 🟡 (no_handshake из list), НЕ 🔴 (inactive из stats).
+        assert_eq!(clients[0].status_mark(), "🟡");
+    }
+
+    #[tokio::test]
+    #[serial] // гонка ETXTBSY: параллельный fork удерживает write-fd чужого fake-скрипта до execve
+    async fn list_enriched_active_keeps_green_and_takes_handshake_from_stats() {
+        // Активный клиент: status_code из list (🟢) + last_handshake/rx/tx из stats.
+        let now: i64 = 1_700_000_000;
+        let stub = format!(
+            r#"#!/bin/sh
+case "$1" in
+  list)  echo '[{{"name":"alice","status_code":"active"}}]' ;;
+  stats) echo '[{{"name":"alice","status_code":"active","last_handshake":{hs},"rx":100,"tx":200}}]' ;;
+  *) exit 1 ;;
+esac
+"#,
+            hs = now - 120,
+        );
+        let (_d, vpn) = vpn_with_script(&stub);
+        let clients = vpn.list_enriched().await.unwrap();
+        assert_eq!(clients[0].status_mark(), "🟢");
+        assert_eq!(clients[0].last_handshake, Some(now - 120));
+        assert_eq!(clients[0].rx, 100);
+        assert_eq!(clients[0].tx, 200);
+    }
+
+    #[tokio::test]
+    #[serial] // гонка ETXTBSY: параллельный fork удерживает write-fd чужого fake-скрипта до execve
+    async fn list_enriched_fail_open_when_stats_errors() {
+        // stats упал — список показывается по list (status_code корректен),
+        // handshake отсутствует. Лучше, чем прятать список целиком.
+        let stub = r#"#!/bin/sh
+case "$1" in
+  list)  echo '[{"name":"alice","status_code":"active"}]' ;;
+  stats) exit 1 ;;
+  *) exit 1 ;;
+esac
+"#;
+        let (_d, vpn) = vpn_with_script(stub);
+        let clients = vpn.list_enriched().await.unwrap();
+        assert_eq!(clients[0].status_mark(), "🟢");
+        assert_eq!(clients[0].last_handshake, None);
+    }
+
+    #[tokio::test]
+    #[serial] // гонка ETXTBSY: параллельный fork удерживает write-fd чужого fake-скрипта до execve
+    async fn list_enriched_propagates_list_error() {
+        // list упал — показывать нечего, ошибка пробрасывается.
+        let stub = r#"#!/bin/sh
+case "$1" in
+  list)  exit 1 ;;
+  stats) echo '[]' ;;
+  *) exit 1 ;;
+esac
+"#;
+        let (_d, vpn) = vpn_with_script(stub);
+        assert!(vpn.list_enriched().await.is_err());
     }
 
     #[tokio::test]

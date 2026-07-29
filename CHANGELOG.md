@@ -7,11 +7,25 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
 
 ### 🇷🇺 Русский
 
-_Пусто — изменений после v0.7.0 пока нет._
+#### 🐛 Исправлено
+
+- **Цвет статуса клиентов в списке**: клиенты, никогда не подключавшиеся или
+  давно отключившиеся, снова корректно показываются как 🟡, а не 🔴. Экран
+  списка (#27) был переключён на `stats --json`, который не различает «никогда
+  не подключался» и «был, но давно» — обоим он ставит `inactive` (🔴). Теперь
+  `status_code` берётся из `list --json` (детальная классификация), а
+  `last_handshake`/трафик — из `stats --json`.
 
 ### 🇬🇧 English
 
-_Empty — no changes since v0.7.0 yet._
+#### 🐛 Fixed
+
+- **Client status color in the list**: clients that never connected or
+  disconnected long ago are correctly shown as 🟡 again, not 🔴. The list
+  screen (#27) was switched to `stats --json`, which does not distinguish
+  "never connected" from "was connected long ago" — both get `inactive` (🔴).
+  Now `status_code` is taken from `list --json` (detailed classification),
+  while `last_handshake`/traffic come from `stats --json`.
 
 ## [0.7.0] — 2026-07-29
 

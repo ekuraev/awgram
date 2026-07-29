@@ -761,10 +761,11 @@ async fn finish_bulk(
     }
 }
 
-/// Рендерит экран списка клиентов: stats → filter+sort → expiries → title →
-/// clients_list. Общая логика для Action::List / Action::Page / Action::SetListFilter
-/// (различаются только страницей и тем, кто читает/устанавливает фильтр из настроек).
-/// Пустой список (до или после фильтра) → friendly-сообщение + главное меню.
+/// Рендерит экран списка клиентов: list_enriched → filter+sort → expiries →
+/// title → clients_list. Общая логика для Action::List / Action::Page /
+/// Action::SetListFilter (различаются только страницей и тем, кто читает/
+/// устанавливает фильтр из настроек). Пустой список (до или после фильтра) →
+/// friendly-сообщение + главное меню.
 async fn render_clients_list(
     bot: &Bot,
     chat: ChatId,
@@ -774,7 +775,11 @@ async fn render_clients_list(
     settings: &SettingsStore,
     page: usize,
 ) {
-    match vpn.stats().await {
+    // list_enriched = status_code из list (корректная трёхцветная классификация)
+    // + last_handshake/rx/tx из stats (метка времени для кнопки). Чистый stats
+    // (#27) терял жёлтый статус никогда не подключавшихся клиентов (inactive 🔴
+    // вместо no_handshake 🟡) — см. vpn::Vpn::list_enriched.
+    match vpn.list_enriched().await {
         Ok(all_clients) => {
             // Фильтр + сортировка «онлайн вперёд» (🟢 → 🔴 → 🟡, внутри — по имени).
             // apply_filter_and_sort возвращает owned Vec — clients_list берёт срез по странице.
