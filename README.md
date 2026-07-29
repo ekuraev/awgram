@@ -84,6 +84,10 @@ curl -fsSL https://github.com/ekuraev/awgram/releases/latest/download/install.sh
 
 Управление после установки: `awgram-setup update | config | status | uninstall`.
 
+Предрелизные сборки: `awgram-setup update --channel rc` (каналы
+`stable|rc|beta|alpha`, выбор запоминается; вернуться —
+`awgram-setup update --channel stable`).
+
 ## Как это работает
 
 `awgram` — один статический бинарник (Rust, `teloxide`, long polling, без

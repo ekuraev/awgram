@@ -73,6 +73,9 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
+          # тег с SemVer-суффиксом (v0.7.0-rc.1) — prerelease: /releases/latest
+          # его не видит, существующие установки получают только stable
+          prerelease: ${{ contains(github.ref_name, '-') }}
           body_path: ${{ steps.notes.outputs.found == 'true' && 'release-notes.md' || '' }}
           generate_release_notes: ${{ steps.notes.outputs.found != 'true' }}
           files: |

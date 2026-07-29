@@ -7,11 +7,23 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
 
 ### 🇷🇺 Русский
 
-_Пусто — изменений после v0.6.0 пока нет._
+#### ✨ Добавлено
+
+- **Каналы обновлений**: `awgram-setup update --channel stable|rc|beta|alpha` —
+  установка предрелизных сборок на своём сервере. Канал запоминается;
+  prerelease-каналы видят и стабильные релизы. Теги с суффиксом
+  (например `v0.7.0-rc.1`) публикуются как GitHub prerelease и невидимы
+  для обычного `update` на существующих установках.
 
 ### 🇬🇧 English
 
-_Empty — no changes since v0.6.0 yet._
+#### ✨ Added
+
+- **Update channels**: `awgram-setup update --channel stable|rc|beta|alpha` —
+  install pre-release builds on your own server. The channel is sticky;
+  pre-release channels also see stable releases. Suffixed tags
+  (e.g. `v0.7.0-rc.1`) are published as GitHub prereleases and stay
+  invisible to plain `update` on existing installs.
 
 ## [0.6.0] — 2026-07-29
 

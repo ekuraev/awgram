@@ -19,7 +19,7 @@ SUDOERS_FILE="/etc/sudoers.d/awgram"
 SVC_USER="awgram"
 
 UI_LANG=""; MODE=""; TOKEN=""; ADMINS=""; MANAGE_SCRIPT=""; CLIENTS_DIR=""
-PIN_VERSION=""; ASSUME_YES=0; NO_SYSTEMD=0; BINARY_FILE=""; PURGE=0
+PIN_VERSION=""; ASSUME_YES=0; NO_SYSTEMD=0; BINARY_FILE=""; PURGE=0; CHANNEL=""
 COMMAND=""; HELP_TOPIC=""; PKG=""; ARCH=""; INSTALLED_VERSION=""; TTY_IN=""
 PREV_MODE=""  # режим из setup.conf до этого запуска — для миграции state при смене
 STATE_DIR="/var/lib/awgram"
@@ -152,6 +152,10 @@ MSG_RU[state_migrated]="Файл состояния перенесён: %s -> %s
 MSG_EN[state_migrated]="State file migrated: %s -> %s"
 MSG_RU[err_locked]="Другой запуск awgram-setup ещё не завершился (lock: %s)"
 MSG_EN[err_locked]="Another awgram-setup run is still in progress (lock: %s)"
+MSG_RU[err_bad_channel]="Недопустимое значение --channel: %s (stable|rc|beta|alpha)"
+MSG_EN[err_bad_channel]="Invalid --channel value: %s (stable|rc|beta|alpha)"
+MSG_RU[st_channel]="Канал обновлений: %s"
+MSG_EN[st_channel]="Update channel: %s"
 
 msg() {
   local key="$1"; shift || true
@@ -283,6 +287,8 @@ load_setup_conf() {
   v="$(sed -n 's/^LANG=//p' "$SETUP_CONF" | head -1)";           [ -n "$UI_LANG" ] || UI_LANG="$v"
   v="$(sed -n 's/^MODE=//p' "$SETUP_CONF" | head -1)";           PREV_MODE="$v"; [ -n "$MODE" ] || MODE="$v"
   v="$(sed -n 's/^VERSION=//p' "$SETUP_CONF" | head -1)";        INSTALLED_VERSION="$v"
+  v="$(sed -n 's/^CHANNEL=//p' "$SETUP_CONF" | head -1)"
+  case "$v" in stable|rc|beta|alpha) [ -n "$CHANNEL" ] || CHANNEL="$v" ;; esac
   v="$(sed -n 's/^MANAGE_SCRIPT=//p' "$SETUP_CONF" | head -1)";  [ -n "$MANAGE_SCRIPT" ] || MANAGE_SCRIPT="$v"
   v="$(sed -n 's/^CLIENTS_DIR=//p' "$SETUP_CONF" | head -1)";    [ -n "$CLIENTS_DIR" ] || CLIENTS_DIR="$v"
 }
@@ -293,6 +299,7 @@ save_setup_conf() {
 LANG=$UI_LANG
 MODE=$MODE
 VERSION=$INSTALLED_VERSION
+CHANNEL=${CHANNEL:-stable}
 MANAGE_SCRIPT=$MANAGE_SCRIPT
 CLIENTS_DIR=$CLIENTS_DIR
 EOF
@@ -319,10 +326,40 @@ ensure_deps() {
 # общие опции curl: не виснуть на плохой сети, пару повторов на сбой
 CURL_BASE=(--connect-timeout 10 --retry 2)
 
-fetch_latest_tag() {
-  local tag
-  tag="$(curl -fsSL "${CURL_BASE[@]}" --max-time 30 "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null \
-        | grep -o '"tag_name": *"[^"]*"' | head -1 | cut -d'"' -f4)" || true
+tag_matches_channel() { # $1=тег, $2=канал; 0 = тег допустим для канала
+  # канал = минимальный уровень стабильности: rc видит stable+rc,
+  # beta — stable+rc+beta, alpha — всё; незнакомый суффикс — никому
+  local tag="$1" ch="$2"
+  case "$tag" in
+    *-rc.*)    case "$ch" in rc|beta|alpha) return 0 ;; esac ;;
+    *-beta.*)  case "$ch" in beta|alpha)    return 0 ;; esac ;;
+    *-alpha.*) case "$ch" in alpha)         return 0 ;; esac ;;
+    *-*)       ;;
+    *)         return 0 ;;
+  esac
+  return 1
+}
+
+pick_channel_tag() { # $1=канал; stdin=теги по строке (новые сверху); stdout=первый подходящий
+  local ch="$1" t
+  while IFS= read -r t; do
+    if tag_matches_channel "$t" "$ch"; then printf '%s\n' "$t"; return 0; fi
+  done
+  return 1
+}
+
+fetch_latest_tag() { # $1=канал (пусто → stable)
+  local ch="${1:-stable}" tag
+  if [ "$ch" = "stable" ]; then
+    # /releases/latest игнорирует prerelease — прежнее поведение без изменений
+    tag="$(curl -fsSL "${CURL_BASE[@]}" --max-time 30 "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null \
+          | grep -o '"tag_name": *"[^"]*"' | head -1 | cut -d'"' -f4)" || true
+  else
+    # список отсортирован по дате создания (новые сверху) — берём первый тег,
+    # проходящий фильтр канала; prerelease-поле API не нужно, фильтр по суффиксу
+    tag="$(curl -fsSL "${CURL_BASE[@]}" --max-time 30 "https://api.github.com/repos/$REPO/releases?per_page=30" 2>/dev/null \
+          | grep -o '"tag_name": *"[^"]*"' | cut -d'"' -f4 | pick_channel_tag "$ch")" || true
+  fi
   [ -n "$tag" ] || die err_latest "$REPO"
   printf '%s\n' "$tag"
 }
@@ -521,7 +558,7 @@ cmd_install() {
   local tag staged
   if [ -n "$PIN_VERSION" ]; then tag="$PIN_VERSION"
   elif [ -n "$BINARY_FILE" ]; then tag="local"
-  else tag="$(fetch_latest_tag)"; fi
+  else tag="$(fetch_latest_tag "${CHANNEL:-stable}")"; fi
   TMPD="$(mktemp -d)"
   staged="$(fetch_binary "$tag")"
   install_binary "$staged"
@@ -566,7 +603,10 @@ awgram-setup — установка и управление awgram (Telegram-б�
   --admins 1,2,3        Telegram ID администраторов через запятую
   --script-path PATH    путь к manage_amneziawg.sh (по умолчанию /root/awg/manage_amneziawg.sh)
   --clients-dir PATH    каталог client-конфигов (по умолчанию каталог manage-скрипта)
-  --version vX.Y.Z      установить конкретный релиз вместо последнего
+  --version vX.Y.Z      установить конкретный релиз вместо последнего (канал не меняет)
+  --channel stable|rc|beta|alpha
+                        канал обновлений (запоминается); prerelease-каналы видят
+                        и стабильные релизы; вернуться: update --channel stable
   --yes | -y            без вопросов (для автоматизации; недостающий параметр — ошибка)
   --purge               (uninstall) удалить также конфиг и состояние
 
@@ -577,6 +617,7 @@ awgram-setup — установка и управление awgram (Telegram-б�
   curl -fsSL https://github.com/ekuraev/awgram/releases/latest/download/install.sh | bash
   curl -fsSL ... | bash -s -- install --lang ru --mode hardened --token 'X' --admins 1 --yes
   awgram-setup config --admins 1,2
+  awgram-setup update --channel rc
 EOF
 }
 help_en() {
@@ -601,7 +642,10 @@ Flags (install; config accepts --token/--admins/--script-path):
   --admins 1,2,3        comma-separated Telegram admin IDs
   --script-path PATH    path to manage_amneziawg.sh (default /root/awg/manage_amneziawg.sh)
   --clients-dir PATH    client-config dir (default: the manage-script directory)
-  --version vX.Y.Z      install a specific release instead of the latest
+  --version vX.Y.Z      install a specific release instead of the latest (does not change the channel)
+  --channel stable|rc|beta|alpha
+                        update channel (sticky); pre-release channels also see
+                        stable releases; to return: update --channel stable
   --yes | -y            no questions (for automation; a missing parameter is an error)
   --purge               (uninstall) also remove config and state
 
@@ -612,6 +656,7 @@ Examples:
   curl -fsSL https://github.com/ekuraev/awgram/releases/latest/download/install.sh | bash
   curl -fsSL ... | bash -s -- install --lang en --mode hardened --token 'X' --admins 1 --yes
   awgram-setup config --admins 1,2
+  awgram-setup update --channel rc
 EOF
 }
 cmd_help() {
@@ -671,8 +716,9 @@ cmd_update() {
   local tag staged
   if [ -n "$PIN_VERSION" ]; then tag="$PIN_VERSION"
   elif [ -n "$BINARY_FILE" ]; then tag="local"
-  else tag="$(fetch_latest_tag)"; fi
+  else tag="$(fetch_latest_tag "${CHANNEL:-stable}")"; fi
   if [ "$tag" = "$INSTALLED_VERSION" ] && [ -z "$BINARY_FILE" ] && [ -z "$PIN_VERSION" ]; then
+    [ ! -f "$SETUP_CONF" ] || save_setup_conf
     info up_to_date "$tag"; return 0
   fi
   TMPD="$(mktemp -d)"
@@ -798,11 +844,12 @@ cmd_status() {
   init_tty; load_setup_conf; choose_language
   if [ ! -x "$BIN_PATH" ]; then msg st_none >&2; return 0; fi
   local latest svc
-  latest="$(fetch_latest_tag 2>/dev/null)" || latest=""
+  latest="$(fetch_latest_tag "${CHANNEL:-stable}" 2>/dev/null)" || latest=""
   [ -n "$latest" ] || latest="$(msg unknown)"
   if is_systemd; then svc="$(systemctl is-active awgram 2>/dev/null || true)"; else svc="$(msg unknown)"; fi
   msg st_installed "${INSTALLED_VERSION:-$(msg unknown)}" "$latest" >&2
   msg st_service "${svc:-$(msg unknown)}" "${MODE:-$(msg unknown)}" >&2
+  msg st_channel "${CHANNEL:-stable}" >&2
   if [ -r "$CFG_FILE" ]; then
     show_current || true
   fi
@@ -842,6 +889,8 @@ main() {
       --script-path) MANAGE_SCRIPT="${2:?--script-path}"; shift 2 ;;
       --clients-dir) CLIENTS_DIR="${2:?--clients-dir}"; shift 2 ;;
       --version)     PIN_VERSION="${2:?--version}"; shift 2 ;;
+      --channel)     CHANNEL="${2:?--channel}"; shift 2
+                     case "$CHANNEL" in stable|rc|beta|alpha) ;; *) die err_bad_channel "$CHANNEL" ;; esac ;;
       --repo)        REPO="${2:?--repo}"; shift 2 ;;
       --binary-file) BINARY_FILE="${2:?--binary-file}"; shift 2 ;;
       --yes|-y)      ASSUME_YES=1; shift ;;
