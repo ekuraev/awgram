@@ -7,6 +7,15 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
 
 ### 🇷🇺 Русский
 
+#### ♻️ Изменено
+
+- **Каналы обновлений сокращены до `stable|rc`** — beta/alpha упразднены,
+  не успев использоваться: `--channel beta|alpha` теперь отклоняется с
+  ошибкой, а старое значение `CHANNEL=beta|alpha` в `setup.conf` молча
+  трактуется как `stable`. В README и `awgram-setup help` зафиксировано,
+  что каналы доступны начиная с v0.7.0, и добавлена инструкция обновления
+  для серверов со скриптом старше v0.7.0.
+
 #### 🐛 Исправлено
 
 - **Цвет статуса клиентов в списке**: клиенты, никогда не подключавшиеся или
@@ -17,6 +26,15 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
   `last_handshake`/трафик — из `stats --json`.
 
 ### 🇬🇧 English
+
+#### ♻️ Changed
+
+- **Update channels narrowed to `stable|rc`** — beta/alpha removed before
+  ever being used: `--channel beta|alpha` is now rejected with an error,
+  and a legacy `CHANNEL=beta|alpha` value in `setup.conf` is silently
+  treated as `stable`. README and `awgram-setup help` now state that
+  channels are available since v0.7.0 and include upgrade instructions
+  for servers running a pre-v0.7.0 script.
 
 #### 🐛 Fixed
 

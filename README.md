@@ -84,9 +84,17 @@ curl -fsSL https://github.com/ekuraev/awgram/releases/latest/download/install.sh
 
 Управление после установки: `awgram-setup update | config | status | uninstall`.
 
-Предрелизные сборки: `awgram-setup update --channel rc` (каналы
-`stable|rc|beta|alpha`, выбор запоминается; вернуться —
-`awgram-setup update --channel stable`).
+Предрелизные сборки — доступны начиная с **v0.7.0**: `awgram-setup update
+--channel rc` (выбор запоминается, канал rc видит и стабильные релизы;
+вернуться — `awgram-setup update --channel stable`). Если на сервере
+`awgram-setup` старше v0.7.0, флага `--channel` у него ещё нет — либо
+выполните обычный `awgram-setup update` (он обновит и сам скрипт), либо
+поставьте rc сразу однострочником из нужного релиза:
+
+```bash
+curl -fsSL https://github.com/ekuraev/awgram/releases/download/vX.Y.Z-rc.N/install.sh \
+  | bash -s -- update --channel rc
+```
 
 ## Как это работает
 

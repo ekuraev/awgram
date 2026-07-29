@@ -152,8 +152,8 @@ MSG_RU[state_migrated]="Файл состояния перенесён: %s -> %s
 MSG_EN[state_migrated]="State file migrated: %s -> %s"
 MSG_RU[err_locked]="Другой запуск awgram-setup ещё не завершился (lock: %s)"
 MSG_EN[err_locked]="Another awgram-setup run is still in progress (lock: %s)"
-MSG_RU[err_bad_channel]="Недопустимое значение --channel: %s (stable|rc|beta|alpha)"
-MSG_EN[err_bad_channel]="Invalid --channel value: %s (stable|rc|beta|alpha)"
+MSG_RU[err_bad_channel]="Недопустимое значение --channel: %s (stable|rc)"
+MSG_EN[err_bad_channel]="Invalid --channel value: %s (stable|rc)"
 MSG_RU[st_channel]="Канал обновлений: %s"
 MSG_EN[st_channel]="Update channel: %s"
 
@@ -288,7 +288,7 @@ load_setup_conf() {
   v="$(sed -n 's/^MODE=//p' "$SETUP_CONF" | head -1)";           PREV_MODE="$v"; [ -n "$MODE" ] || MODE="$v"
   v="$(sed -n 's/^VERSION=//p' "$SETUP_CONF" | head -1)";        INSTALLED_VERSION="$v"
   v="$(sed -n 's/^CHANNEL=//p' "$SETUP_CONF" | head -1)"
-  case "$v" in stable|rc|beta|alpha) [ -n "$CHANNEL" ] || CHANNEL="$v" ;; esac
+  case "$v" in stable|rc) [ -n "$CHANNEL" ] || CHANNEL="$v" ;; esac
   v="$(sed -n 's/^MANAGE_SCRIPT=//p' "$SETUP_CONF" | head -1)";  [ -n "$MANAGE_SCRIPT" ] || MANAGE_SCRIPT="$v"
   v="$(sed -n 's/^CLIENTS_DIR=//p' "$SETUP_CONF" | head -1)";    [ -n "$CLIENTS_DIR" ] || CLIENTS_DIR="$v"
 }
@@ -327,15 +327,13 @@ ensure_deps() {
 CURL_BASE=(--connect-timeout 10 --retry 2)
 
 tag_matches_channel() { # $1=тег, $2=канал; 0 = тег допустим для канала
-  # канал = минимальный уровень стабильности: rc видит stable+rc,
-  # beta — stable+rc+beta, alpha — всё; незнакомый суффикс — никому
+  # канал = минимальный уровень стабильности: rc видит stable+rc;
+  # любой другой суффикс (в т.ч. -beta./-alpha.) — никому
   local tag="$1" ch="$2"
   case "$tag" in
-    *-rc.*)    case "$ch" in rc|beta|alpha) return 0 ;; esac ;;
-    *-beta.*)  case "$ch" in beta|alpha)    return 0 ;; esac ;;
-    *-alpha.*) case "$ch" in alpha)         return 0 ;; esac ;;
-    *-*)       ;;
-    *)         return 0 ;;
+    *-rc.*) case "$ch" in rc) return 0 ;; esac ;;
+    *-*)    ;;
+    *)      return 0 ;;
   esac
   return 1
 }
@@ -604,9 +602,8 @@ awgram-setup — установка и управление awgram (Telegram-б�
   --script-path PATH    путь к manage_amneziawg.sh (по умолчанию /root/awg/manage_amneziawg.sh)
   --clients-dir PATH    каталог client-конфигов (по умолчанию каталог manage-скрипта)
   --version vX.Y.Z      установить конкретный релиз вместо последнего (канал не меняет)
-  --channel stable|rc|beta|alpha
-                        канал обновлений (запоминается); prerelease-каналы видят
-                        и стабильные релизы; вернуться: update --channel stable
+  --channel stable|rc   канал обновлений, доступен с v0.7.0 (запоминается); канал rc
+                        видит и стабильные релизы; вернуться: update --channel stable
   --yes | -y            без вопросов (для автоматизации; недостающий параметр — ошибка)
   --purge               (uninstall) удалить также конфиг и состояние
 
@@ -643,9 +640,8 @@ Flags (install; config accepts --token/--admins/--script-path):
   --script-path PATH    path to manage_amneziawg.sh (default /root/awg/manage_amneziawg.sh)
   --clients-dir PATH    client-config dir (default: the manage-script directory)
   --version vX.Y.Z      install a specific release instead of the latest (does not change the channel)
-  --channel stable|rc|beta|alpha
-                        update channel (sticky); pre-release channels also see
-                        stable releases; to return: update --channel stable
+  --channel stable|rc   update channel, available since v0.7.0 (sticky); the rc
+                        channel also sees stable releases; to return: update --channel stable
   --yes | -y            no questions (for automation; a missing parameter is an error)
   --purge               (uninstall) also remove config and state
 
@@ -890,7 +886,7 @@ main() {
       --clients-dir) CLIENTS_DIR="${2:?--clients-dir}"; shift 2 ;;
       --version)     PIN_VERSION="${2:?--version}"; shift 2 ;;
       --channel)     CHANNEL="${2:?--channel}"; shift 2
-                     case "$CHANNEL" in stable|rc|beta|alpha) ;; *) die err_bad_channel "$CHANNEL" ;; esac ;;
+                     case "$CHANNEL" in stable|rc) ;; *) die err_bad_channel "$CHANNEL" ;; esac ;;
       --repo)        REPO="${2:?--repo}"; shift 2 ;;
       --binary-file) BINARY_FILE="${2:?--binary-file}"; shift 2 ;;
       --yes|-y)      ASSUME_YES=1; shift ;;
