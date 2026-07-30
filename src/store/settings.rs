@@ -57,6 +57,15 @@ impl Store {
     pub fn set_lang(&self, uid: i64, lang: Lang) {
         self.set_json(&format!("lang:{uid}"), &lang);
     }
+    /// Выбранная группа для групповых админов с несколькими группами.
+    /// Валидность (не удалили ли группу, не отозвали ли права) проверяет
+    /// вызывающий по актуальной Role.
+    pub fn current_group(&self, uid: i64) -> Option<i64> {
+        self.get_json(&format!("cur_group:{uid}"))
+    }
+    pub fn set_current_group(&self, uid: i64, group_id: i64) {
+        self.set_json(&format!("cur_group:{uid}"), &group_id);
+    }
     pub fn psk_default(&self) -> bool {
         self.get_json("psk_default").unwrap_or(false)
     }
@@ -321,5 +330,15 @@ mod tests {
         store.migrate_state_json(&state); // настройки уже есть — не перетирать
         assert!(store.psk_default());
         assert!(state.exists()); // файл не тронут
+    }
+
+    #[test]
+    fn current_group_roundtrip() {
+        let s = Store::open_in_memory();
+        assert_eq!(s.current_group(42), None);
+        s.set_current_group(42, 7);
+        assert_eq!(s.current_group(42), Some(7));
+        s.set_current_group(42, 9);
+        assert_eq!(s.current_group(42), Some(9));
     }
 }
