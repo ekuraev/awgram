@@ -19,6 +19,10 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
   клиентов по трафику — данные переживают ребут сервера.
 - **Экран «История»** по каждому клиенту: подключения/отключения и операции
   (добавление, изменение, перевыпуск, удаление) с таймстампами.
+- **Группы клиентов и делегирование**: групповые админы с доступом только к
+  своей группе, одноразовые инвайт-ссылки (TTL 24 ч), квоты на группу,
+  перенос клиентов между группами, массовый перевыпуск группы
+  ([#20](https://github.com/ekuraev/awgram/issues/20)).
 
 #### 🐛 Исправлено
 
@@ -56,6 +60,10 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
   by traffic — data survives server reboots.
 - **Per-client "History" screen**: connections/disconnections and operations
   (add, modify, re-issue, delete) with timestamps.
+- **Groups & delegation**: per-group admins scoped to their own group,
+  one-time invite links (24 h TTL), per-group client quotas, moving clients
+  between groups, group-wide regen
+  ([#20](https://github.com/ekuraev/awgram/issues/20)).
 
 #### 🐛 Fixed
 
