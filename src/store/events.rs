@@ -19,6 +19,14 @@ pub enum EventKind {
     Restore,
     Restart,
     Repair,
+    GroupCreate,
+    GroupDelete,
+    GroupRename,
+    AdminAdd,
+    AdminRemove,
+    InviteCreate,
+    InviteUse,
+    InviteRevoke,
 }
 
 impl EventKind {
@@ -33,6 +41,14 @@ impl EventKind {
             EventKind::Restore => "restore",
             EventKind::Restart => "restart",
             EventKind::Repair => "repair",
+            EventKind::GroupCreate => "group_create",
+            EventKind::GroupDelete => "group_delete",
+            EventKind::GroupRename => "group_rename",
+            EventKind::AdminAdd => "admin_add",
+            EventKind::AdminRemove => "admin_remove",
+            EventKind::InviteCreate => "invite_create",
+            EventKind::InviteUse => "invite_use",
+            EventKind::InviteRevoke => "invite_revoke",
         }
     }
 }
@@ -118,5 +134,17 @@ mod tests {
             store.log_event(i, EventKind::Regen, Some("alice"), None, None);
         }
         assert_eq!(store.client_events("alice", 3).len(), 3);
+    }
+
+    #[test]
+    fn group_event_kinds_have_stable_strings() {
+        assert_eq!(EventKind::GroupCreate.as_str(), "group_create");
+        assert_eq!(EventKind::GroupDelete.as_str(), "group_delete");
+        assert_eq!(EventKind::GroupRename.as_str(), "group_rename");
+        assert_eq!(EventKind::AdminAdd.as_str(), "admin_add");
+        assert_eq!(EventKind::AdminRemove.as_str(), "admin_remove");
+        assert_eq!(EventKind::InviteCreate.as_str(), "invite_create");
+        assert_eq!(EventKind::InviteUse.as_str(), "invite_use");
+        assert_eq!(EventKind::InviteRevoke.as_str(), "invite_revoke");
     }
 }
