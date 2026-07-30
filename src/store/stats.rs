@@ -19,6 +19,25 @@ pub struct Sample {
     pub last_handshake: Option<i64>,
 }
 
+/// Суммарный трафик и время online за период (из traffic_daily).
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct PeriodTotals {
+    pub rx: u64,
+    pub tx: u64,
+    pub online_minutes: u64,
+}
+
+/// Сводка трафика по стандартным окнам для UI: сегодня, 7/30 дней, всё время,
+/// плюс предыдущие 7 дней — для расчёта тренда (текущая неделя vs прошлая).
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct TrafficSummary {
+    pub today: PeriodTotals,
+    pub d7: PeriodTotals,
+    pub d30: PeriodTotals,
+    pub total: PeriodTotals,
+    pub prev7: PeriodTotals,
+}
+
 impl Store {
     pub fn ingest(&self, now: i64, samples: &[Sample]) {
         let res = self.with_conn(|c| {
@@ -153,6 +172,78 @@ impl Store {
             tracing::error!(error = %e, "prune не выполнен");
         }
     }
+
+    /// Сумма rx/tx/online_minutes по дневным бакетам в диапазоне
+    /// `[from_day, to_day]` включительно, опционально по одному клиенту.
+    fn totals(&self, client: Option<&str>, from_day: i64, to_day: i64) -> PeriodTotals {
+        const SQL: &str = "SELECT COALESCE(SUM(rx_bytes),0), COALESCE(SUM(tx_bytes),0), COALESCE(SUM(online_minutes),0)
+             FROM traffic_daily d JOIN clients c ON c.id = d.client_id
+             WHERE day_ts BETWEEN ?1 AND ?2";
+        let res = self.with_conn(|c| {
+            let row = |r: &rusqlite::Row| -> rusqlite::Result<(i64, i64, i64)> {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            };
+            match client {
+                Some(name) => c.query_row(
+                    &format!("{SQL} AND c.name = ?3"),
+                    rusqlite::params![from_day, to_day, name],
+                    row,
+                ),
+                None => c.query_row(SQL, rusqlite::params![from_day, to_day], row),
+            }
+        });
+        match res {
+            Ok((rx, tx, online_minutes)) => PeriodTotals {
+                rx: rx as u64,
+                tx: tx as u64,
+                online_minutes: online_minutes as u64,
+            },
+            Err(e) => {
+                tracing::error!(error = %e, "traffic totals не получены");
+                PeriodTotals::default()
+            }
+        }
+    }
+
+    /// client=None → по всем клиентам. Всё из traffic_daily (текущий день
+    /// обновляется rollup'ом каждые 5 мин — лаг задокументирован).
+    pub fn traffic_summary(&self, client: Option<&str>, now: i64) -> TrafficSummary {
+        let day = now / 86400 * 86400;
+        TrafficSummary {
+            today: self.totals(client, day, day),
+            d7: self.totals(client, day - 6 * 86400, day),
+            d30: self.totals(client, day - 29 * 86400, day),
+            total: self.totals(client, 0, day),
+            prev7: self.totals(client, day - 13 * 86400, day - 7 * 86400),
+        }
+    }
+
+    /// Топ клиентов по rx+tx за последние `days` дней (включая сегодня;
+    /// участвуют и уже удалённые клиенты — история трафика не привязана
+    /// к текущему статусу removed_at).
+    pub fn top_clients(&self, days: i64, limit: usize, now: i64) -> Vec<(String, u64)> {
+        let day = now / 86400 * 86400;
+        let from_day = day - (days - 1) * 86400;
+        let res = self.with_conn(|c| {
+            let mut stmt = c.prepare(
+                "SELECT c.name, SUM(d.rx_bytes + d.tx_bytes) AS total
+                 FROM traffic_daily d JOIN clients c ON c.id = d.client_id
+                 WHERE d.day_ts BETWEEN ?1 AND ?2
+                 GROUP BY c.name ORDER BY total DESC LIMIT ?3",
+            )?;
+            let rows = stmt.query_map(rusqlite::params![from_day, day, limit as i64], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+        });
+        match res {
+            Ok(rows) => rows.into_iter().map(|(name, t)| (name, t as u64)).collect(),
+            Err(e) => {
+                tracing::error!(error = %e, "top_clients не получены");
+                Vec::new()
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -169,6 +260,62 @@ mod tests {
             last_handshake: hs,
         }
     }
+    /// Сидирует traffic_daily напрямую (upsert клиента + запись за день),
+    /// минуя ingest/rollup — для тестов агрегатных запросов.
+    /// `day_index` — абсолютный номер дня (day_ts = day_index * 86400).
+    fn seed_daily(store: &Store, name: &str, day_index: i64, rx: u64, tx: u64) {
+        store
+            .with_conn(|c| {
+                c.execute(
+                    "INSERT INTO clients(name, ip, first_seen, last_seen) VALUES(?1, '', 0, 0)
+                     ON CONFLICT(name) DO NOTHING",
+                    [name],
+                )?;
+                let client_id: i64 = c.query_row(
+                    "SELECT id FROM clients WHERE name=?1",
+                    [name],
+                    |r| r.get(0),
+                )?;
+                c.execute(
+                    "INSERT INTO traffic_daily(client_id, day_ts, rx_bytes, tx_bytes, online_minutes)
+                     VALUES(?1, ?2, ?3, ?4, ?5)
+                     ON CONFLICT(client_id, day_ts) DO UPDATE SET rx_bytes=?3, tx_bytes=?4, online_minutes=?5",
+                    rusqlite::params![client_id, day_index * 86400, rx as i64, tx as i64, 1_i64],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn traffic_summary_periods_and_trend_windows() {
+        let store = Store::open_in_memory();
+        let now = 100 * 86400 + 3600; // день 100, 01:00 UTC
+                                      // День 99 (не 100!): бриф просил "сегодня — ничего", а день 100 совпал бы
+                                      // с today и дал бы rx=10 там; день 99 всё ещё внутри d7/d30/total.
+        seed_daily(&store, "alice", 99, 10, 1);
+        seed_daily(&store, "alice", 97, 20, 2); // внутри 7д
+        seed_daily(&store, "alice", 91, 40, 4); // prev7 (93..100-7)
+        seed_daily(&store, "alice", 50, 80, 8); // день 50 — вне окна 30д, только в total
+        let s = store.traffic_summary(Some("alice"), now);
+        assert_eq!(s.today.rx, 0); // за сегодня (день 100) ничего
+        assert_eq!(s.d7.rx, 10 + 20); // дни 99 и 97
+        assert_eq!(s.prev7.rx, 40); // день 91
+        assert_eq!(s.d30.rx, 10 + 20 + 40);
+        assert_eq!(s.total.rx, 10 + 20 + 40 + 80);
+    }
+
+    #[test]
+    fn top_clients_orders_by_total_traffic() {
+        let store = Store::open_in_memory();
+        let now = 100 * 86400;
+        seed_daily(&store, "alice", 99, 100, 0);
+        seed_daily(&store, "bob", 99, 500, 0);
+        let top = store.top_clients(7, 5, now);
+        assert_eq!(top[0].0, "bob");
+        assert_eq!(top[0].1, 500);
+    }
+
     fn sample_rows(store: &Store) -> Vec<(i64, i64, i64, i64)> {
         // (ts, rx_delta, tx_delta, online)
         store

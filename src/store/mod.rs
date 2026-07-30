@@ -12,7 +12,7 @@ mod settings;
 mod stats;
 
 pub use events::{EventKind, EventRow};
-pub use stats::Sample;
+pub use stats::{PeriodTotals, Sample, TrafficSummary};
 
 /// SQL-батчи миграций: индекс в массиве + 1 == schema_version после применения.
 /// Только добавлять в конец — существующие батчи менять нельзя (уже применены
