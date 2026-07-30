@@ -778,7 +778,8 @@ async fn render_clients_list(
             // Фильтр + сортировка «онлайн вперёд» (🟢 → 🔴 → 🟡, внутри — по имени).
             // apply_filter_and_sort возвращает owned Vec — clients_list берёт срез по странице.
             let filter = settings.client_filter();
-            let clients = crate::vpn::model::apply_filter_and_sort(&all_clients, filter);
+            let clients =
+                crate::vpn::model::apply_filter_and_sort(&all_clients, filter, now_epoch());
             if clients.is_empty() {
                 edit_or_send(
                     bot,

@@ -35,6 +35,17 @@ impl Client {
     pub fn status_mark(&self) -> &'static str {
         status_mark_code(&self.status_code)
     }
+
+    /// Цвет статуса, вычисленный ботом из `last_handshake` (см. `status_mark_at`).
+    /// `now` — текущее время (epoch, сек), передаётся явно ради тестируемости.
+    pub fn mark(&self, now: i64) -> &'static str {
+        status_mark_at(&self.status_code, self.last_handshake, now)
+    }
+
+    /// Онлайн ли клиент прямо сейчас (хэндшейк моложе `ONLINE_THRESHOLD_SECS`).
+    pub fn online(&self, now: i64) -> bool {
+        self.mark(now) == "🟢"
+    }
 }
 
 /// Цвет статуса по строковому `status_code`. Вынесен из `Client::status_mark`,
@@ -44,6 +55,30 @@ pub fn status_mark_code(status_code: &str) -> &'static str {
         "active" | "recent" => "🟢",
         "no_handshake" | "no_data" => "🟡",
         _ => "🔴",
+    }
+}
+
+/// Порог «онлайн»: WireGuard шлёт хэндшейк каждые ~2 мин при активном
+/// туннеле, 5 мин покрывают джиттер и keepalive. Больше — клиент отвалился.
+pub const ONLINE_THRESHOLD_SECS: i64 = 300;
+
+/// Цвет статуса, вычисляемый БОТОМ из last_handshake (фикс «хэндшейк давно,
+/// а показывает онлайн»: инсталлер красил recent<24ч как онлайн).
+/// status_code инсталлера нужен только для различения «никогда» и ошибок:
+///   🟢 хэндшейк < ONLINE_THRESHOLD_SECS назад
+///   🔴 хэндшейк был, но давно; либо key_error
+///   🟡 ещё ни разу не подключался / нет данных
+pub fn status_mark_at(status_code: &str, last_handshake: Option<i64>, now: i64) -> &'static str {
+    match last_handshake {
+        Some(hs) if hs > 0 && now - hs < ONLINE_THRESHOLD_SECS => "🟢",
+        Some(hs) if hs > 0 => "🔴",
+        _ => {
+            if status_code == "key_error" {
+                "🔴"
+            } else {
+                "🟡"
+            }
+        }
     }
 }
 
@@ -84,13 +119,14 @@ impl ClientFilter {
         }
     }
 
-    /// Подходит ли клиент под этот фильтр (по `status_mark_code`).
-    pub fn matches(self, c: &Client) -> bool {
+    /// Подходит ли клиент под этот фильтр (по цвету из `Client::mark`,
+    /// вычисляемому ботом из `last_handshake` — см. `status_mark_at`).
+    pub fn matches(self, c: &Client, now: i64) -> bool {
         match self {
             ClientFilter::All => true,
-            ClientFilter::Online => c.status_mark() == "🟢",
-            ClientFilter::Offline => c.status_mark() == "🔴",
-            ClientFilter::Never => c.status_mark() == "🟡",
+            ClientFilter::Online => c.mark(now) == "🟢",
+            ClientFilter::Offline => c.mark(now) == "🔴",
+            ClientFilter::Never => c.mark(now) == "🟡",
         }
     }
 
@@ -118,15 +154,17 @@ fn color_priority(mark: &str) -> u8 {
 /// внутри группы — по имени. Клонирует (handler передаёт owned Vec в clients_list).
 /// `All` пропускает всех, но сортировку применяет всегда — это режим по умолчанию
 /// из issue #28 («сначала онлайн, потом оффлайн»).
-pub fn apply_filter_and_sort(clients: &[Client], filter: ClientFilter) -> Vec<Client> {
+/// `now` — текущее время (epoch, сек), передаётся явно ради тестируемости; цвет
+/// считается ботом из `last_handshake` (см. `status_mark_at`).
+pub fn apply_filter_and_sort(clients: &[Client], filter: ClientFilter, now: i64) -> Vec<Client> {
     let mut out: Vec<Client> = clients
         .iter()
-        .filter(|c| filter.matches(c))
+        .filter(|c| filter.matches(c, now))
         .cloned()
         .collect();
     out.sort_by(|a, b| {
-        color_priority(a.status_mark())
-            .cmp(&color_priority(b.status_mark()))
+        color_priority(a.mark(now))
+            .cmp(&color_priority(b.mark(now)))
             .then_with(|| a.name.cmp(&b.name))
     });
     out
@@ -646,58 +684,127 @@ mod tests {
         assert_eq!(ClientFilter::Never.mark(), "🟡");
     }
 
-    fn mk_client(name: &str, code: &str) -> Client {
+    fn client(status_code: &str, hs: Option<i64>) -> Client {
+        Client {
+            name: "x".into(),
+            ip: String::new(),
+            client_ipv6: String::new(),
+            status: String::new(),
+            status_code: status_code.into(),
+            rx: 0,
+            tx: 0,
+            last_handshake: hs,
+        }
+    }
+
+    fn client_named(name: &str, status_code: &str, hs: Option<i64>) -> Client {
         Client {
             name: name.into(),
             ip: String::new(),
             client_ipv6: String::new(),
             status: String::new(),
-            status_code: code.into(),
+            status_code: status_code.into(),
             rx: 0,
             tx: 0,
-            last_handshake: None,
+            last_handshake: hs,
         }
+    }
+
+    // --- status_mark_at: цвет, вычисляемый ботом из last_handshake. ---
+    // Фикс «хэндшейк давно, а показывает онлайн»: инсталлер отдаёт recent для
+    // хэндшейков до 24 ч, и раньше recent красился в 🟢. Теперь цвет считаем сами.
+
+    #[test]
+    fn mark_green_only_within_online_threshold() {
+        let now = 1_700_000_000;
+        assert_eq!(status_mark_at("active", Some(now - 60), now), "🟢");
+        assert_eq!(status_mark_at("recent", Some(now - 299), now), "🟢");
+        assert_eq!(status_mark_at("recent", Some(now - 301), now), "🔴"); // был давно → НЕ онлайн
+        assert_eq!(status_mark_at("active", Some(now - 6 * 3600), now), "🔴");
+    }
+
+    #[test]
+    fn mark_yellow_for_never_and_no_data() {
+        let now = 1_700_000_000;
+        assert_eq!(status_mark_at("no_handshake", None, now), "🟡");
+        assert_eq!(status_mark_at("no_handshake", Some(0), now), "🟡");
+        assert_eq!(status_mark_at("no_data", None, now), "🟡");
+    }
+
+    #[test]
+    fn mark_red_for_key_error_even_without_handshake() {
+        assert_eq!(status_mark_at("key_error", None, 1_700_000_000), "🔴");
+    }
+
+    #[test]
+    fn filter_uses_now_based_marks() {
+        let now = 1_700_000_000;
+        let online = client("active", Some(now - 10));
+        let stale = client("recent", Some(now - 7200)); // 2 ч назад — раньше считался online
+        let never = client("no_handshake", None);
+        assert!(ClientFilter::Online.matches(&online, now));
+        assert!(!ClientFilter::Online.matches(&stale, now));
+        assert!(ClientFilter::Offline.matches(&stale, now));
+        assert!(ClientFilter::Never.matches(&never, now));
+    }
+
+    #[test]
+    fn sort_online_first_with_now() {
+        let now = 1_700_000_000;
+        let clients = vec![
+            client_named("never", "no_handshake", None),
+            client_named("stale", "recent", Some(now - 7200)),
+            client_named("live", "active", Some(now - 30)),
+        ];
+        let out = apply_filter_and_sort(&clients, ClientFilter::All, now);
+        let names: Vec<&str> = out.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["live", "stale", "never"]); // 🟢 → 🔴 → 🟡
     }
 
     #[test]
     fn client_filter_matches_by_status_color() {
-        let online = mk_client("a", "active");
-        let recent = mk_client("b", "recent");
-        let offline = mk_client("c", "inactive");
-        let key_err = mk_client("d", "key_error");
-        let never = mk_client("e", "no_handshake");
-        let nodata = mk_client("f", "no_data");
+        // Новая семантика: цвет считается из last_handshake, а не status_code.
+        // Здесь all клиенты без handshake → online/recent без hs красятся 🔴
+        // (был, но неизвестно когда), кроме no_handshake/no_data → 🟡.
+        let now = 1_700_000_000;
+        let online = client("active", Some(now - 10));
+        let recent = client("recent", Some(now - 10));
+        let offline = client("inactive", Some(now - 3600));
+        let key_err = client("key_error", None);
+        let never = client("no_handshake", None);
+        let nodata = client("no_data", None);
 
         // All пропускает всех
         for c in [&online, &recent, &offline, &key_err, &never, &nodata] {
-            assert!(ClientFilter::All.matches(c));
+            assert!(ClientFilter::All.matches(c, now));
         }
         // Online — только 🟢
-        assert!(ClientFilter::Online.matches(&online));
-        assert!(ClientFilter::Online.matches(&recent));
-        assert!(!ClientFilter::Online.matches(&offline));
-        assert!(!ClientFilter::Online.matches(&never));
+        assert!(ClientFilter::Online.matches(&online, now));
+        assert!(ClientFilter::Online.matches(&recent, now));
+        assert!(!ClientFilter::Online.matches(&offline, now));
+        assert!(!ClientFilter::Online.matches(&never, now));
         // Offline — только 🔴
-        assert!(ClientFilter::Offline.matches(&offline));
-        assert!(ClientFilter::Offline.matches(&key_err));
-        assert!(!ClientFilter::Offline.matches(&online));
-        assert!(!ClientFilter::Offline.matches(&never));
+        assert!(ClientFilter::Offline.matches(&offline, now));
+        assert!(ClientFilter::Offline.matches(&key_err, now));
+        assert!(!ClientFilter::Offline.matches(&online, now));
+        assert!(!ClientFilter::Offline.matches(&never, now));
         // Never — только 🟡
-        assert!(ClientFilter::Never.matches(&never));
-        assert!(ClientFilter::Never.matches(&nodata));
-        assert!(!ClientFilter::Never.matches(&online));
-        assert!(!ClientFilter::Never.matches(&offline));
+        assert!(ClientFilter::Never.matches(&never, now));
+        assert!(ClientFilter::Never.matches(&nodata, now));
+        assert!(!ClientFilter::Never.matches(&online, now));
+        assert!(!ClientFilter::Never.matches(&offline, now));
     }
 
     #[test]
     fn apply_filter_online_leaves_only_green() {
+        let now = 1_700_000_000;
         let clients = vec![
-            mk_client("a", "active"),
-            mk_client("b", "inactive"),
-            mk_client("c", "no_handshake"),
-            mk_client("d", "recent"),
+            client_named("a", "active", Some(now - 10)),
+            client_named("b", "inactive", Some(now - 3600)),
+            client_named("c", "no_handshake", None),
+            client_named("d", "recent", Some(now - 20)),
         ];
-        let out = apply_filter_and_sort(&clients, ClientFilter::Online);
+        let out = apply_filter_and_sort(&clients, ClientFilter::Online, now);
         let names: Vec<&str> = out.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, vec!["a", "d"]);
     }
@@ -705,13 +812,14 @@ mod tests {
     #[test]
     fn apply_filter_sorts_online_first_then_offline_then_never() {
         // Перемешанный порядок → 🟢(a,d) → 🔴(b) → 🟡(c)
+        let now = 1_700_000_000;
         let clients = vec![
-            mk_client("b", "inactive"),
-            mk_client("c", "no_handshake"),
-            mk_client("a", "active"),
-            mk_client("d", "recent"),
+            client_named("b", "inactive", Some(now - 3600)),
+            client_named("c", "no_handshake", None),
+            client_named("a", "active", Some(now - 10)),
+            client_named("d", "recent", Some(now - 20)),
         ];
-        let out = apply_filter_and_sort(&clients, ClientFilter::All);
+        let out = apply_filter_and_sort(&clients, ClientFilter::All, now);
         let names: Vec<&str> = out.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, vec!["a", "d", "b", "c"]);
     }
@@ -719,13 +827,14 @@ mod tests {
     #[test]
     fn apply_filter_sorts_by_name_within_color_group() {
         // Два 🟢, два 🔴 — внутри группы по имени.
+        let now = 1_700_000_000;
         let clients = vec![
-            mk_client("zoe", "active"),
-            mk_client("amy", "active"),
-            mk_client("zack", "inactive"),
-            mk_client("abe", "inactive"),
+            client_named("zoe", "active", Some(now - 10)),
+            client_named("amy", "active", Some(now - 10)),
+            client_named("zack", "inactive", Some(now - 3600)),
+            client_named("abe", "inactive", Some(now - 3600)),
         ];
-        let out = apply_filter_and_sort(&clients, ClientFilter::All);
+        let out = apply_filter_and_sort(&clients, ClientFilter::All, now);
         let names: Vec<&str> = out.iter().map(|c| c.name.as_str()).collect();
         // 🟢: amy, zoe (по имени); 🔴: abe, zack (по имени)
         assert_eq!(names, vec!["amy", "zoe", "abe", "zack"]);
@@ -733,8 +842,9 @@ mod tests {
 
     #[test]
     fn apply_filter_empty_when_no_match() {
-        let clients = vec![mk_client("a", "active")];
-        let out = apply_filter_and_sort(&clients, ClientFilter::Never);
+        let now = 1_700_000_000;
+        let clients = vec![client_named("a", "active", Some(now - 10))];
+        let out = apply_filter_and_sort(&clients, ClientFilter::Never, now);
         assert!(out.is_empty());
     }
 
