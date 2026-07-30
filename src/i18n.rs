@@ -1458,10 +1458,18 @@ pub fn confirm_group_regen(lang: Lang, name: &str, clients: i64) -> String {
 }
 pub fn group_regen_done(lang: Lang, ok: usize, failed: usize) -> String {
     match lang {
-        Lang::Ru if failed == 0 => format!("✅ Перевыпущено клиентов: {ok}."),
-        Lang::Ru => format!("⚠️ Перевыпущено: {ok}, ошибок: {failed}. Проверьте логи сервера."),
-        Lang::En if failed == 0 => format!("✅ Reissued {ok} clients."),
-        Lang::En => format!("⚠️ Reissued: {ok}, failed: {failed}. Check the server logs."),
+        Lang::Ru if failed == 0 => {
+            format!("✅ Перевыпущено клиентов: {ok}.\nКонфиги — в карточках клиентов.")
+        }
+        Lang::Ru => format!(
+            "⚠️ Перевыпущено: {ok}, ошибок: {failed}. Проверьте логи сервера.\nКонфиги — в карточках клиентов."
+        ),
+        Lang::En if failed == 0 => {
+            format!("✅ Reissued {ok} clients.\nConfigs are in the client cards.")
+        }
+        Lang::En => format!(
+            "⚠️ Reissued: {ok}, failed: {failed}. Check the server logs.\nConfigs are in the client cards."
+        ),
     }
 }
 pub fn select_group_title(lang: Lang) -> String {
@@ -1511,6 +1519,27 @@ pub fn no_group_label(lang: Lang) -> String {
     match lang {
         Lang::Ru => "Без группы",
         Lang::En => "No group",
+    }
+    .to_string()
+}
+/// Заголовок экрана выбора группового фильтра списка клиентов (владелец).
+pub fn scope_title(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "Показывать клиентов:",
+        Lang::En => "Show clients:",
+    }
+    .to_string()
+}
+/// Кнопка «🗂» в ряду фильтров списка клиентов — открывает `scope_title`
+/// (только владельцу, см. `menu::clients_list`'s `can_scope`).
+pub fn btn_scope(lang: Lang) -> String {
+    let _ = lang;
+    "🗂".to_string()
+}
+pub fn btn_scope_all(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "Все группы",
+        Lang::En => "All groups",
     }
     .to_string()
 }

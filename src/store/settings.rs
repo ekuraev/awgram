@@ -66,6 +66,15 @@ impl Store {
     pub fn set_current_group(&self, uid: i64, group_id: i64) {
         self.set_json(&format!("cur_group:{uid}"), &group_id);
     }
+    /// Фильтр списка клиентов по группе — для владельцев (групповым админам
+    /// скоуп диктует их текущая группа).
+    pub fn owner_scope(&self, uid: i64) -> crate::store::ListScope {
+        self.get_json(&format!("owner_scope:{uid}"))
+            .unwrap_or(crate::store::ListScope::All)
+    }
+    pub fn set_owner_scope(&self, uid: i64, s: crate::store::ListScope) {
+        self.set_json(&format!("owner_scope:{uid}"), &s);
+    }
     pub fn psk_default(&self) -> bool {
         self.get_json("psk_default").unwrap_or(false)
     }
@@ -340,5 +349,16 @@ mod tests {
         assert_eq!(s.current_group(42), Some(7));
         s.set_current_group(42, 9);
         assert_eq!(s.current_group(42), Some(9));
+    }
+
+    #[test]
+    fn owner_scope_roundtrip() {
+        use crate::store::ListScope;
+        let s = Store::open_in_memory();
+        assert_eq!(s.owner_scope(42), ListScope::All);
+        s.set_owner_scope(42, ListScope::Group(7));
+        assert_eq!(s.owner_scope(42), ListScope::Group(7));
+        s.set_owner_scope(42, ListScope::NoGroup);
+        assert_eq!(s.owner_scope(42), ListScope::NoGroup);
     }
 }
