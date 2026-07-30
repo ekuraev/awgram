@@ -659,6 +659,23 @@ pub enum RegenAllOutcome {
 }
 
 #[cfg(test)]
+impl Vpn {
+    /// Конструктор для тестов других модулей (collector): стаб-скрипт вместо
+    /// инсталлера. Поля приватные — снаружи структуру не собрать.
+    pub(crate) fn test_with_script(
+        script: std::path::PathBuf,
+        clients_dir: std::path::PathBuf,
+    ) -> Vpn {
+        Vpn {
+            script,
+            sudo_prefix: String::new(),
+            timeout_secs: 5,
+            clients_dir,
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use serial_test::serial;
