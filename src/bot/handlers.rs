@@ -489,6 +489,64 @@ async fn message_handler(
         return Ok(());
     }
 
+    // Инвайт-ссылка: /start inv_<token>. Обрабатывается ДО роль-гейта —
+    // приглашённый ещё не имеет никакой роли. Токен одноразовый с TTL, так что
+    // подбор мусорных токенов даёт лишь "ссылка недействительна".
+    if let Some(payload) = msg
+        .text()
+        .and_then(|t| t.strip_prefix("/start inv_"))
+        .map(str::trim)
+    {
+        let uid = user_id_of_msg(&msg).unwrap_or(0);
+        let lang = settings.lang(uid);
+        match settings.use_invite(payload, uid, now_epoch()) {
+            crate::store::InviteUse::Joined(gid) => {
+                let gname = settings.group(gid).map(|g| g.name).unwrap_or_default();
+                settings.log_event(
+                    now_epoch(),
+                    EventKind::InviteUse,
+                    None,
+                    Some(uid),
+                    Some(&format!("group={gid}")),
+                );
+                settings.log_event(
+                    now_epoch(),
+                    EventKind::AdminAdd,
+                    None,
+                    Some(uid),
+                    Some(&format!("group={gid} via=invite")),
+                );
+                settings.set_current_group(uid, gid);
+                bot.send_message(msg.chat.id, i18n::joined_group(lang, &gname))
+                    .parse_mode(ParseMode::Html)
+                    .reply_markup(menu::ga_main_menu(lang, false))
+                    .await?;
+                // Уведомить владельцев о новом админе.
+                for owner in &cfg.admin_ids {
+                    let _ = bot
+                        .send_message(
+                            ChatId(*owner),
+                            i18n::owner_notified_join(settings.lang(*owner), uid, &gname),
+                        )
+                        .parse_mode(ParseMode::Html)
+                        .await;
+                }
+            }
+            crate::store::InviteUse::AlreadyAdmin(gid) => {
+                let gname = settings.group(gid).map(|g| g.name).unwrap_or_default();
+                bot.send_message(msg.chat.id, i18n::joined_group(lang, &gname))
+                    .parse_mode(ParseMode::Html)
+                    .await?;
+            }
+            crate::store::InviteUse::Invalid => {
+                bot.send_message(msg.chat.id, i18n::invite_invalid(lang))
+                    .await?;
+            }
+        }
+        dialogue.update(State::Idle).await?;
+        return Ok(());
+    }
+
     let uid = user_id_of_msg(&msg).unwrap_or(0);
     let role = resolve_role(uid, &cfg.admin_ids, &settings);
     if role == Role::Denied {
@@ -782,6 +840,45 @@ async fn message_handler(
                 }
                 _ => {
                     bot.send_message(msg.chat.id, i18n::bad_group_quota(lang))
+                        .await?;
+                }
+            }
+        }
+        State::AwaitingGroupAdminId { id } => {
+            if !role.is_owner() {
+                dialogue.update(State::Idle).await?;
+                return Ok(());
+            }
+            let raw = msg.text().unwrap_or_default().trim().to_string();
+            match raw.parse::<i64>() {
+                Ok(new_admin) if new_admin > 0 => {
+                    let first_admin_ever = !settings.has_any_group_admin();
+                    let gname = settings.group(id).map(|g| g.name).unwrap_or_default();
+                    if settings.add_group_admin(id, new_admin, uid, now_epoch()) {
+                        settings.log_event(
+                            now_epoch(),
+                            EventKind::AdminAdd,
+                            None,
+                            Some(uid),
+                            Some(&format!("group={id} user={new_admin} via=manual")),
+                        );
+                        bot.send_message(msg.chat.id, i18n::admin_added(lang, new_admin, &gname))
+                            .parse_mode(ParseMode::Html)
+                            .reply_markup(menu::main_menu(lang))
+                            .await?;
+                        if first_admin_ever && !settings.name_slug() {
+                            bot.send_message(msg.chat.id, i18n::slug_recommend(lang))
+                                .reply_markup(menu::slug_recommend_menu(lang))
+                                .await?;
+                        }
+                    } else {
+                        bot.send_message(msg.chat.id, i18n::admin_already(lang, new_admin))
+                            .await?;
+                    }
+                    dialogue.update(State::Idle).await?;
+                }
+                _ => {
+                    bot.send_message(msg.chat.id, i18n::bad_admin_id(lang))
                         .await?;
                 }
             }
@@ -2141,12 +2238,59 @@ async fn callback_handler(
                 bot.send_message(chat, i18n::error_text(lang, &err)).await?;
             }
         }
-        // Ветки инвайтов/выбора группы/переноса клиента реализуются в задачах
-        // 11–12; до тех пор — Unknown-ответ, чтобы бот оставался рабочим.
-        Action::GroupInvite(_)
-        | Action::GroupInviteRevoke(_)
-        | Action::GroupAdminById(_)
-        | Action::GroupRegenAsk(_)
+        Action::GroupInvite(id) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
+            let first_admin_ever = !settings.has_any_group_admin();
+            let token = settings.create_invite(id, uid, now_epoch());
+            settings.log_event(
+                now_epoch(),
+                EventKind::InviteCreate,
+                None,
+                Some(uid),
+                Some(&format!("group={id}")),
+            );
+            let me = bot.get_me().await?;
+            let username = me.username.clone().unwrap_or_default();
+            let url = format!("https://t.me/{username}?start=inv_{token}");
+            let hours = crate::store::INVITE_TTL_SECS / 3600;
+            bot.send_message(chat, i18n::invite_link_text(lang, &url, hours))
+                .parse_mode(ParseMode::Html)
+                .await?;
+            if first_admin_ever && !settings.name_slug() {
+                bot.send_message(chat, i18n::slug_recommend(lang))
+                    .reply_markup(menu::slug_recommend_menu(lang))
+                    .await?;
+            }
+            show_group_card(&bot, chat, msg_id, lang, &settings, id).await;
+        }
+        Action::GroupInviteRevoke(id) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
+            settings.revoke_invite(id);
+            settings.log_event(
+                now_epoch(),
+                EventKind::InviteRevoke,
+                None,
+                Some(uid),
+                Some(&format!("group={id}")),
+            );
+            bot.send_message(chat, i18n::invite_revoked(lang)).await?;
+            show_group_card(&bot, chat, msg_id, lang, &settings, id).await;
+        }
+        Action::GroupAdminById(id) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
+            bot.send_message(chat, i18n::ask_admin_id(lang)).await?;
+            dialogue.update(State::AwaitingGroupAdminId { id }).await?;
+        }
+        // Ветки выбора группы/переноса клиента/перегенерации ключа группы
+        // реализуются в задаче 12; до тех пор — Unknown-ответ, чтобы бот
+        // оставался рабочим.
+        Action::GroupRegenAsk(_)
         | Action::GroupRegenRun(_)
         | Action::GroupSelect(_)
         | Action::GroupSelectMenu
