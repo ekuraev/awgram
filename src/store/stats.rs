@@ -6,6 +6,11 @@ use crate::store::Store;
 use crate::vpn::model::ONLINE_THRESHOLD_SECS;
 use rusqlite::OptionalExtension;
 
+// Сэмплы хранятся 7 дней (старые удаляются)
+const RAW_RETENTION_SECS: i64 = 7 * 86400;
+// Часовые агрегаты хранятся 90 дней (старые удаляются)
+const HOURLY_RETENTION_SECS: i64 = 90 * 86400;
+
 pub struct Sample {
     pub name: String,
     pub ip: String,
@@ -87,6 +92,61 @@ impl Store {
         });
         if let Err(e) = res {
             tracing::error!(error = %e, "ingest сэмплов не записан");
+        }
+    }
+
+    /// Сворачивает сэмплы в hourly, hourly — в daily. Обрабатываются только
+    /// часы/дни, затронутые с прошлого запуска (минус час перекрытия), поэтому
+    /// дёшев и идемпотентен: строки пересчитываются целиком (INSERT OR REPLACE).
+    pub fn rollup(&self, now: i64) {
+        let res = self.with_conn(|c| {
+            let last: i64 = c
+                .query_row("SELECT value FROM meta WHERE key='last_rollup_ts'", [], |r| r.get::<_, String>(0))
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
+            let from_hour = (last - 3600).max(0) / 3600 * 3600;
+            let tx = c.unchecked_transaction()?;
+            c.execute(
+                "INSERT OR REPLACE INTO traffic_hourly(client_id, hour_ts, rx_bytes, tx_bytes, online_minutes)
+                 SELECT client_id, ts/3600*3600, SUM(rx_delta), SUM(tx_delta), SUM(online)
+                 FROM traffic_samples WHERE ts >= ?1 GROUP BY client_id, ts/3600*3600",
+                [from_hour],
+            )?;
+            let from_day = (last - 86400).max(0) / 86400 * 86400;
+            c.execute(
+                "INSERT OR REPLACE INTO traffic_daily(client_id, day_ts, rx_bytes, tx_bytes, online_minutes)
+                 SELECT client_id, hour_ts/86400*86400, SUM(rx_bytes), SUM(tx_bytes), SUM(online_minutes)
+                 FROM traffic_hourly WHERE hour_ts >= ?1 GROUP BY client_id, hour_ts/86400*86400",
+                [from_day],
+            )?;
+            c.execute(
+                "INSERT INTO meta(key,value) VALUES('last_rollup_ts',?1)
+                 ON CONFLICT(key) DO UPDATE SET value=?1",
+                [now.to_string()],
+            )?;
+            tx.commit()
+        });
+        if let Err(e) = res {
+            tracing::error!(error = %e, "rollup не выполнен");
+        }
+    }
+
+    /// Удаляет устаревшие сэмплы (старше 7 дней) и часовые агрегаты
+    /// (старше 90 дней). Дневные агрегаты и события хранятся неограниченно.
+    pub fn prune(&self, now: i64) {
+        let res = self.with_conn(|c| {
+            c.execute(
+                "DELETE FROM traffic_samples WHERE ts < ?1",
+                [now - RAW_RETENTION_SECS],
+            )?;
+            c.execute(
+                "DELETE FROM traffic_hourly WHERE hour_ts < ?1",
+                [now - HOURLY_RETENTION_SECS],
+            )
+        });
+        if let Err(e) = res {
+            tracing::error!(error = %e, "prune не выполнен");
         }
     }
 }
@@ -199,5 +259,70 @@ mod tests {
             })
             .unwrap();
         assert_eq!(removed, Some(1060));
+    }
+
+    #[test]
+    fn rollup_aggregates_hourly_and_daily() {
+        let store = Store::open_in_memory();
+        let day = 1_700_006_400; // кратно 86400 (UTC-полночь)
+                                 // два сэмпла в час 0, один — в час 1
+        store.ingest(day + 60, &[s("alice", 100, 10, Some(day + 50))]); // базовая линия
+        store.ingest(day + 120, &[s("alice", 400, 40, Some(day + 110))]); // +300/+30
+        store.ingest(day + 3660, &[s("alice", 500, 90, None)]); // +100/+50, offline
+        store.rollup(day + 3700);
+        let hourly: Vec<(i64, i64, i64, i64)> = store.with_conn(|c| {
+            let mut st = c.prepare("SELECT hour_ts, rx_bytes, tx_bytes, online_minutes FROM traffic_hourly ORDER BY hour_ts")?;
+            let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+            rows.collect()
+        }).unwrap();
+        assert_eq!(hourly, vec![(day, 300, 30, 2), (day + 3600, 100, 50, 0)]);
+        let daily: (i64, i64, i64) = store
+            .with_conn(|c| {
+                c.query_row(
+                    "SELECT rx_bytes, tx_bytes, online_minutes FROM traffic_daily WHERE day_ts=?1",
+                    [day],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+            })
+            .unwrap();
+        assert_eq!(daily, (400, 80, 2));
+    }
+
+    #[test]
+    fn rollup_is_idempotent() {
+        let store = Store::open_in_memory();
+        let day = 1_700_006_400;
+        store.ingest(day + 60, &[s("alice", 100, 10, Some(day))]);
+        store.ingest(day + 120, &[s("alice", 200, 20, Some(day + 110))]);
+        store.rollup(day + 200);
+        store.rollup(day + 260); // повторный прогон не задваивает
+        let rx: i64 = store
+            .with_conn(|c| {
+                c.query_row(
+                    "SELECT rx_bytes FROM traffic_hourly WHERE hour_ts=?1",
+                    [day],
+                    |r| r.get(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(rx, 100);
+    }
+
+    #[test]
+    fn prune_removes_old_rows_keeps_daily() {
+        let store = Store::open_in_memory();
+        let now = 100 * 86400;
+        store.ingest(now - 8 * 86400, &[s("alice", 1, 1, None)]); // старше 7 дней
+        store.ingest(now - 60, &[s("alice", 2, 2, None)]);
+        store.rollup(now);
+        store.prune(now);
+        let samples: i64 = store
+            .with_conn(|c| c.query_row("SELECT COUNT(*) FROM traffic_samples", [], |r| r.get(0)))
+            .unwrap();
+        assert_eq!(samples, 1); // только свежий
+        let daily: i64 = store
+            .with_conn(|c| c.query_row("SELECT COUNT(*) FROM traffic_daily", [], |r| r.get(0)))
+            .unwrap();
+        assert!(daily >= 1); // дневные живут вечно
     }
 }
