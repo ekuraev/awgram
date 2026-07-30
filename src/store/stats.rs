@@ -4,6 +4,7 @@
 
 use crate::store::Store;
 use crate::vpn::model::ONLINE_THRESHOLD_SECS;
+use rusqlite::OptionalExtension;
 
 pub struct Sample {
     pub name: String,
@@ -39,7 +40,7 @@ impl Store {
                         [client_id],
                         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
                     )
-                    .ok();
+                    .optional()?;
                 let (rx_delta, tx_delta) = match prev {
                     // Счётчик уменьшился → интерфейс пересоздан (ребут/regen):
                     // новое значение и есть трафик с момента сброса.
@@ -181,5 +182,22 @@ mod tests {
             })
             .unwrap();
         assert_eq!(removed, None);
+    }
+
+    #[test]
+    fn empty_samples_marks_all_removed() {
+        let store = Store::open_in_memory();
+        store.ingest(1000, &[s("alice", 0, 0, None)]);
+        store.ingest(1060, &[]);
+        let removed: Option<i64> = store
+            .with_conn(|c| {
+                c.query_row(
+                    "SELECT removed_at FROM clients WHERE name='alice'",
+                    [],
+                    |r| r.get(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(removed, Some(1060));
     }
 }
