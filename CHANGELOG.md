@@ -7,6 +7,16 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
 
 ### 🇷🇺 Русский
 
+_Пусто — изменений после v0.8.0 пока нет._
+
+### 🇬🇧 English
+
+_Empty — no changes since v0.8.0 yet._
+
+## [0.8.0] — 2026-07-30
+
+### 🇷🇺 Русский
+
 #### ✨ Добавлено
 
 - **Собственное SQLite-хранилище** (`rusqlite`, bundled): настройки,
