@@ -447,6 +447,32 @@ async fn show_settings(bot: &Bot, chat: ChatId, msg_id: MessageId, lang: Lang, s
     .await;
 }
 
+/// Перерисовывает карточку группы: заголовок и клавиатура из одного чтения БД.
+async fn show_group_card(
+    bot: &Bot,
+    chat: ChatId,
+    msg_id: MessageId,
+    lang: Lang,
+    settings: &Store,
+    id: i64,
+) {
+    let Some(g) = settings.group(id) else {
+        let _ = bot.send_message(chat, i18n::not_found(lang)).await;
+        return;
+    };
+    let count = settings.group_client_count(id);
+    let admins = settings.group_admin_ids(id);
+    let has_invite = settings.active_invite(id, now_epoch()).is_some();
+    edit_or_send(
+        bot,
+        chat,
+        msg_id,
+        i18n::group_card(lang, &g.name, count, g.max_clients, admins.len()),
+        menu::group_card_menu(lang, id, has_invite),
+    )
+    .await;
+}
+
 async fn message_handler(
     bot: Bot,
     dialogue: MyDialogue,
@@ -656,6 +682,106 @@ async fn message_handler(
                 }
                 Err(_) => {
                     bot.send_message(msg.chat.id, i18n::bad_expiry(lang))
+                        .await?;
+                }
+            }
+        }
+        State::AwaitingGroupName => {
+            if !role.is_owner() {
+                dialogue.update(State::Idle).await?;
+                return Ok(());
+            }
+            let raw = msg.text().unwrap_or_default().trim().to_string();
+            if raw.is_empty() || raw.chars().count() > 32 {
+                bot.send_message(msg.chat.id, i18n::bad_group_name(lang))
+                    .await?;
+            } else {
+                match settings.create_group(&raw, now_epoch()) {
+                    Ok(_) => {
+                        settings.log_event(
+                            now_epoch(),
+                            EventKind::GroupCreate,
+                            None,
+                            Some(uid),
+                            Some(&raw),
+                        );
+                        bot.send_message(msg.chat.id, i18n::group_created(lang, &raw))
+                            .parse_mode(ParseMode::Html)
+                            .reply_markup(menu::main_menu(lang))
+                            .await?;
+                        dialogue.update(State::Idle).await?;
+                    }
+                    Err(crate::store::GroupError::NameTaken) => {
+                        bot.send_message(msg.chat.id, i18n::group_name_taken(lang, &raw))
+                            .parse_mode(ParseMode::Html)
+                            .await?;
+                    }
+                    Err(crate::store::GroupError::Db) => {
+                        let err = crate::error::Error::Telegram("db".into());
+                        bot.send_message(msg.chat.id, i18n::error_text(lang, &err))
+                            .await?;
+                        dialogue.update(State::Idle).await?;
+                    }
+                }
+            }
+        }
+        State::AwaitingGroupRename { id } => {
+            if !role.is_owner() {
+                dialogue.update(State::Idle).await?;
+                return Ok(());
+            }
+            let raw = msg.text().unwrap_or_default().trim().to_string();
+            if raw.is_empty() || raw.chars().count() > 32 {
+                bot.send_message(msg.chat.id, i18n::bad_group_name(lang))
+                    .await?;
+            } else {
+                match settings.rename_group(id, &raw) {
+                    Ok(()) => {
+                        settings.log_event(
+                            now_epoch(),
+                            EventKind::GroupRename,
+                            None,
+                            Some(uid),
+                            Some(&raw),
+                        );
+                        bot.send_message(msg.chat.id, i18n::group_renamed(lang, &raw))
+                            .parse_mode(ParseMode::Html)
+                            .reply_markup(menu::main_menu(lang))
+                            .await?;
+                        dialogue.update(State::Idle).await?;
+                    }
+                    Err(crate::store::GroupError::NameTaken) => {
+                        bot.send_message(msg.chat.id, i18n::group_name_taken(lang, &raw))
+                            .parse_mode(ParseMode::Html)
+                            .await?;
+                    }
+                    Err(crate::store::GroupError::Db) => {
+                        let err = crate::error::Error::Telegram("db".into());
+                        bot.send_message(msg.chat.id, i18n::error_text(lang, &err))
+                            .await?;
+                        dialogue.update(State::Idle).await?;
+                    }
+                }
+            }
+        }
+        State::AwaitingGroupQuota { id } => {
+            if !role.is_owner() {
+                dialogue.update(State::Idle).await?;
+                return Ok(());
+            }
+            let raw = msg.text().unwrap_or_default().trim().to_string();
+            match raw.parse::<i64>() {
+                Ok(n) if (0..=100_000).contains(&n) => {
+                    let quota = if n == 0 { None } else { Some(n) };
+                    settings.set_group_quota(id, quota);
+                    bot.send_message(msg.chat.id, i18n::group_quota_set(lang, quota))
+                        .reply_markup(menu::main_menu(lang))
+                        .parse_mode(ParseMode::Html)
+                        .await?;
+                    dialogue.update(State::Idle).await?;
+                }
+                _ => {
+                    bot.send_message(msg.chat.id, i18n::bad_group_quota(lang))
                         .await?;
                 }
             }
@@ -1834,22 +1960,192 @@ async fn callback_handler(
                 let _ = bot.delete_message(chat, m.id).await;
             }
         }
-        // Ветки групп реализуются в задачах 10–12; до тех пор — Unknown-ответ,
-        // чтобы каждая задача оставляла бот в рабочем состоянии.
-        Action::Groups
-        | Action::GroupCreate
-        | Action::GroupCard(_)
-        | Action::GroupRenameAsk(_)
-        | Action::GroupQuotaAsk(_)
-        | Action::GroupAdmins(_)
-        | Action::GroupAdminRemove(_, _)
-        | Action::GroupInvite(_)
+        Action::Groups => {
+            if !role.is_owner() {
+                return Ok(());
+            }
+            let groups: Vec<(crate::store::GroupRow, i64)> = settings
+                .list_groups()
+                .into_iter()
+                .map(|g| {
+                    let n = settings.group_client_count(g.id);
+                    (g, n)
+                })
+                .collect();
+            let title = if groups.is_empty() {
+                i18n::groups_empty(lang)
+            } else {
+                i18n::groups_title(lang, groups.len())
+            };
+            edit_or_send(&bot, chat, msg_id, title, menu::groups_menu(lang, &groups)).await;
+        }
+        Action::GroupCreate => {
+            if !role.is_owner() {
+                return Ok(());
+            }
+            bot.send_message(chat, i18n::ask_group_name(lang)).await?;
+            dialogue.update(State::AwaitingGroupName).await?;
+        }
+        Action::GroupCard(id) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
+            show_group_card(&bot, chat, msg_id, lang, &settings, id).await;
+        }
+        Action::GroupRenameAsk(id) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
+            bot.send_message(chat, i18n::ask_group_name(lang)).await?;
+            dialogue.update(State::AwaitingGroupRename { id }).await?;
+        }
+        Action::GroupQuotaAsk(id) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
+            bot.send_message(chat, i18n::ask_group_quota(lang)).await?;
+            dialogue.update(State::AwaitingGroupQuota { id }).await?;
+        }
+        Action::GroupAdmins(id) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
+            let admins = settings.group_admin_ids(id);
+            let name = settings.group(id).map(|g| g.name).unwrap_or_default();
+            let title = if admins.is_empty() {
+                i18n::group_admins_empty(lang)
+            } else {
+                i18n::group_admins_title(lang, &name)
+            };
+            edit_or_send(
+                &bot,
+                chat,
+                msg_id,
+                title,
+                menu::group_admins_menu(lang, id, &admins),
+            )
+            .await;
+        }
+        Action::GroupAdminRemove(id, admin_uid) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
+            settings.remove_group_admin(id, admin_uid);
+            settings.log_event(
+                now_epoch(),
+                EventKind::AdminRemove,
+                None,
+                Some(uid),
+                Some(&format!("group={id} user={admin_uid}")),
+            );
+            bot.send_message(chat, i18n::admin_removed(lang, admin_uid))
+                .await?;
+            show_group_card(&bot, chat, msg_id, lang, &settings, id).await;
+        }
+        Action::GroupDeleteAsk(id) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
+            let name = settings.group(id).map(|g| g.name).unwrap_or_default();
+            let count = settings.group_client_count(id);
+            edit_or_send(
+                &bot,
+                chat,
+                msg_id,
+                i18n::group_delete_choice(lang, &name, count),
+                menu::group_delete_choice_menu(lang, id),
+            )
+            .await;
+        }
+        Action::GroupDeleteDetach(id) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
+            let name = settings.group(id).map(|g| g.name).unwrap_or_default();
+            settings.delete_group(id);
+            settings.log_event(
+                now_epoch(),
+                EventKind::GroupDelete,
+                None,
+                Some(uid),
+                Some(&format!("detach {name}")),
+            );
+            bot.send_message(chat, i18n::group_deleted(lang, &name))
+                .parse_mode(ParseMode::Html)
+                .reply_markup(menu::main_menu(lang))
+                .await?;
+        }
+        Action::GroupDeleteAllAsk(id) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
+            let name = settings.group(id).map(|g| g.name).unwrap_or_default();
+            let count = settings.group_client_count(id);
+            edit_or_send(
+                &bot,
+                chat,
+                msg_id,
+                i18n::confirm_delete_group_clients(lang, &name, count),
+                menu::confirm_group_delete_clients_menu(lang, id),
+            )
+            .await;
+        }
+        Action::GroupDeleteAllYes(id) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
+            let name = settings.group(id).map(|g| g.name).unwrap_or_default();
+            let clients = settings.group_client_names(id);
+            let waiting = bot
+                .send_message(chat, i18n::regen_all_running(lang))
+                .await
+                .ok();
+            let mut failed = 0usize;
+            for c in &clients {
+                match vpn.remove(c).await {
+                    Ok(()) => {
+                        settings.log_event(
+                            now_epoch(),
+                            EventKind::ClientRemove,
+                            Some(c),
+                            Some(uid),
+                            Some("group_delete"),
+                        );
+                    }
+                    Err(e) => {
+                        failed += 1;
+                        tracing::error!(error = %e, client = %c, "remove при удалении группы провалился");
+                    }
+                }
+            }
+            if let Some(m) = waiting {
+                let _ = bot.delete_message(chat, m.id).await;
+            }
+            if failed == 0 {
+                settings.delete_group(id);
+                settings.log_event(
+                    now_epoch(),
+                    EventKind::GroupDelete,
+                    None,
+                    Some(uid),
+                    Some(&format!("with_clients {name}")),
+                );
+                bot.send_message(chat, i18n::group_deleted(lang, &name))
+                    .parse_mode(ParseMode::Html)
+                    .reply_markup(menu::main_menu(lang))
+                    .await?;
+            } else {
+                // Часть клиентов не удалилась — группу не трогаем, чтобы не
+                // потерять привязку выживших. Владелец повторит после починки.
+                let err = crate::error::Error::Telegram(format!("{failed} clients not removed"));
+                bot.send_message(chat, i18n::error_text(lang, &err)).await?;
+            }
+        }
+        // Ветки инвайтов/выбора группы/переноса клиента реализуются в задачах
+        // 11–12; до тех пор — Unknown-ответ, чтобы бот оставался рабочим.
+        Action::GroupInvite(_)
         | Action::GroupInviteRevoke(_)
         | Action::GroupAdminById(_)
-        | Action::GroupDeleteAsk(_)
-        | Action::GroupDeleteDetach(_)
-        | Action::GroupDeleteAllAsk(_)
-        | Action::GroupDeleteAllYes(_)
         | Action::GroupRegenAsk(_)
         | Action::GroupRegenRun(_)
         | Action::GroupSelect(_)
