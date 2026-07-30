@@ -7,3 +7,7 @@ clients_dir   = "/root/awg"
 sudo_prefix   = ""                              # "" если сервис от root; "sudo" для hardened-режима
 op_timeout_secs = 60
 state_file = "/etc/awgram/state.json"           # персистентное состояние бота: язык каждого админа + глобальный PSK-дефолт; переживает рестарт
+
+# Путь к SQLite-базе бота (настройки, статистика, история, события).
+# Каталог создаёт установщик; переживает переустановки и ребуты.
+db_path = "/var/lib/awgram/awgram.db"

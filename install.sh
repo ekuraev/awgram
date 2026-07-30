@@ -411,6 +411,7 @@ clients_dir   = "$CLIENTS_DIR"
 sudo_prefix   = "$sudo_prefix"
 op_timeout_secs = 60
 state_file = "$state_file"
+db_path = "$STATE_DIR/awgram.db"
 EOF
   chmod 640 "$CFG_FILE"
 }
@@ -566,9 +567,11 @@ cmd_install() {
   if [ "$MODE" = "hardened" ]; then
     setup_hardened
   else
+    # в hardened каталог создаёт setup_hardened (с owner=awgram); здесь — root-режим
+    install -d -m 750 "$STATE_DIR"
     rm -f "$SUDOERS_FILE"
   fi
-  # после setup_hardened: STATE_DIR уже существует с нужным владельцем
+  # STATE_DIR уже существует (создан выше) — до первого старта сервиса
   migrate_state
   install_unit
   INSTALLED_VERSION="$tag"
@@ -673,15 +676,22 @@ write_sudoers() {
   mv -f "$tmp" "$SUDOERS_FILE"
 }
 
-migrate_state() { # при смене root<->hardened переносит state.json на новый путь
+migrate_state() { # при смене root<->hardened переносит state.json и передаёт владение БД
   { [ -n "$PREV_MODE" ] && [ "$PREV_MODE" != "$MODE" ]; } || return 0
   local old new
   if [ "$PREV_MODE" = "hardened" ]; then old="$STATE_DIR/state.json"; else old="$CFG_DIR/state.json"; fi
   if [ "$MODE" = "hardened" ]; then new="$STATE_DIR/state.json"; else new="$CFG_DIR/state.json"; fi
-  { [ -f "$old" ] && [ ! -e "$new" ]; } || return 0
-  mv "$old" "$new"
-  if [ "$MODE" = "hardened" ]; then chown "$SVC_USER:$SVC_USER" "$new"; else chown root:root "$new"; fi
-  info state_migrated "$old" "$new"
+  if [ -f "$old" ] && [ ! -e "$new" ]; then
+    mv "$old" "$new"
+    if [ "$MODE" = "hardened" ]; then chown "$SVC_USER:$SVC_USER" "$new"; else chown root:root "$new"; fi
+    info state_migrated "$old" "$new"
+  fi
+  # БД (db_path) тоже живёт в STATE_DIR; при переходе в hardened существующий
+  # файл должен принадлежать awgram, иначе сервис не сможет в него писать;
+  # при переходе обратно в root ничего не делаем — root читает/пишет всё
+  if [ "$MODE" = "hardened" ] && [ -f "$STATE_DIR/awgram.db" ]; then
+    chown "$SVC_USER:$SVC_USER" "$STATE_DIR/awgram.db"
+  fi
 }
 
 setup_hardened() {
