@@ -288,8 +288,8 @@ pub fn clients_list(
 
     let total_pages = clients.len().div_ceil(per_page).max(1);
     // 🔄 всегда в nav-ряду: перерисовывает ТЕКУЩУЮ страницу со свежими данными.
-    // Callback `page:{page}` → Action::Page (он заново зовёт vpn.stats() —
-    // список переключён на stats ради last_handshake в кнопках), поэтому
+    // Callback `page:{page}` → Action::Page (он заново зовёт vpn.list_enriched() —
+    // список берёт status_code из list и last_handshake/rx/tx из stats), поэтому
     // refresh сохраняет страницу, а не сбрасывает на 0. На одностраничном списке
     // это единственная кнопка ряда; на многостраничном встаёт между пагинацией:
     // [◀️] [🔄] [▶️].
