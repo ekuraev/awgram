@@ -11,7 +11,7 @@ use crate::bot::render::{self, format_client_card, format_stats};
 use crate::bot::State;
 use crate::config::Config;
 use crate::i18n::{self, Lang};
-use crate::store::Store;
+use crate::store::{EventKind, Store};
 use crate::vpn::Vpn;
 
 #[derive(Debug, PartialEq)]
@@ -432,6 +432,13 @@ async fn message_handler(
                         .ok();
                     match vpn.modify(&name, param, &value).await {
                         Ok(out) => {
+                            settings.log_event(
+                                now_epoch(),
+                                EventKind::Modify,
+                                Some(&name),
+                                Some(uid),
+                                Some(param.as_str()),
+                            );
                             if let Some(m) = waiting {
                                 let _ = bot.delete_message(msg.chat.id, m.id).await;
                             }
@@ -552,6 +559,7 @@ async fn finish_add(
     expires: Option<&str>,
     psk: bool,
     recreate: bool,
+    uid: i64,
 ) {
     let waiting = bot.send_message(chat, i18n::creating(lang)).await.ok();
     if recreate {
@@ -568,6 +576,13 @@ async fn finish_add(
     }
     match vpn.add(name, expires, psk).await {
         Ok(res) => {
+            settings.log_event(
+                now_epoch(),
+                EventKind::ClientAdd,
+                Some(name),
+                Some(uid),
+                None,
+            );
             // Фильтр выдачи по тумблерам настроек (deliver_conf/qr/link): после
             // создания шлём только включённые артефакты. Ручная повторная выдача
             // через карточку клиента (SendConf/SendQr/SendLink/SendAll) фильтр
@@ -643,6 +658,7 @@ async fn finish_bulk(
     count: usize,
     expires: Option<&str>,
     psk: bool,
+    uid: i64,
 ) {
     let waiting = bot.send_message(chat, i18n::bulk_creating(lang)).await.ok();
 
@@ -727,6 +743,15 @@ async fn finish_bulk(
     // BulkResult{created, skipped} — все результаты, не только первый.
     match vpn.add_many(&names, expires, psk).await {
         Ok(res) => {
+            for r in &res.created {
+                settings.log_event(
+                    now_epoch(),
+                    EventKind::ClientAdd,
+                    Some(&r.name),
+                    Some(uid),
+                    Some("bulk"),
+                );
+            }
             // 5. Альбом .conf — одним sendMediaGroup (только если включён и есть
             // что отправлять; пустой альбом Telegram отклонит).
             if settings.deliver_conf() && !res.created.is_empty() {
@@ -983,6 +1008,13 @@ async fn callback_handler(
         }
         Action::ConfirmDelete(name) => match vpn.remove(&name).await {
             Ok(()) => {
+                settings.log_event(
+                    now_epoch(),
+                    EventKind::ClientRemove,
+                    Some(&name),
+                    Some(uid),
+                    None,
+                );
                 bot.send_message(chat, i18n::deleted(lang, &name))
                     .reply_markup(menu::main_menu(lang))
                     .parse_mode(ParseMode::Html)
@@ -1008,6 +1040,7 @@ async fn callback_handler(
             let waiting = bot.send_message(chat, i18n::regen_running(lang)).await.ok();
             match vpn.regen_client(&name).await {
                 Ok(res) => {
+                    settings.log_event(now_epoch(), EventKind::Regen, Some(&name), Some(uid), None);
                     if let Err(e) = render::send_client_files(&bot, chat, lang, &res).await {
                         tracing::error!(error = %e, "не удалось отправить файлы после regen");
                         bot.send_message(chat, i18n::error_text(lang, &e)).await?;
@@ -1042,7 +1075,11 @@ async fn callback_handler(
                 .send_message(chat, i18n::regen_all_running(lang))
                 .await
                 .ok();
-            match vpn.regen_all(reset_routes).await {
+            let regen_all_result = vpn.regen_all(reset_routes).await;
+            if regen_all_result.is_ok() {
+                settings.log_event(now_epoch(), EventKind::RegenAll, None, Some(uid), None);
+            }
+            match regen_all_result {
                 Ok(crate::vpn::RegenAllOutcome::NoClients) => {
                     bot.send_message(chat, i18n::clients_empty(lang))
                         .reply_markup(menu::main_menu(lang))
@@ -1136,6 +1173,7 @@ async fn callback_handler(
                 expires.as_deref(),
                 psk,
                 recreate,
+                uid,
             )
             .await;
             dialogue.exit().await?;
@@ -1242,6 +1280,7 @@ async fn callback_handler(
                 count,
                 expires.as_deref(),
                 psk,
+                uid,
             )
             .await;
             dialogue.exit().await?;
@@ -1281,6 +1320,7 @@ async fn callback_handler(
             let waiting = bot.send_message(chat, i18n::creating(lang)).await.ok();
             match vpn.restart().await {
                 Ok(out) => {
+                    settings.log_event(now_epoch(), EventKind::Restart, None, Some(uid), None);
                     if let Some(m) = waiting {
                         let _ = bot.delete_message(chat, m.id).await;
                     }
@@ -1302,6 +1342,7 @@ async fn callback_handler(
             let waiting = bot.send_message(chat, i18n::creating(lang)).await.ok();
             match vpn.repair_module().await {
                 Ok(out) => {
+                    settings.log_event(now_epoch(), EventKind::Repair, None, Some(uid), None);
                     if let Some(m) = waiting {
                         let _ = bot.delete_message(chat, m.id).await;
                     }
@@ -1384,6 +1425,7 @@ async fn callback_handler(
                 .ok();
             match vpn.backup().await {
                 Ok(bf) => {
+                    settings.log_event(now_epoch(), EventKind::Backup, None, Some(uid), None);
                     // Свежесозданный бэкап — самый новый по mtime, т.е. индекс 0 в list_backups().
                     bot.send_message(chat, i18n::backup_done(lang, &bf.name))
                         .reply_markup(menu::backup_card(lang, 0))
@@ -1495,6 +1537,7 @@ async fn callback_handler(
             let waiting = bot.send_message(chat, i18n::restoring(lang)).await.ok();
             match vpn.restore(idx).await {
                 Ok(()) => {
+                    settings.log_event(now_epoch(), EventKind::Restore, None, Some(uid), None);
                     bot.send_message(chat, i18n::restore_done(lang))
                         .reply_markup(menu::main_menu(lang))
                         .parse_mode(ParseMode::Html)
