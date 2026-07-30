@@ -173,6 +173,68 @@ impl Store {
             tracing::error!(error = %e, id, "не удалось удалить группу");
         }
     }
+
+    /// true — добавлен; false — уже был админом этой группы.
+    pub fn add_group_admin(&self, group_id: i64, user_id: i64, added_by: i64, now: i64) -> bool {
+        self.with_conn(|c| {
+            c.execute(
+                "INSERT OR IGNORE INTO group_admins(group_id, user_id, added_at, added_by)
+                 VALUES(?1, ?2, ?3, ?4)",
+                rusqlite::params![group_id, user_id, now, added_by],
+            )
+        })
+        .map(|n| n > 0)
+        .unwrap_or_else(|e| {
+            tracing::error!(error = %e, group_id, user_id, "не удалось добавить админа группы");
+            false
+        })
+    }
+
+    pub fn remove_group_admin(&self, group_id: i64, user_id: i64) {
+        if let Err(e) = self.with_conn(|c| {
+            c.execute(
+                "DELETE FROM group_admins WHERE group_id=?1 AND user_id=?2",
+                rusqlite::params![group_id, user_id],
+            )
+        }) {
+            tracing::error!(error = %e, group_id, user_id, "не удалось удалить админа группы");
+        }
+    }
+
+    pub fn group_admin_ids(&self, group_id: i64) -> Vec<i64> {
+        self.with_conn(|c| {
+            let mut stmt =
+                c.prepare("SELECT user_id FROM group_admins WHERE group_id=?1 ORDER BY added_at")?;
+            let rows = stmt.query_map([group_id], |r| r.get(0))?;
+            rows.collect()
+        })
+        .unwrap_or_default()
+    }
+
+    /// Группы пользователя, отсортированные по имени группы — стабильный
+    /// порядок для меню выбора.
+    pub fn admin_group_ids(&self, user_id: i64) -> Vec<i64> {
+        self.with_conn(|c| {
+            let mut stmt = c.prepare(
+                "SELECT ga.group_id FROM group_admins ga
+                 JOIN groups g ON g.id = ga.group_id
+                 WHERE ga.user_id=?1 ORDER BY g.name",
+            )?;
+            let rows = stmt.query_map([user_id], |r| r.get(0))?;
+            rows.collect()
+        })
+        .unwrap_or_default()
+    }
+
+    pub fn has_any_group_admin(&self) -> bool {
+        self.with_conn(|c| {
+            c.query_row("SELECT EXISTS(SELECT 1 FROM group_admins)", [], |r| {
+                r.get::<_, i64>(0)
+            })
+        })
+        .map(|v| v > 0)
+        .unwrap_or(false)
+    }
 }
 
 #[cfg(test)]
@@ -296,5 +358,30 @@ mod tests {
         store.delete_group(id);
         assert!(store.group(id).is_none());
         assert_eq!(store.client_group("alice"), None);
+    }
+
+    #[test]
+    fn add_and_remove_group_admin() {
+        let store = Store::open_in_memory();
+        let g = store.create_group("g", 0).unwrap();
+        assert!(!store.has_any_group_admin());
+        assert!(store.add_group_admin(g, 42, 1, 10));
+        assert!(!store.add_group_admin(g, 42, 1, 20)); // повторно — false
+        assert!(store.has_any_group_admin());
+        assert_eq!(store.group_admin_ids(g), vec![42]);
+        assert_eq!(store.admin_group_ids(42), vec![g]);
+        store.remove_group_admin(g, 42);
+        assert!(store.group_admin_ids(g).is_empty());
+        assert!(store.admin_group_ids(42).is_empty());
+    }
+
+    #[test]
+    fn admin_of_multiple_groups_sorted_by_group_name() {
+        let store = Store::open_in_memory();
+        let b = store.create_group("beta", 0).unwrap();
+        let a = store.create_group("alfa", 0).unwrap();
+        store.add_group_admin(b, 7, 1, 10);
+        store.add_group_admin(a, 7, 1, 10);
+        assert_eq!(store.admin_group_ids(7), vec![a, b]);
     }
 }
