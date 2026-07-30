@@ -7,9 +7,11 @@ use std::sync::Mutex;
 
 use rusqlite::Connection;
 
+mod events;
 mod settings;
 mod stats;
 
+pub use events::{EventKind, EventRow};
 pub use stats::Sample;
 
 /// SQL-батчи миграций: индекс в массиве + 1 == schema_version после применения.
