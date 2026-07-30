@@ -22,6 +22,7 @@ pub enum EventKind {
     GroupCreate,
     GroupDelete,
     GroupRename,
+    GroupQuota,
     AdminAdd,
     AdminRemove,
     InviteCreate,
@@ -44,6 +45,7 @@ impl EventKind {
             EventKind::GroupCreate => "group_create",
             EventKind::GroupDelete => "group_delete",
             EventKind::GroupRename => "group_rename",
+            EventKind::GroupQuota => "group_quota",
             EventKind::AdminAdd => "admin_add",
             EventKind::AdminRemove => "admin_remove",
             EventKind::InviteCreate => "invite_create",
@@ -141,6 +143,7 @@ mod tests {
         assert_eq!(EventKind::GroupCreate.as_str(), "group_create");
         assert_eq!(EventKind::GroupDelete.as_str(), "group_delete");
         assert_eq!(EventKind::GroupRename.as_str(), "group_rename");
+        assert_eq!(EventKind::GroupQuota.as_str(), "group_quota");
         assert_eq!(EventKind::AdminAdd.as_str(), "admin_add");
         assert_eq!(EventKind::AdminRemove.as_str(), "admin_remove");
         assert_eq!(EventKind::InviteCreate.as_str(), "invite_create");

@@ -1583,12 +1583,14 @@ pub fn btn_slug_enable(lang: Lang) -> String {
     }
     .to_string()
 }
-/// Строка «Группа: X» для карточки клиента (`client_card`).
+/// Строка «Группа: X» для карточки клиента (`client_card`). Начинается с
+/// перевода строки: карточка кончается строкой трафика без `\n`, строка
+/// группы конкатенируется к ней напрямую.
 pub fn group_label_line(lang: Lang, group: &str) -> String {
     let group = html_escape(group);
     match lang {
-        Lang::Ru => format!("🗂 Группа: {group}"),
-        Lang::En => format!("🗂 Group: {group}"),
+        Lang::Ru => format!("\n🗂 Группа: {group}"),
+        Lang::En => format!("\n🗂 Group: {group}"),
     }
 }
 
@@ -2010,5 +2012,14 @@ mod tests {
         assert!(group_card(Lang::En, "<x>", 0, None, 0).contains("&lt;x&gt;"));
         // Квота: None → «безлимит», Some → число.
         assert!(group_card(Lang::Ru, "g", 1, Some(5), 1).contains('5'));
+    }
+
+    #[test]
+    fn group_label_line_starts_on_new_line() {
+        // Карточка клиента кончается строкой трафика без \n — строка группы
+        // обязана сама начинаться с перевода строки, иначе приклеится к ней.
+        for lang in [Lang::Ru, Lang::En] {
+            assert!(group_label_line(lang, "g").starts_with('\n'));
+        }
     }
 }

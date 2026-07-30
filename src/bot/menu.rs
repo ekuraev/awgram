@@ -405,7 +405,7 @@ pub fn clients_list(
     page: usize,
     per_page: usize,
     current_filter: ClientFilter,
-    can_scope: bool,
+    is_owner: bool,
 ) -> InlineKeyboardMarkup {
     if per_page == 0 {
         return InlineKeyboardMarkup::new(vec![vec![cb(&i18n::btn_back(lang), "menu")]]);
@@ -450,16 +450,20 @@ pub fn clients_list(
     let mut filter_btns = filter_row(lang, current_filter);
     // Кнопка «🗂» — фильтр списка по группе; видна только владельцу
     // (групповому админу скоуп и так задаёт его текущая группа).
-    if can_scope {
+    if is_owner {
         filter_btns.push(cb(&i18n::btn_scope(lang), "gscope"));
     }
     rows.push(filter_btns);
-    rows.push(vec![cb(&i18n::btn_regen_all(lang), "regen_all")]);
+    // «Перевыпустить всех» — глобальное действие, групповому админу не
+    // показываем (Action::RegenAll всё равно owner-only).
+    if is_owner {
+        rows.push(vec![cb(&i18n::btn_regen_all(lang), "regen_all")]);
+    }
     rows.push(vec![cb(&i18n::btn_back(lang), "menu")]);
     InlineKeyboardMarkup::new(rows)
 }
 
-pub fn client_card(lang: Lang, name: &str, can_move: bool) -> InlineKeyboardMarkup {
+pub fn client_card(lang: Lang, name: &str, is_owner: bool) -> InlineKeyboardMarkup {
     let conf_txt = match lang {
         Lang::Ru => "📄 Конфиг",
         Lang::En => "📄 Config",
@@ -481,12 +485,16 @@ pub fn client_card(lang: Lang, name: &str, can_move: bool) -> InlineKeyboardMark
             cb(&i18n::btn_regen(lang), &format!("regen:{name}")),
             cb(del_txt, &format!("del:{name}")),
         ],
-        vec![
-            cb(&i18n::btn_modify(lang), &format!("mod:{name}")),
-            cb(&i18n::btn_history(lang), &format!("history:{name}")),
-        ],
     ];
-    if can_move {
+    // «Изменить» и «Перенести» — owner-only (их Action'ы гейтятся ролью,
+    // групповому админу мёртвые кнопки не показываем); «История» — всем.
+    let mut util_row = Vec::new();
+    if is_owner {
+        util_row.push(cb(&i18n::btn_modify(lang), &format!("mod:{name}")));
+    }
+    util_row.push(cb(&i18n::btn_history(lang), &format!("history:{name}")));
+    rows.push(util_row);
+    if is_owner {
         rows.push(vec![cb(
             &i18n::btn_client_move(lang),
             &format!("gmove:{name}"),
@@ -649,7 +657,7 @@ mod tests {
 
     #[test]
     fn client_card_has_modify_button() {
-        let data = all_callback_data(&client_card(Lang::Ru, "alice", false));
+        let data = all_callback_data(&client_card(Lang::Ru, "alice", true));
         assert!(data.contains(&"mod:alice".to_string()));
     }
 
@@ -718,7 +726,7 @@ mod tests {
             0,
             10,
             ClientFilter::All,
-            false,
+            true,
         ));
         assert!(data.contains(&"regen_all".to_string()));
     }
@@ -1187,6 +1195,56 @@ mod tests {
             false,
         ));
         assert!(!without_scope.contains(&"gscope".to_string()));
+    }
+
+    #[test]
+    fn clients_list_regen_all_only_for_owner() {
+        // «♻️ Перевыпустить всех» — глобальное owner-only действие; групповому
+        // админу кнопка не показывается (тап всё равно блокирует handler).
+        let clients = vec![Client {
+            name: "a".into(),
+            ip: String::new(),
+            client_ipv6: String::new(),
+            status: String::new(),
+            status_code: "active".into(),
+            rx: 0,
+            tx: 0,
+            last_handshake: None,
+        }];
+        let owner = all_callback_data(&clients_list(
+            Lang::Ru,
+            &clients,
+            &[],
+            0,
+            0,
+            10,
+            ClientFilter::All,
+            true,
+        ));
+        assert!(owner.contains(&"regen_all".to_string()));
+        let ga = all_callback_data(&clients_list(
+            Lang::Ru,
+            &clients,
+            &[],
+            0,
+            0,
+            10,
+            ClientFilter::All,
+            false,
+        ));
+        assert!(!ga.contains(&"regen_all".to_string()));
+    }
+
+    #[test]
+    fn client_card_modify_and_move_only_for_owner() {
+        // «Изменить» и «Перенести» — owner-only: групповому админу обе кнопки
+        // не показываются (их Action'ы и так гейтятся ролью).
+        let owner = all_callback_data(&client_card(Lang::Ru, "alice", true));
+        assert!(owner.contains(&"mod:alice".to_string()));
+        assert!(owner.contains(&"gmove:alice".to_string()));
+        let ga = all_callback_data(&client_card(Lang::Ru, "alice", false));
+        assert!(!ga.contains(&"mod:alice".to_string()));
+        assert!(!ga.contains(&"gmove:alice".to_string()));
     }
 
     #[test]

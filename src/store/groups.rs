@@ -18,6 +18,8 @@ pub struct GroupRow {
 pub enum GroupError {
     /// Имя группы занято (UNIQUE violation).
     NameTaken,
+    /// Группы с таким id нет (удалили за время диалога).
+    NotFound,
     /// Прочая ошибка БД — уже залогирована.
     Db,
 }
@@ -91,14 +93,16 @@ impl Store {
     }
 
     pub fn rename_group(&self, id: i64, name: &str) -> Result<(), GroupError> {
-        self.with_conn(|c| {
+        match self.with_conn(|c| {
             c.execute(
                 "UPDATE groups SET name=?1 WHERE id=?2",
                 rusqlite::params![name, id],
             )
-        })
-        .map(|_| ())
-        .map_err(|e| map_unique(e, "rename_group"))
+        }) {
+            Ok(0) => Err(GroupError::NotFound),
+            Ok(_) => Ok(()),
+            Err(e) => Err(map_unique(e, "rename_group")),
+        }
     }
 
     pub fn list_groups(&self) -> Vec<GroupRow> {
@@ -139,14 +143,19 @@ impl Store {
         .ok()
     }
 
-    pub fn set_group_quota(&self, id: i64, max: Option<i64>) {
-        if let Err(e) = self.with_conn(|c| {
+    /// false — группы нет (или ошибка БД): квота не сохранена.
+    pub fn set_group_quota(&self, id: i64, max: Option<i64>) -> bool {
+        match self.with_conn(|c| {
             c.execute(
                 "UPDATE groups SET max_clients=?1 WHERE id=?2",
                 rusqlite::params![max, id],
             )
         }) {
-            tracing::error!(error = %e, id, "не удалось сохранить квоту группы");
+            Ok(n) => n > 0,
+            Err(e) => {
+                tracing::error!(error = %e, id, "не удалось сохранить квоту группы");
+                false
+            }
         }
     }
 
@@ -284,10 +293,11 @@ impl Store {
     }
 
     /// Создаёт инвайт, отзывая прежний активный (у группы максимум один живой
-    /// инвайт — иначе владелец теряет контроль над тем, какая ссылка ходит по рукам).
-    pub fn create_invite(&self, group_id: i64, created_by: i64, now: i64) -> String {
+    /// инвайт — иначе владелец теряет контроль над тем, какая ссылка ходит по
+    /// рукам). None — ошибка БД: ссылки нет, «успех» не показываем.
+    pub fn create_invite(&self, group_id: i64, created_by: i64, now: i64) -> Option<String> {
         let token = gen_invite_token();
-        if let Err(e) = self.with_conn(|c| {
+        match self.with_conn(|c| {
             c.execute(
                 "DELETE FROM invites WHERE group_id=?1 AND used_by IS NULL",
                 [group_id],
@@ -298,9 +308,12 @@ impl Store {
                 rusqlite::params![token, group_id, created_by, now, now + INVITE_TTL_SECS],
             )
         }) {
-            tracing::error!(error = %e, group_id, "не удалось создать инвайт");
+            Ok(_) => Some(token),
+            Err(e) => {
+                tracing::error!(error = %e, group_id, "не удалось создать инвайт");
+                None
+            }
         }
-        token
     }
 
     pub fn active_invite(&self, group_id: i64, now: i64) -> Option<InviteRow> {
@@ -333,10 +346,11 @@ impl Store {
     }
 
     /// Атомарно: UPDATE помечает токен использованным только если он жив;
-    /// изменённых строк 0 → Invalid. Затем добавление в group_admins решает
-    /// Joined vs AlreadyAdmin. Всё под одним мьютексом соединения.
+    /// изменённых строк 0 → Invalid. Затем INSERT в group_admins решает
+    /// Joined vs AlreadyAdmin. Все три запроса — под одним захватом мьютекса
+    /// соединения: токен не может сгореть без добавления админа.
     pub fn use_invite(&self, token: &str, user_id: i64, now: i64) -> InviteUse {
-        let group_id = self.with_conn(|c| {
+        let res = self.with_conn(|c| {
             let n = c.execute(
                 "UPDATE invites SET used_by=?1, used_at=?2
                  WHERE token=?3 AND used_by IS NULL AND expires_at > ?2",
@@ -345,21 +359,21 @@ impl Store {
             if n == 0 {
                 return Ok(None);
             }
-            c.query_row(
+            let g = c.query_row(
                 "SELECT group_id FROM invites WHERE token=?1",
                 [token],
                 |r| r.get::<_, i64>(0),
-            )
-            .map(Some)
+            )?;
+            let added = c.execute(
+                "INSERT OR IGNORE INTO group_admins(group_id, user_id, added_at, added_by)
+                 VALUES(?1, ?2, ?3, ?4)",
+                rusqlite::params![g, user_id, now, user_id],
+            )?;
+            Ok(Some((g, added > 0)))
         });
-        match group_id {
-            Ok(Some(g)) => {
-                if self.add_group_admin(g, user_id, user_id, now) {
-                    InviteUse::Joined(g)
-                } else {
-                    InviteUse::AlreadyAdmin(g)
-                }
-            }
+        match res {
+            Ok(Some((g, true))) => InviteUse::Joined(g),
+            Ok(Some((g, false))) => InviteUse::AlreadyAdmin(g),
             Ok(None) => InviteUse::Invalid,
             Err(e) => {
                 tracing::error!(error = %e, "не удалось применить инвайт");
@@ -445,6 +459,23 @@ mod tests {
     }
 
     #[test]
+    fn rename_missing_group_is_not_found() {
+        // Группу могли удалить, пока владелец вводил новое имя, — UPDATE
+        // по 0 строк не должен выглядеть успехом.
+        let store = Store::open_in_memory();
+        assert_eq!(store.rename_group(999, "x"), Err(GroupError::NotFound));
+    }
+
+    #[test]
+    fn set_quota_on_missing_group_is_false() {
+        let store = Store::open_in_memory();
+        assert!(!store.set_group_quota(999, Some(5)));
+        let id = store.create_group("g", 0).unwrap();
+        assert!(store.set_group_quota(id, Some(5)));
+        assert_eq!(store.group(id).unwrap().max_clients, Some(5));
+    }
+
+    #[test]
     fn quota_and_counts() {
         let store = Store::open_in_memory();
         let id = store.create_group("g", 0).unwrap();
@@ -521,7 +552,7 @@ mod tests {
     fn invite_roundtrip_joined() {
         let store = Store::open_in_memory();
         let g = store.create_group("g", 0).unwrap();
-        let token = store.create_invite(g, 1, 100);
+        let token = store.create_invite(g, 1, 100).unwrap();
         assert_eq!(token.len(), 26);
         assert!(store.active_invite(g, 150).is_some());
         assert_eq!(store.use_invite(&token, 42, 200), InviteUse::Joined(g));
@@ -536,7 +567,7 @@ mod tests {
     fn invite_expired_is_invalid() {
         let store = Store::open_in_memory();
         let g = store.create_group("g", 0).unwrap();
-        let token = store.create_invite(g, 1, 100);
+        let token = store.create_invite(g, 1, 100).unwrap();
         let too_late = 100 + super::INVITE_TTL_SECS + 1;
         assert_eq!(store.use_invite(&token, 42, too_late), InviteUse::Invalid);
         assert!(store.active_invite(g, too_late).is_none());
@@ -547,7 +578,7 @@ mod tests {
         let store = Store::open_in_memory();
         let g = store.create_group("g", 0).unwrap();
         store.add_group_admin(g, 42, 1, 10);
-        let token = store.create_invite(g, 1, 100);
+        let token = store.create_invite(g, 1, 100).unwrap();
         assert_eq!(
             store.use_invite(&token, 42, 200),
             InviteUse::AlreadyAdmin(g)
@@ -560,8 +591,8 @@ mod tests {
     fn new_invite_revokes_previous() {
         let store = Store::open_in_memory();
         let g = store.create_group("g", 0).unwrap();
-        let first = store.create_invite(g, 1, 100);
-        let second = store.create_invite(g, 1, 200);
+        let first = store.create_invite(g, 1, 100).unwrap();
+        let second = store.create_invite(g, 1, 200).unwrap();
         assert_eq!(store.use_invite(&first, 42, 250), InviteUse::Invalid);
         assert_eq!(store.use_invite(&second, 42, 250), InviteUse::Joined(g));
     }
@@ -570,10 +601,22 @@ mod tests {
     fn revoke_invite_kills_active() {
         let store = Store::open_in_memory();
         let g = store.create_group("g", 0).unwrap();
-        let token = store.create_invite(g, 1, 100);
+        let token = store.create_invite(g, 1, 100).unwrap();
         store.revoke_invite(g);
         assert!(store.active_invite(g, 150).is_none());
         assert_eq!(store.use_invite(&token, 42, 150), InviteUse::Invalid);
+    }
+
+    #[test]
+    fn create_invite_none_on_db_error() {
+        // При ошибке БД токен не возвращается — иначе владелец получил бы
+        // «успешную» ссылку, которая никогда не сработает.
+        let store = Store::open_in_memory();
+        let g = store.create_group("g", 0).unwrap();
+        store
+            .with_conn(|c| c.execute("DROP TABLE invites", []))
+            .unwrap();
+        assert_eq!(store.create_invite(g, 1, 100), None);
     }
 
     #[test]

@@ -105,11 +105,16 @@ impl Store {
     pub fn set_deliver_link(&self, v: bool) {
         self.set_json("deliver_link", &v);
     }
-    pub fn client_filter(&self) -> ClientFilter {
-        self.get_json("client_filter").unwrap_or_default()
+    /// Фильтр списка клиентов — персональный (групповой админ не меняет вид
+    /// владельцу). Фолбэк на старый глобальный ключ: туда писали версии до
+    /// per-user фильтра и миграция из legacy state.json.
+    pub fn client_filter(&self, uid: i64) -> ClientFilter {
+        self.get_json(&format!("client_filter:{uid}"))
+            .or_else(|| self.get_json("client_filter"))
+            .unwrap_or_default()
     }
-    pub fn set_client_filter(&self, f: ClientFilter) {
-        self.set_json("client_filter", &f);
+    pub fn set_client_filter(&self, uid: i64, f: ClientFilter) {
+        self.set_json(&format!("client_filter:{uid}"), &f);
     }
 
     /// Одноразовая миграция старого state.json. Вызывается при старте.
@@ -134,7 +139,12 @@ impl Store {
         self.set_deliver_conf(legacy.deliver_conf.unwrap_or(true));
         self.set_deliver_qr(legacy.deliver_qr.unwrap_or(true));
         self.set_deliver_link(legacy.deliver_link.unwrap_or(true));
-        self.set_client_filter(legacy.client_filter.unwrap_or_default());
+        // Глобальный ключ: uid в state.json не было; per-user client_filter
+        // читает его как фолбэк.
+        self.set_json(
+            "client_filter",
+            &legacy.client_filter.unwrap_or(ClientFilter::All),
+        );
         for (uid, lang) in legacy.langs {
             self.set_lang(uid, lang);
         }
@@ -244,16 +254,16 @@ mod tests {
     #[test]
     fn client_filter_default_is_all() {
         let s = store();
-        assert_eq!(s.client_filter(), ClientFilter::All);
+        assert_eq!(s.client_filter(1), ClientFilter::All);
     }
 
     #[test]
     fn client_filter_set_and_get() {
         let s = store();
-        s.set_client_filter(ClientFilter::Online);
-        assert_eq!(s.client_filter(), ClientFilter::Online);
-        s.set_client_filter(ClientFilter::Never);
-        assert_eq!(s.client_filter(), ClientFilter::Never);
+        s.set_client_filter(1, ClientFilter::Online);
+        assert_eq!(s.client_filter(1), ClientFilter::Online);
+        s.set_client_filter(1, ClientFilter::Never);
+        assert_eq!(s.client_filter(1), ClientFilter::Never);
     }
 
     #[test]
@@ -262,10 +272,10 @@ mod tests {
         let path = dir.path().join("awgram.db");
         {
             let s = Store::open(&path).unwrap();
-            s.set_client_filter(ClientFilter::Offline);
+            s.set_client_filter(1, ClientFilter::Offline);
         }
         let s2 = Store::open(&path).unwrap();
-        assert_eq!(s2.client_filter(), ClientFilter::Offline);
+        assert_eq!(s2.client_filter(1), ClientFilter::Offline);
     }
 
     // Тесты "default_..._when_missing_in_old_state" из старого хранилища
@@ -300,7 +310,7 @@ mod tests {
         .unwrap();
         let s = store();
         s.migrate_state_json(&path);
-        assert_eq!(s.client_filter(), ClientFilter::All);
+        assert_eq!(s.client_filter(1), ClientFilter::All);
     }
 
     #[test]
@@ -323,7 +333,8 @@ mod tests {
         assert_eq!(store.lang(42), Lang::En);
         assert!(!store.deliver_conf());
         assert!(!store.deliver_link());
-        assert_eq!(store.client_filter(), ClientFilter::Online);
+        // Мигрированный глобальный фильтр виден любому uid через фолбэк.
+        assert_eq!(store.client_filter(42), ClientFilter::Online);
         assert!(!state.exists());
         assert!(state.with_extension("json.migrated").exists());
     }
@@ -339,6 +350,16 @@ mod tests {
         store.migrate_state_json(&state); // настройки уже есть — не перетирать
         assert!(store.psk_default());
         assert!(state.exists()); // файл не тронут
+    }
+
+    #[test]
+    fn client_filter_is_per_user() {
+        // Фильтр — персональный: групповой админ, переключив свой список,
+        // не должен менять вид списка владельцу (и наоборот).
+        let s = Store::open_in_memory();
+        s.set_client_filter(1, ClientFilter::Online);
+        assert_eq!(s.client_filter(1), ClientFilter::Online);
+        assert_eq!(s.client_filter(2), ClientFilter::All);
     }
 
     #[test]

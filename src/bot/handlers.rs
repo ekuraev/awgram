@@ -437,6 +437,27 @@ fn client_in_scope(role: &Role, settings: &Store, name: &str) -> bool {
     role.can_see_client(settings.client_group(name))
 }
 
+/// Группа для привязки клиента в finish_add. При recreate — существующая
+/// привязка: пересоздание не отвязывает клиента у владельца и не переносит
+/// его в текущую группу группового админа (скоуп на объект уже перепроверен
+/// вызывающим). Новому клиенту: групповому админу — его текущая группа,
+/// владельцу — без группы. None — текущей группы нет (нужен экран выбора).
+fn group_for_new_client(
+    role: &Role,
+    settings: &Store,
+    uid: i64,
+    recreate: bool,
+    name: &str,
+) -> Option<Option<i64>> {
+    if recreate {
+        return Some(settings.client_group(name));
+    }
+    match role {
+        Role::GroupAdmin(groups) => current_ga_group(settings, uid, groups).map(Some),
+        _ => Some(None),
+    }
+}
+
 /// Скоуп по роли: владельцу — сохранённый фильтр группы; групповому админу —
 /// текущая группа или None (нужен экран выбора группы).
 fn scope_for(role: &Role, settings: &Store, uid: i64) -> Option<ListScope> {
@@ -564,9 +585,12 @@ async fn message_handler(
                     Some(&format!("group={gid} via=invite")),
                 );
                 settings.set_current_group(uid, gid);
+                // multi по факту: пользователь мог уже быть админом других
+                // групп — кнопку смены группы прячем только при единственной.
+                let multi = settings.admin_group_ids(uid).len() > 1;
                 bot.send_message(msg.chat.id, i18n::joined_group(lang, &gname))
                     .parse_mode(ParseMode::Html)
-                    .reply_markup(menu::ga_main_menu(lang, false))
+                    .reply_markup(menu::ga_main_menu(lang, multi))
                     .await?;
                 // Уведомить владельцев о новом админе.
                 for owner in &cfg.admin_ids {
@@ -581,8 +605,10 @@ async fn message_handler(
             }
             crate::store::InviteUse::AlreadyAdmin(gid) => {
                 let gname = settings.group(gid).map(|g| g.name).unwrap_or_default();
+                let multi = settings.admin_group_ids(uid).len() > 1;
                 bot.send_message(msg.chat.id, i18n::joined_group(lang, &gname))
                     .parse_mode(ParseMode::Html)
+                    .reply_markup(menu::ga_main_menu(lang, multi))
                     .await?;
             }
             crate::store::InviteUse::Invalid => {
@@ -831,7 +857,8 @@ async fn message_handler(
                             .parse_mode(ParseMode::Html)
                             .await?;
                     }
-                    Err(crate::store::GroupError::Db) => {
+                    // NotFound для INSERT недостижим — сворачиваем в общий сбой.
+                    Err(crate::store::GroupError::Db | crate::store::GroupError::NotFound) => {
                         let err = crate::error::Error::Telegram("db".into());
                         bot.send_message(msg.chat.id, i18n::error_text(lang, &err))
                             .await?;
@@ -870,6 +897,13 @@ async fn message_handler(
                             .parse_mode(ParseMode::Html)
                             .await?;
                     }
+                    Err(crate::store::GroupError::NotFound) => {
+                        // Группу удалили, пока владелец вводил новое имя.
+                        bot.send_message(msg.chat.id, i18n::not_found(lang))
+                            .reply_markup(menu::main_menu(lang))
+                            .await?;
+                        dialogue.update(State::Idle).await?;
+                    }
                     Err(crate::store::GroupError::Db) => {
                         let err = crate::error::Error::Telegram("db".into());
                         bot.send_message(msg.chat.id, i18n::error_text(lang, &err))
@@ -888,11 +922,27 @@ async fn message_handler(
             match raw.parse::<i64>() {
                 Ok(n) if (0..=100_000).contains(&n) => {
                     let quota = if n == 0 { None } else { Some(n) };
-                    settings.set_group_quota(id, quota);
-                    bot.send_message(msg.chat.id, i18n::group_quota_set(lang, quota))
-                        .reply_markup(menu::main_menu(lang))
-                        .parse_mode(ParseMode::Html)
-                        .await?;
+                    if settings.set_group_quota(id, quota) {
+                        settings.log_event(
+                            now_epoch(),
+                            EventKind::GroupQuota,
+                            None,
+                            Some(uid),
+                            Some(&format!(
+                                "group={id} quota={}",
+                                quota.map_or_else(|| "unlimited".to_string(), |q| q.to_string())
+                            )),
+                        );
+                        bot.send_message(msg.chat.id, i18n::group_quota_set(lang, quota))
+                            .reply_markup(menu::main_menu(lang))
+                            .parse_mode(ParseMode::Html)
+                            .await?;
+                    } else {
+                        // Группу удалили, пока владелец вводил лимит.
+                        bot.send_message(msg.chat.id, i18n::not_found(lang))
+                            .reply_markup(menu::main_menu(lang))
+                            .await?;
+                    }
                     dialogue.update(State::Idle).await?;
                 }
                 _ => {
@@ -993,12 +1043,15 @@ async fn finish_add(
     recreate: bool,
     uid: i64,
     group: Option<i64>,
-    home: InlineKeyboardMarkup,
+    role: &Role,
 ) {
+    let home = home_menu(role, lang);
     let waiting = bot.send_message(chat, i18n::creating(lang)).await.ok();
-    // Квота группы: авторитетная проверка непосредственно перед созданием.
-    // Только для не-recreate: recreate удаляет старого клиента перед add,
-    // нетто-число клиентов группы не растёт, квоту это не расходует.
+    // Квота группы: проверка непосредственно перед созданием. Best-effort:
+    // при двух конкурентных созданиях обе проверки могут пройти до add —
+    // перелёт максимум на глубину гонки, системно квота не копится. Только
+    // для не-recreate: recreate удаляет старого клиента перед add и сохраняет
+    // его группу (group_for_new_client), нетто-число клиентов не растёт.
     if !recreate {
         if let Some(gid) = group {
             if let Some(remaining) = settings.group_remaining(gid) {
@@ -1063,15 +1116,22 @@ async fn finish_add(
             }
         }
         // Гонка: клиент появился между проверкой exists() и add — скрипт молча
-        // пропустил создание (rc 0). Показываем то же предупреждение с кнопкой
-        // пересоздания, что и при обычном совпадении имени.
+        // пропустил создание (rc 0). Показываем то же предупреждение, что и при
+        // обычном совпадении имени; кнопку «Пересоздать» — только если клиент
+        // в скоупе роли (как в AwaitingName: групповому админу нельзя
+        // предлагать пересоздание чужого клиента).
         Err(crate::error::Error::ClientExists(_)) => {
             if let Some(m) = waiting {
                 let _ = bot.delete_message(chat, m.id).await;
             }
+            let kb = if client_in_scope(role, settings, name) {
+                menu::confirm_recreate(lang, name)
+            } else {
+                home
+            };
             let _ = bot
                 .send_message(chat, i18n::client_exists(lang, name))
-                .reply_markup(menu::confirm_recreate(lang, name))
+                .reply_markup(kb)
                 .parse_mode(ParseMode::Html)
                 .await;
             return;
@@ -1258,10 +1318,11 @@ async fn render_clients_list(
     lang: Lang,
     vpn: &Vpn,
     settings: &Store,
+    uid: i64,
     page: usize,
     scope: ListScope,
     home: InlineKeyboardMarkup,
-    can_scope: bool,
+    is_owner: bool,
 ) {
     // list_enriched = status_code из list (корректная трёхцветная классификация)
     // + last_handshake/rx/tx из stats (метка времени для кнопки). Чистый stats
@@ -1271,7 +1332,7 @@ async fn render_clients_list(
         Ok(all_clients) => {
             // Фильтр + сортировка «онлайн вперёд» (🟢 → 🔴 → 🟡, внутри — по имени).
             // apply_filter_and_sort возвращает owned Vec — clients_list берёт срез по странице.
-            let filter = settings.client_filter();
+            let filter = settings.client_filter(uid);
             let clients =
                 crate::vpn::model::apply_filter_and_sort(&all_clients, filter, now_epoch());
             // Скоуп: групповому админу — его текущая группа; владельцу — выбранный
@@ -1303,7 +1364,7 @@ async fn render_clients_list(
                     page,
                     8,
                     filter,
-                    can_scope,
+                    is_owner,
                 ),
             )
             .await;
@@ -1422,6 +1483,7 @@ async fn callback_handler(
                 lang,
                 &vpn,
                 &settings,
+                uid,
                 0,
                 scope,
                 home_menu(&role, lang),
@@ -1448,6 +1510,7 @@ async fn callback_handler(
                 lang,
                 &vpn,
                 &settings,
+                uid,
                 p,
                 scope,
                 home_menu(&role, lang),
@@ -1842,21 +1905,21 @@ async fn callback_handler(
                 dialogue.exit().await?;
                 return Ok(());
             }
-            // Группа для привязки: групповому админу — его текущая группа (если
-            // она вдруг стала недоступна за время диалога — не создаём «в
-            // никуда», отправляем на выбор группы); владельцу — без группы.
-            let group = match &role {
-                Role::GroupAdmin(groups) => match current_ga_group(&settings, uid, groups) {
-                    Some(gid) => Some(gid),
-                    None => {
+            // Группа для привязки: при recreate — существующая привязка
+            // клиента (см. group_for_new_client); новому клиенту групповому
+            // админу — его текущая группа (если она стала недоступна за время
+            // диалога — не создаём «в никуда», отправляем на выбор группы),
+            // владельцу — без группы.
+            let group = match group_for_new_client(&role, &settings, uid, recreate, &name) {
+                Some(g) => g,
+                None => {
+                    if let Role::GroupAdmin(groups) = &role {
                         show_group_select(&bot, chat, msg_id, lang, &settings, groups).await;
-                        dialogue.exit().await?;
-                        return Ok(());
                     }
-                },
-                _ => None,
+                    dialogue.exit().await?;
+                    return Ok(());
+                }
             };
-            let home = home_menu(&role, lang);
             finish_add(
                 &bot,
                 chat,
@@ -1869,7 +1932,7 @@ async fn callback_handler(
                 recreate,
                 uid,
                 group,
-                home,
+                &role,
             )
             .await;
             dialogue.exit().await?;
@@ -2146,11 +2209,11 @@ async fn callback_handler(
             show_settings(&bot, chat, msg_id, lang, &settings).await;
         }
         Action::SetListFilter(f) => {
-            // Фильтр — глобальная настройка (осознанно, не per-role): виден и
-            // используется групповым админом наравне с владельцем. Скоуп
-            // (какие клиенты вообще видны) считается отдельно через scope_for,
+            // Фильтр — персональная настройка: групповой админ, переключая свой
+            // список, не меняет вид владельцу (и наоборот). Скоуп (какие
+            // клиенты вообще видны) считается отдельно через scope_for,
             // как в List/Page.
-            settings.set_client_filter(f);
+            settings.set_client_filter(uid, f);
             let scope = match scope_for(&role, &settings, uid) {
                 Some(s) => s,
                 None => {
@@ -2170,6 +2233,7 @@ async fn callback_handler(
                 lang,
                 &vpn,
                 &settings,
+                uid,
                 0,
                 scope,
                 home_menu(&role, lang),
@@ -2583,7 +2647,13 @@ async fn callback_handler(
                 return Ok(());
             }
             let first_admin_ever = !settings.has_any_group_admin();
-            let token = settings.create_invite(id, uid, now_epoch());
+            let Some(token) = settings.create_invite(id, uid, now_epoch()) else {
+                // Ошибка БД: ссылки нет — честная ошибка вместо «успеха»
+                // с мёртвым токеном.
+                let err = crate::error::Error::Telegram("db".into());
+                bot.send_message(chat, i18n::error_text(lang, &err)).await?;
+                return Ok(());
+            };
             settings.log_event(
                 now_epoch(),
                 EventKind::InviteCreate,
@@ -2655,6 +2725,17 @@ async fn callback_handler(
                     bot.send_message(chat, i18n::not_found(lang)).await?;
                     return Ok(());
                 };
+                // Квота действует и на перенос: полная группа не принимает
+                // клиентов (владелец сначала поднимает лимит). Перенос внутри
+                // той же группы — no-op, счётчик не растёт, не блокируем.
+                if settings.client_group(&name) != Some(id)
+                    && settings.group_remaining(id).is_some_and(|r| r < 1)
+                {
+                    let quota = g.max_clients.unwrap_or(0);
+                    bot.send_message(chat, i18n::quota_reached(lang, quota))
+                        .await?;
+                    return Ok(());
+                }
                 Some(g.name)
             } else {
                 None
@@ -2742,6 +2823,7 @@ async fn callback_handler(
                 lang,
                 &vpn,
                 &settings,
+                uid,
                 0,
                 scope,
                 home_menu(&role, lang),
@@ -2769,6 +2851,59 @@ pub fn schema() -> teloxide::dispatching::UpdateHandler<Box<dyn std::error::Erro
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn group_for_new_client_recreate_preserves_binding() {
+        // Recreate не трогает привязку: владелец не отвязывает клиента от его
+        // группы, групповой админ не переносит клиента в свою текущую группу.
+        let store = Store::open_in_memory();
+        let a = store.create_group("a", 0).unwrap();
+        let b = store.create_group("b", 0).unwrap();
+        store.assign_client_group("alice", Some(a), 10);
+        assert_eq!(
+            group_for_new_client(&Role::Owner, &store, 1, true, "alice"),
+            Some(Some(a))
+        );
+        store.add_group_admin(a, 42, 1, 0);
+        store.add_group_admin(b, 42, 1, 0);
+        store.set_current_group(42, b);
+        let ga = Role::GroupAdmin(vec![a, b]);
+        assert_eq!(
+            group_for_new_client(&ga, &store, 42, true, "alice"),
+            Some(Some(a))
+        );
+        // Клиент без группы у владельца остаётся без группы.
+        assert_eq!(
+            group_for_new_client(&Role::Owner, &store, 1, true, "nogroup"),
+            Some(None)
+        );
+    }
+
+    #[test]
+    fn group_for_new_client_new_client_by_role() {
+        // Новый клиент: групповому админу — его текущая группа (нет текущей →
+        // None: нужен экран выбора), владельцу — без группы.
+        let store = Store::open_in_memory();
+        let a = store.create_group("a", 0).unwrap();
+        let b = store.create_group("b", 0).unwrap();
+        store.set_current_group(42, b);
+        let ga = Role::GroupAdmin(vec![a, b]);
+        assert_eq!(
+            group_for_new_client(&ga, &store, 42, false, "bob"),
+            Some(Some(b))
+        );
+        assert_eq!(
+            group_for_new_client(&Role::Owner, &store, 1, false, "bob"),
+            Some(None)
+        );
+        // Сохранённая текущая группа отозвана → выбор группы.
+        let ga_only_a = Role::GroupAdmin(vec![a, b]);
+        store.set_current_group(43, 999);
+        assert_eq!(
+            group_for_new_client(&ga_only_a, &store, 43, false, "bob"),
+            None
+        );
+    }
 
     #[test]
     fn parses_all_actions() {
