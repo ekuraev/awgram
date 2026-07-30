@@ -8,6 +8,9 @@ use std::sync::Mutex;
 use rusqlite::Connection;
 
 mod settings;
+mod stats;
+
+pub use stats::Sample;
 
 /// SQL-батчи миграций: индекс в массиве + 1 == schema_version после применения.
 /// Только добавлять в конец — существующие батчи менять нельзя (уже применены
