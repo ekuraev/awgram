@@ -2,7 +2,8 @@ use teloxide::prelude::*;
 use teloxide::types::{ChatId, InputFile, InputMedia, InputMediaDocument, ParseMode};
 
 use crate::error::{Error, Result};
-use crate::i18n::{self, Lang};
+use crate::i18n::{self, html_escape, Lang};
+use crate::store::TrafficSummary;
 use crate::vpn::model::{format_expiry, format_handshake, human_bytes, AddResult, Client};
 
 pub fn format_client_card(lang: Lang, c: &Client, now: i64, expiry: Option<i64>) -> String {
@@ -21,12 +22,60 @@ pub fn format_client_card(lang: Lang, c: &Client, now: i64, expiry: Option<i64>)
     )
 }
 
-pub fn format_stats(lang: Lang, clients: &[Client], now: i64) -> String {
+/// Стрелка тренда за 7 дней относительно предыдущей недели. Целочисленная
+/// арифметика (без f64): рост > +15% → "↑", падение < -15% → "↓", иначе "→".
+/// Из тишины (prev==0): любой трафик (cur>0) — рост; 0 vs 0 — без изменений.
+pub fn trend_arrow(cur: u64, prev: u64) -> &'static str {
+    if prev == 0 {
+        return if cur == 0 { "→" } else { "↑" };
+    }
+    if cur * 100 > prev * 115 {
+        "↑"
+    } else if cur * 100 < prev * 85 {
+        "↓"
+    } else {
+        "→"
+    }
+}
+
+/// Расширенный экран статистики: онлайн-счётчик — из живого списка клиентов
+/// (`Client::online`), объёмы трафика — из `TrafficSummary` (SQLite-агрегаты),
+/// топ клиентов за 7 дней — из `Store::top_clients`.
+pub fn format_stats(
+    lang: Lang,
+    clients: &[Client],
+    now: i64,
+    summary: &TrafficSummary,
+    top: &[(String, u64)],
+) -> String {
     let total = clients.len();
     let online = clients.iter().filter(|c| c.online(now)).count();
-    let rx: u64 = clients.iter().map(|c| c.rx).sum();
-    let tx: u64 = clients.iter().map(|c| c.tx).sum();
-    i18n::stats_summary(lang, total, online, &human_bytes(rx), &human_bytes(tx))
+    let today = human_bytes(summary.today.rx + summary.today.tx);
+    let d7 = human_bytes(summary.d7.rx + summary.d7.tx);
+    let d30 = human_bytes(summary.d30.rx + summary.d30.tx);
+    let all_time = human_bytes(summary.total.rx + summary.total.tx);
+    let avg_day = human_bytes((summary.d7.rx + summary.d7.tx) / 7);
+    let trend = trend_arrow(
+        summary.d7.rx + summary.d7.tx,
+        summary.prev7.rx + summary.prev7.tx,
+    );
+    let top_lines = if top.is_empty() {
+        match lang {
+            Lang::Ru => "пока нет данных".to_string(),
+            Lang::En => "no data yet".to_string(),
+        }
+    } else {
+        top.iter()
+            .enumerate()
+            .map(|(i, (name, bytes))| {
+                format!("{}. {} — {}", i + 1, html_escape(name), human_bytes(*bytes))
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    i18n::stats_screen(
+        lang, total, online, &today, &d7, &d30, &all_time, &avg_day, trend, &top_lines,
+    )
 }
 
 pub async fn send_client_files(bot: &Bot, chat: ChatId, lang: Lang, res: &AddResult) -> Result<()> {
@@ -109,6 +158,7 @@ pub async fn send_client_files_filtered(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::PeriodTotals;
 
     fn sample() -> Client {
         Client {
@@ -179,8 +229,9 @@ mod tests {
                 last_handshake: None,
             },
         ];
-        let text = format_stats(Lang::Ru, &clients, now);
-        assert!(text.contains("Всего клиентов: 2"));
+        let summary = TrafficSummary::default();
+        let text = format_stats(Lang::Ru, &clients, now, &summary, &[]);
+        assert!(text.contains("Клиентов: 2"));
         assert!(text.contains("Онлайн: 1"));
     }
 
@@ -206,8 +257,72 @@ mod tests {
         stale.name = "bob".into();
         stale.status_code = "recent".into();
         stale.last_handshake = Some(now - 7200);
-        let text = format_stats(Lang::Ru, &[fresh, stale], now);
+        let summary = TrafficSummary::default();
+        let text = format_stats(Lang::Ru, &[fresh, stale], now, &summary, &[]);
         assert!(text.contains("Онлайн: 1"));
+    }
+
+    #[test]
+    fn trend_arrow_thresholds() {
+        assert_eq!(trend_arrow(110, 100), "→"); // +10% — в пределах шума
+        assert_eq!(trend_arrow(116, 100), "↑"); // > +15%
+        assert_eq!(trend_arrow(84, 100), "↓"); // < -15%
+        assert_eq!(trend_arrow(0, 0), "→");
+        assert_eq!(trend_arrow(5, 0), "↑"); // из тишины — рост
+    }
+
+    #[test]
+    fn stats_screen_contains_periods_and_top() {
+        let now = 1_700_000_000;
+        let mut c = sample();
+        c.last_handshake = Some(now - 30);
+        let summary = TrafficSummary {
+            today: PeriodTotals {
+                rx: 1024,
+                tx: 512,
+                online_minutes: 60,
+            },
+            d7: PeriodTotals {
+                rx: 7 * 1024 * 1024,
+                tx: 1024,
+                online_minutes: 600,
+            },
+            d30: PeriodTotals {
+                rx: 30 * 1024 * 1024,
+                tx: 2048,
+                online_minutes: 1200,
+            },
+            total: PeriodTotals {
+                rx: 100 * 1024 * 1024,
+                tx: 4096,
+                online_minutes: 9000,
+            },
+            prev7: PeriodTotals {
+                rx: 3 * 1024 * 1024,
+                tx: 512,
+                online_minutes: 300,
+            },
+        };
+        let top = vec![("alice".to_string(), 7 * 1024 * 1024 + 1024_u64)];
+        let text = format_stats(Lang::Ru, &[c], now, &summary, &top);
+        assert!(text.contains("Сегодня"));
+        assert!(text.contains("7 дн"));
+        assert!(text.contains("30 дн"));
+        assert!(text.contains("alice"));
+        assert!(text.contains("↑")); // 7 MB против 3 MB — рост
+        assert!(text.contains("Онлайн: 1"));
+    }
+
+    #[test]
+    fn stats_screen_empty_top_shows_placeholder() {
+        // Пустой топ не должен ломать рендер и должен показывать понятную
+        // плашку, а не пустую секцию.
+        let now = 1_700_000_000;
+        let summary = TrafficSummary::default();
+        let ru = format_stats(Lang::Ru, &[], now, &summary, &[]);
+        assert!(ru.contains("пока нет данных"));
+        let en = format_stats(Lang::En, &[], now, &summary, &[]);
+        assert!(en.contains("no data yet"));
     }
 
     #[test]

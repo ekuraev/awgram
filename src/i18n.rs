@@ -402,10 +402,30 @@ pub fn client_card(
         Lang::En => format!("👤 <b>{name}</b>\n{mark} Status: {status}\n{ip_line}📊 Traffic:  ↓ {rx} · ↑ {tx}\n⏱ Handshake: {handshake}\n📅 Expires: {expires}"),
     }
 }
-pub fn stats_summary(lang: Lang, total: usize, active: usize, rx: &str, tx: &str) -> String {
+/// Расширенный экран статистики: периоды трафика (сегодня/7/30 дней/всё
+/// время), тренд недели, среднее в день и топ клиентов. Все объёмы уже
+/// отформатированы вызывающим кодом через `human_bytes`; `top_lines` —
+/// готовый многострочный блок (или плашка «нет данных»).
+#[allow(clippy::too_many_arguments)]
+pub fn stats_screen(
+    lang: Lang,
+    total: usize,
+    online: usize,
+    today: &str,
+    d7: &str,
+    d30: &str,
+    all_time: &str,
+    avg_day: &str,
+    trend: &str,
+    top_lines: &str,
+) -> String {
     match lang {
-        Lang::Ru => format!("📊 <b>Статистика</b>\nВсего клиентов: {total}\nОнлайн: {active}\nТрафик суммарно: ↓ {rx}  ↑ {tx}"),
-        Lang::En => format!("📊 <b>Stats</b>\nTotal clients: {total}\nOnline: {active}\nTotal traffic: ↓ {rx}  ↑ {tx}"),
+        Lang::Ru => format!(
+            "📊 <b>Статистика сервера</b>\n👥 Клиентов: {total} · Онлайн: {online}\n\n📈 Трафик (↓+↑):\n• Сегодня: {today}\n• 7 дн: {d7} {trend}\n• 30 дн: {d30}\n• Всего: {all_time}\n• В среднем/день (7 дн): {avg_day}\n\n🏆 Топ за 7 дн:\n{top_lines}"
+        ),
+        Lang::En => format!(
+            "📊 <b>Server stats</b>\n👥 Clients: {total} · Online: {online}\n\n📈 Traffic (↓+↑):\n• Today: {today}\n• 7 d: {d7} {trend}\n• 30 d: {d30}\n• All time: {all_time}\n• Avg/day (7 d): {avg_day}\n\n🏆 Top for 7 d:\n{top_lines}"
+        ),
     }
 }
 pub fn clients_empty(lang: Lang) -> String {

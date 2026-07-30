@@ -896,11 +896,14 @@ async fn callback_handler(
         }
         Action::Stats => match vpn.list_enriched().await {
             Ok(clients) => {
+                let now = now_epoch();
+                let summary = settings.traffic_summary(None, now);
+                let top = settings.top_clients(7, 5, now);
                 edit_or_send(
                     &bot,
                     chat,
                     msg_id,
-                    format_stats(lang, &clients, now_epoch()),
+                    format_stats(lang, &clients, now, &summary, &top),
                     menu::main_menu(lang),
                 )
                 .await;
