@@ -7,17 +7,23 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
 
 ### 🇷🇺 Русский
 
-#### ♻️ Изменено
+#### ✨ Добавлено
 
-- **Каналы обновлений сокращены до `stable|rc`** — beta/alpha упразднены,
-  не успев использоваться: `--channel beta|alpha` теперь отклоняется с
-  ошибкой, а старое значение `CHANNEL=beta|alpha` в `setup.conf` молча
-  трактуется как `stable`. В README и `awgram-setup help` зафиксировано,
-  что каналы доступны начиная с v0.7.0, и добавлена инструкция обновления
-  для серверов со скриптом старше v0.7.0.
+- **Собственное SQLite-хранилище** (`rusqlite`, bundled): настройки,
+  статистика трафика, история подключений и операций — вместо/поверх
+  `state.json`, путь настраивается через `db_path` в конфиге.
+- **Фоновый сборщик статистики**: тик раз в 60 с опрашивает `stats --json`,
+  сохраняет сэмплы трафика и события online/offline, каждые 5 мин сворачивает
+  сэмплы в часовые/дневные агрегаты с ретенцией.
+- **Экран «Статистика»**: трафик за сегодня/7д/30д, тренд, среднее, топ
+  клиентов по трафику — данные переживают ребут сервера.
+- **Экран «История»** по каждому клиенту: подключения/отключения и операции
+  (добавление, изменение, перевыпуск, удаление) с таймстампами.
 
 #### 🐛 Исправлено
 
+- **Честный онлайн-статус**: клиент с хэндшейком старше 5 минут больше не
+  показывается онлайн (ранее порог ошибочно достигал суток).
 - **Цвет статуса клиентов в списке**: клиенты, никогда не подключавшиеся или
   давно отключившиеся, снова корректно показываются как 🟡, а не 🔴. Экран
   списка (#27) был переключён на `stats --json`, который не различает «никогда
@@ -25,25 +31,54 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
   `status_code` берётся из `list --json` (детальная классификация), а
   `last_handshake`/трафик — из `stats --json`.
 
+#### ♻️ Изменено
+
+- **Миграция `state.json` → SQLite** выполняется автоматически и один раз при
+  первом запуске новой версии; старый файл не удаляется.
+- **Каналы обновлений сокращены до `stable|rc`** — beta/alpha упразднены,
+  не успев использоваться: `--channel beta|alpha` теперь отклоняется с
+  ошибкой, а старое значение `CHANNEL=beta|alpha` в `setup.conf` молча
+  трактуется как `stable`. В README и `awgram-setup help` зафиксировано,
+  что каналы доступны начиная с v0.7.0, и добавлена инструкция обновления
+  для серверов со скриптом старше v0.7.0.
+
 ### 🇬🇧 English
 
-#### ♻️ Changed
+#### ✨ Added
 
-- **Update channels narrowed to `stable|rc`** — beta/alpha removed before
-  ever being used: `--channel beta|alpha` is now rejected with an error,
-  and a legacy `CHANNEL=beta|alpha` value in `setup.conf` is silently
-  treated as `stable`. README and `awgram-setup help` now state that
-  channels are available since v0.7.0 and include upgrade instructions
-  for servers running a pre-v0.7.0 script.
+- **Dedicated SQLite store** (`rusqlite`, bundled): settings, traffic
+  statistics, connection and operation history — replacing/augmenting
+  `state.json`; the path is configurable via `db_path` in the config.
+- **Background stats collector**: a 60s tick polls `stats --json`, saves
+  traffic samples and online/offline events, and every 5 min rolls samples
+  up into hourly/daily aggregates with retention.
+- **"Stats" screen**: traffic for today/7d/30d, trend, average, top clients
+  by traffic — data survives server reboots.
+- **Per-client "History" screen**: connections/disconnections and operations
+  (add, modify, re-issue, delete) with timestamps.
 
 #### 🐛 Fixed
 
+- **Honest online status**: a client with a handshake older than 5 minutes
+  is no longer shown as online (the threshold used to erroneously reach
+  a full day).
 - **Client status color in the list**: clients that never connected or
   disconnected long ago are correctly shown as 🟡 again, not 🔴. The list
   screen (#27) was switched to `stats --json`, which does not distinguish
   "never connected" from "was connected long ago" — both get `inactive` (🔴).
   Now `status_code` is taken from `list --json` (detailed classification),
   while `last_handshake`/traffic come from `stats --json`.
+
+#### ♻️ Changed
+
+- **`state.json` → SQLite migration** runs automatically, once, on first
+  startup of the new version; the old file is not deleted.
+- **Update channels narrowed to `stable|rc`** — beta/alpha removed before
+  ever being used: `--channel beta|alpha` is now rejected with an error,
+  and a legacy `CHANNEL=beta|alpha` value in `setup.conf` is silently
+  treated as `stable`. README and `awgram-setup help` now state that
+  channels are available since v0.7.0 and include upgrade instructions
+  for servers running a pre-v0.7.0 script.
 
 ## [0.7.0] — 2026-07-29
 

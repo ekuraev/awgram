@@ -34,7 +34,11 @@ tangible on budget VPS hosts.
 - ⚙️ **Modify client parameters**: Keepalive, DNS, AllowedIPs, Endpoint.
 - 🔄 **Config re-issue**: one client or all at once (optionally with route
   reset).
-- 📊 **Stats**: total clients, active, aggregate traffic.
+- 📊 **Detailed traffic stats**: today / 7 days / 30 days, trends, top
+  clients — a dedicated SQLite store, data survives reboots.
+- 📜 **History** of connections and operations for every client.
+- 🟢 **Honest online status**: online only when the handshake is under
+  5 minutes old.
 - 📦 **Bulk generation** — create up to 10 clients at once by prefix
   (`user-01 … user-10`) in a single action, delivering configs as an album.
 - 🎛️ **Delivery filter** — configure which artifacts (`.conf` / QR / link)
