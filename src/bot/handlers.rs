@@ -2620,8 +2620,21 @@ async fn callback_handler(
             if !role.is_owner() {
                 return Ok(());
             }
+            // Целевая группа могла исчезнуть между показом меню (Task 13
+            // ревью, Important) и кликом (другой владелец удалил её) — без
+            // этой проверки assign_client_group молча пишет висячий
+            // group_id (FK не включены), а client_moved соврал бы, что
+            // клиент отвязан от группы.
+            let gname = if let Some(id) = target {
+                let Some(g) = settings.group(id) else {
+                    bot.send_message(chat, i18n::not_found(lang)).await?;
+                    return Ok(());
+                };
+                Some(g.name)
+            } else {
+                None
+            };
             settings.assign_client_group(&name, target, now_epoch());
-            let gname = target.and_then(|gid| settings.group(gid)).map(|g| g.name);
             bot.send_message(chat, i18n::client_moved(lang, &name, gname.as_deref()))
                 .parse_mode(ParseMode::Html)
                 .reply_markup(menu::main_menu(lang))
