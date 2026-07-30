@@ -28,6 +28,25 @@ pub struct InviteRow {
     pub expires_at: i64,
 }
 
+/// Скоуп списка клиентов: все / без группы / конкретная группа.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum ListScope {
+    All,
+    NoGroup,
+    Group(i64),
+}
+
+impl ListScope {
+    /// Пропускает ли скоуп клиента с данной группой.
+    pub fn admits(self, group: Option<i64>) -> bool {
+        match self {
+            ListScope::All => true,
+            ListScope::NoGroup => group.is_none(),
+            ListScope::Group(g) => group == Some(g),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub enum InviteUse {
     /// Пользователь стал админом группы.

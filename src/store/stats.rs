@@ -27,6 +27,14 @@ pub struct PeriodTotals {
     pub online_minutes: u64,
 }
 
+impl PeriodTotals {
+    fn add(&mut self, other: &PeriodTotals) {
+        self.rx += other.rx;
+        self.tx += other.tx;
+        self.online_minutes += other.online_minutes;
+    }
+}
+
 /// Сводка трафика по стандартным окнам для UI: сегодня, 7/30 дней, всё время,
 /// плюс предыдущие 7 дней — для расчёта тренда (текущая неделя vs прошлая).
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -36,6 +44,17 @@ pub struct TrafficSummary {
     pub d30: PeriodTotals,
     pub total: PeriodTotals,
     pub prev7: PeriodTotals,
+}
+
+impl TrafficSummary {
+    /// Поэлементное сложение — агрегация сводки группы из пер-клиентских сводок.
+    pub fn add(&mut self, other: &TrafficSummary) {
+        self.today.add(&other.today);
+        self.d7.add(&other.d7);
+        self.d30.add(&other.d30);
+        self.total.add(&other.total);
+        self.prev7.add(&other.prev7);
+    }
 }
 
 impl Store {
@@ -303,6 +322,61 @@ mod tests {
         assert_eq!(s.prev7.rx, 40); // день 91
         assert_eq!(s.d30.rx, 10 + 20 + 40);
         assert_eq!(s.total.rx, 10 + 20 + 40 + 80);
+    }
+
+    #[test]
+    fn traffic_summary_add_sums_componentwise() {
+        let mut a = TrafficSummary {
+            today: PeriodTotals {
+                rx: 1,
+                tx: 2,
+                online_minutes: 3,
+            },
+            total: PeriodTotals {
+                rx: 10,
+                tx: 20,
+                online_minutes: 30,
+            },
+            ..Default::default()
+        };
+        let b = TrafficSummary {
+            today: PeriodTotals {
+                rx: 4,
+                tx: 5,
+                online_minutes: 6,
+            },
+            prev7: PeriodTotals {
+                rx: 7,
+                tx: 8,
+                online_minutes: 9,
+            },
+            ..Default::default()
+        };
+        a.add(&b);
+        assert_eq!(
+            a.today,
+            PeriodTotals {
+                rx: 5,
+                tx: 7,
+                online_minutes: 9
+            }
+        );
+        assert_eq!(
+            a.total,
+            PeriodTotals {
+                rx: 10,
+                tx: 20,
+                online_minutes: 30
+            }
+        );
+        assert_eq!(
+            a.prev7,
+            PeriodTotals {
+                rx: 7,
+                tx: 8,
+                online_minutes: 9
+            }
+        );
     }
 
     #[test]
