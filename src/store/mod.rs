@@ -13,7 +13,7 @@ mod settings;
 mod stats;
 
 pub use events::{EventKind, EventRow};
-pub use groups::{GroupError, GroupRow};
+pub use groups::{gen_invite_token, GroupError, GroupRow, InviteRow, InviteUse, INVITE_TTL_SECS};
 pub use stats::{PeriodTotals, Sample, TrafficSummary};
 
 /// SQL-батчи миграций: индекс в массиве + 1 == schema_version после применения.

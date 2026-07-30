@@ -4,6 +4,9 @@
 
 use crate::store::Store;
 
+/// Время жизни инвайта: 24 часа.
+pub const INVITE_TTL_SECS: i64 = 86_400;
+
 pub struct GroupRow {
     pub id: i64,
     pub name: String,
@@ -19,6 +22,22 @@ pub enum GroupError {
     Db,
 }
 
+pub struct InviteRow {
+    pub token: String,
+    pub group_id: i64,
+    pub expires_at: i64,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum InviteUse {
+    /// Пользователь стал админом группы.
+    Joined(i64),
+    /// Уже был админом этой группы (инвайт всё равно потрачен).
+    AlreadyAdmin(i64),
+    /// Токен не найден / истёк / использован / отозван.
+    Invalid,
+}
+
 /// UNIQUE violation → NameTaken, прочее → Db (с логом) — общий маппинг для
 /// create_group/rename_group.
 fn map_unique(e: rusqlite::Error, ctx: &str) -> GroupError {
@@ -29,6 +48,15 @@ fn map_unique(e: rusqlite::Error, ctx: &str) -> GroupError {
     }
     tracing::error!(error = %e, ctx, "ошибка БД в groups");
     GroupError::Db
+}
+
+/// 26 случайных символов a-z0-9 (~134 бита) — как gen_slug, но длиннее.
+/// Payload "inv_<token>" укладывается в лимит 64 символа start-параметра.
+pub fn gen_invite_token() -> String {
+    const CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
+    (0..26)
+        .map(|_| CHARS[rand::random_range(0..CHARS.len())] as char)
+        .collect()
 }
 
 impl Store {
@@ -235,6 +263,91 @@ impl Store {
         .map(|v| v > 0)
         .unwrap_or(false)
     }
+
+    /// Создаёт инвайт, отзывая прежний активный (у группы максимум один живой
+    /// инвайт — иначе владелец теряет контроль над тем, какая ссылка ходит по рукам).
+    pub fn create_invite(&self, group_id: i64, created_by: i64, now: i64) -> String {
+        let token = gen_invite_token();
+        if let Err(e) = self.with_conn(|c| {
+            c.execute(
+                "DELETE FROM invites WHERE group_id=?1 AND used_by IS NULL",
+                [group_id],
+            )?;
+            c.execute(
+                "INSERT INTO invites(token, group_id, created_by, created_at, expires_at)
+                 VALUES(?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![token, group_id, created_by, now, now + INVITE_TTL_SECS],
+            )
+        }) {
+            tracing::error!(error = %e, group_id, "не удалось создать инвайт");
+        }
+        token
+    }
+
+    pub fn active_invite(&self, group_id: i64, now: i64) -> Option<InviteRow> {
+        self.with_conn(|c| {
+            c.query_row(
+                "SELECT token, group_id, expires_at FROM invites
+                 WHERE group_id=?1 AND used_by IS NULL AND expires_at > ?2",
+                rusqlite::params![group_id, now],
+                |r| {
+                    Ok(InviteRow {
+                        token: r.get(0)?,
+                        group_id: r.get(1)?,
+                        expires_at: r.get(2)?,
+                    })
+                },
+            )
+        })
+        .ok()
+    }
+
+    pub fn revoke_invite(&self, group_id: i64) {
+        if let Err(e) = self.with_conn(|c| {
+            c.execute(
+                "DELETE FROM invites WHERE group_id=?1 AND used_by IS NULL",
+                [group_id],
+            )
+        }) {
+            tracing::error!(error = %e, group_id, "не удалось отозвать инвайт");
+        }
+    }
+
+    /// Атомарно: UPDATE помечает токен использованным только если он жив;
+    /// изменённых строк 0 → Invalid. Затем добавление в group_admins решает
+    /// Joined vs AlreadyAdmin. Всё под одним мьютексом соединения.
+    pub fn use_invite(&self, token: &str, user_id: i64, now: i64) -> InviteUse {
+        let group_id = self.with_conn(|c| {
+            let n = c.execute(
+                "UPDATE invites SET used_by=?1, used_at=?2
+                 WHERE token=?3 AND used_by IS NULL AND expires_at > ?2",
+                rusqlite::params![user_id, now, token],
+            )?;
+            if n == 0 {
+                return Ok(None);
+            }
+            c.query_row(
+                "SELECT group_id FROM invites WHERE token=?1",
+                [token],
+                |r| r.get::<_, i64>(0),
+            )
+            .map(Some)
+        });
+        match group_id {
+            Ok(Some(g)) => {
+                if self.add_group_admin(g, user_id, user_id, now) {
+                    InviteUse::Joined(g)
+                } else {
+                    InviteUse::AlreadyAdmin(g)
+                }
+            }
+            Ok(None) => InviteUse::Invalid,
+            Err(e) => {
+                tracing::error!(error = %e, "не удалось применить инвайт");
+                InviteUse::Invalid
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -383,5 +496,73 @@ mod tests {
         store.add_group_admin(b, 7, 1, 10);
         store.add_group_admin(a, 7, 1, 10);
         assert_eq!(store.admin_group_ids(7), vec![a, b]);
+    }
+
+    #[test]
+    fn invite_roundtrip_joined() {
+        let store = Store::open_in_memory();
+        let g = store.create_group("g", 0).unwrap();
+        let token = store.create_invite(g, 1, 100);
+        assert_eq!(token.len(), 26);
+        assert!(store.active_invite(g, 150).is_some());
+        assert_eq!(store.use_invite(&token, 42, 200), InviteUse::Joined(g));
+        assert_eq!(store.admin_group_ids(42), vec![g]);
+        // одноразовость: повторное использование — Invalid
+        assert_eq!(store.use_invite(&token, 43, 300), InviteUse::Invalid);
+        // использованный инвайт больше не активен
+        assert!(store.active_invite(g, 300).is_none());
+    }
+
+    #[test]
+    fn invite_expired_is_invalid() {
+        let store = Store::open_in_memory();
+        let g = store.create_group("g", 0).unwrap();
+        let token = store.create_invite(g, 1, 100);
+        let too_late = 100 + super::INVITE_TTL_SECS + 1;
+        assert_eq!(store.use_invite(&token, 42, too_late), InviteUse::Invalid);
+        assert!(store.active_invite(g, too_late).is_none());
+    }
+
+    #[test]
+    fn invite_for_existing_admin_reports_already() {
+        let store = Store::open_in_memory();
+        let g = store.create_group("g", 0).unwrap();
+        store.add_group_admin(g, 42, 1, 10);
+        let token = store.create_invite(g, 1, 100);
+        assert_eq!(
+            store.use_invite(&token, 42, 200),
+            InviteUse::AlreadyAdmin(g)
+        );
+        // инвайт при этом потрачен
+        assert_eq!(store.use_invite(&token, 43, 250), InviteUse::Invalid);
+    }
+
+    #[test]
+    fn new_invite_revokes_previous() {
+        let store = Store::open_in_memory();
+        let g = store.create_group("g", 0).unwrap();
+        let first = store.create_invite(g, 1, 100);
+        let second = store.create_invite(g, 1, 200);
+        assert_eq!(store.use_invite(&first, 42, 250), InviteUse::Invalid);
+        assert_eq!(store.use_invite(&second, 42, 250), InviteUse::Joined(g));
+    }
+
+    #[test]
+    fn revoke_invite_kills_active() {
+        let store = Store::open_in_memory();
+        let g = store.create_group("g", 0).unwrap();
+        let token = store.create_invite(g, 1, 100);
+        store.revoke_invite(g);
+        assert!(store.active_invite(g, 150).is_none());
+        assert_eq!(store.use_invite(&token, 42, 150), InviteUse::Invalid);
+    }
+
+    #[test]
+    fn gen_invite_token_charset() {
+        let t = super::gen_invite_token();
+        assert_eq!(t.len(), 26);
+        assert!(t
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()));
     }
 }
