@@ -42,10 +42,6 @@ pub fn resolve_role(user_id: i64, admin_ids: &[i64], store: &Store) -> Role {
     }
 }
 
-pub fn is_admin(user_id: i64, admins: &[i64]) -> bool {
-    admins.contains(&user_id)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

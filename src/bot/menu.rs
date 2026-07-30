@@ -436,7 +436,7 @@ pub fn clients_list(
     InlineKeyboardMarkup::new(rows)
 }
 
-pub fn client_card(lang: Lang, name: &str) -> InlineKeyboardMarkup {
+pub fn client_card(lang: Lang, name: &str, can_move: bool) -> InlineKeyboardMarkup {
     let conf_txt = match lang {
         Lang::Ru => "📄 Конфиг",
         Lang::En => "📄 Config",
@@ -445,7 +445,7 @@ pub fn client_card(lang: Lang, name: &str) -> InlineKeyboardMarkup {
         Lang::Ru => "🗑 Удалить",
         Lang::En => "🗑 Delete",
     };
-    InlineKeyboardMarkup::new(vec![
+    let mut rows = vec![
         vec![
             cb(conf_txt, &format!("conf:{name}")),
             cb(&i18n::btn_card_qr(lang), &format!("qr:{name}")),
@@ -462,8 +462,15 @@ pub fn client_card(lang: Lang, name: &str) -> InlineKeyboardMarkup {
             cb(&i18n::btn_modify(lang), &format!("mod:{name}")),
             cb(&i18n::btn_history(lang), &format!("history:{name}")),
         ],
-        vec![cb(&i18n::btn_back(lang), "menu")],
-    ])
+    ];
+    if can_move {
+        rows.push(vec![cb(
+            &i18n::btn_client_move(lang),
+            &format!("gmove:{name}"),
+        )]);
+    }
+    rows.push(vec![cb(&i18n::btn_back(lang), "menu")]);
+    InlineKeyboardMarkup::new(rows)
 }
 
 /// Клавиатура экрана «История»: одна кнопка возврата к карточке клиента
@@ -619,7 +626,7 @@ mod tests {
 
     #[test]
     fn client_card_has_modify_button() {
-        let data = all_callback_data(&client_card(Lang::Ru, "alice"));
+        let data = all_callback_data(&client_card(Lang::Ru, "alice", false));
         assert!(data.contains(&"mod:alice".to_string()));
     }
 
@@ -650,7 +657,7 @@ mod tests {
 
     #[test]
     fn client_card_encodes_name() {
-        let data = all_callback_data(&client_card(Lang::Ru, "alice"));
+        let data = all_callback_data(&client_card(Lang::Ru, "alice", false));
         assert!(data.contains(&"conf:alice".to_string()));
         assert!(data.contains(&"regen:alice".to_string()));
     }
@@ -1133,7 +1140,7 @@ mod tests {
 
     #[test]
     fn client_card_has_four_artifact_buttons() {
-        let data = all_callback_data(&client_card(Lang::Ru, "alice"));
+        let data = all_callback_data(&client_card(Lang::Ru, "alice", false));
         assert!(data.contains(&"conf:alice".to_string()));
         assert!(data.contains(&"qr:alice".to_string()));
         assert!(data.contains(&"uri:alice".to_string()));

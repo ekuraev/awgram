@@ -5,7 +5,7 @@ use teloxide::dispatching::{HandlerExt, UpdateFilterExt};
 use teloxide::prelude::*;
 use teloxide::types::{CallbackQuery, InlineKeyboardMarkup, InputFile, MessageId, ParseMode};
 
-use crate::auth::is_admin;
+use crate::auth::{resolve_role, Role};
 use crate::bot::menu;
 use crate::bot::render::{self, format_client_card, format_stats};
 use crate::bot::State;
@@ -66,6 +66,27 @@ pub enum Action {
     SetLink(bool),
     // --- Фильтр списка клиентов (#28) ---
     SetListFilter(crate::vpn::model::ClientFilter),
+    // --- Группы (#20): делегирование управления групповым админам ---
+    Groups,
+    GroupCreate,
+    GroupCard(i64),
+    GroupRenameAsk(i64),
+    GroupQuotaAsk(i64),
+    GroupAdmins(i64),
+    GroupAdminRemove(i64, i64),
+    GroupInvite(i64),
+    GroupInviteRevoke(i64),
+    GroupAdminById(i64),
+    GroupDeleteAsk(i64),
+    GroupDeleteDetach(i64),
+    GroupDeleteAllAsk(i64),
+    GroupDeleteAllYes(i64),
+    GroupRegenAsk(i64),
+    GroupRegenRun(i64),
+    GroupSelect(i64),
+    GroupSelectMenu,
+    MoveClientAsk(String),
+    MoveClientTo(Option<i64>, String),
     Unknown,
 }
 
@@ -88,8 +109,94 @@ fn parse_callback(data: &str) -> Action {
         "restart" => Action::Restart,
         "restart_go" => Action::RestartRun,
         "repair" => Action::RepairModule,
+        "groups" => Action::Groups,
+        "g:new" => Action::GroupCreate,
+        "g:selmenu" => Action::GroupSelectMenu,
         _ => {
-            if let Some(v) = data.strip_prefix("page:") {
+            if let Some(v) = data.strip_prefix("g:card:") {
+                v.parse().map(Action::GroupCard).unwrap_or(Action::Unknown)
+            } else if let Some(v) = data.strip_prefix("g:ren:") {
+                v.parse()
+                    .map(Action::GroupRenameAsk)
+                    .unwrap_or(Action::Unknown)
+            } else if let Some(v) = data.strip_prefix("g:quota:") {
+                v.parse()
+                    .map(Action::GroupQuotaAsk)
+                    .unwrap_or(Action::Unknown)
+            } else if let Some(v) = data.strip_prefix("g:admdel:") {
+                // ДО g:adm: (g:admdel:… тоже начинается с g:adm) — как delyes:/del:.
+                let parts: Vec<&str> = v.splitn(2, ':').collect();
+                match (
+                    parts.first().and_then(|p| p.parse().ok()),
+                    parts.get(1).and_then(|p| p.parse().ok()),
+                ) {
+                    (Some(g), Some(u)) => Action::GroupAdminRemove(g, u),
+                    _ => Action::Unknown,
+                }
+            } else if let Some(v) = data.strip_prefix("g:admid:") {
+                // ДО g:adm: — тот же принцип.
+                v.parse()
+                    .map(Action::GroupAdminById)
+                    .unwrap_or(Action::Unknown)
+            } else if let Some(v) = data.strip_prefix("g:adm:") {
+                v.parse()
+                    .map(Action::GroupAdmins)
+                    .unwrap_or(Action::Unknown)
+            } else if let Some(v) = data.strip_prefix("g:invrev:") {
+                // ДО g:inv: — тот же принцип.
+                v.parse()
+                    .map(Action::GroupInviteRevoke)
+                    .unwrap_or(Action::Unknown)
+            } else if let Some(v) = data.strip_prefix("g:inv:") {
+                v.parse()
+                    .map(Action::GroupInvite)
+                    .unwrap_or(Action::Unknown)
+            } else if let Some(v) = data.strip_prefix("g:delallyes:") {
+                // ДО g:delall: — тот же принцип.
+                v.parse()
+                    .map(Action::GroupDeleteAllYes)
+                    .unwrap_or(Action::Unknown)
+            } else if let Some(v) = data.strip_prefix("g:delall:") {
+                // ДО g:del: — тот же принцип.
+                v.parse()
+                    .map(Action::GroupDeleteAllAsk)
+                    .unwrap_or(Action::Unknown)
+            } else if let Some(v) = data.strip_prefix("g:deldetach:") {
+                // ДО g:del: — тот же принцип.
+                v.parse()
+                    .map(Action::GroupDeleteDetach)
+                    .unwrap_or(Action::Unknown)
+            } else if let Some(v) = data.strip_prefix("g:del:") {
+                v.parse()
+                    .map(Action::GroupDeleteAsk)
+                    .unwrap_or(Action::Unknown)
+            } else if let Some(v) = data.strip_prefix("g:regengo:") {
+                // ДО g:regen: — тот же принцип.
+                v.parse()
+                    .map(Action::GroupRegenRun)
+                    .unwrap_or(Action::Unknown)
+            } else if let Some(v) = data.strip_prefix("g:regen:") {
+                v.parse()
+                    .map(Action::GroupRegenAsk)
+                    .unwrap_or(Action::Unknown)
+            } else if let Some(v) = data.strip_prefix("g:sel:") {
+                v.parse()
+                    .map(Action::GroupSelect)
+                    .unwrap_or(Action::Unknown)
+            } else if let Some(v) = data.strip_prefix("gmoveto:") {
+                // ДО gmove: (gmoveto:… начинается с gmove) — как delyes:/del:.
+                let parts: Vec<&str> = v.splitn(2, ':').collect();
+                match (parts.first(), parts.get(1)) {
+                    (Some(&"none"), Some(name)) => Action::MoveClientTo(None, name.to_string()),
+                    (Some(id), Some(name)) => id
+                        .parse()
+                        .map(|g| Action::MoveClientTo(Some(g), name.to_string()))
+                        .unwrap_or(Action::Unknown),
+                    _ => Action::Unknown,
+                }
+            } else if let Some(v) = data.strip_prefix("gmove:") {
+                Action::MoveClientAsk(v.to_string())
+            } else if let Some(v) = data.strip_prefix("page:") {
                 v.parse().map(Action::Page).unwrap_or(Action::Unknown)
             } else if let Some(v) = data.strip_prefix("client:") {
                 Action::ShowClient(v.to_string())
@@ -294,6 +401,24 @@ async fn edit_or_send(
     }
 }
 
+/// Домашняя клавиатура по роли: владельцу — полное меню, групповому админу —
+/// его сокращённое (кнопка смены группы при нескольких группах).
+pub fn home_menu(role: &Role, lang: Lang) -> InlineKeyboardMarkup {
+    match role {
+        Role::GroupAdmin(groups) => menu::ga_main_menu(lang, groups.len() > 1),
+        _ => menu::main_menu(lang),
+    }
+}
+
+/// Рабочая группа группового админа: единственная — сразу она; из нескольких —
+/// сохранённый выбор, если он всё ещё валиден; иначе None (нужен экран выбора).
+pub fn current_ga_group(settings: &Store, uid: i64, groups: &[i64]) -> Option<i64> {
+    match groups {
+        [only] => Some(*only),
+        _ => settings.current_group(uid).filter(|g| groups.contains(g)),
+    }
+}
+
 /// Перерисовывает экран настроек: заголовок и клавиатура собираются из одних
 /// и тех же текущих значений тумблеров (единственное место, где они читаются
 /// для этого экрана).
@@ -339,7 +464,8 @@ async fn message_handler(
     }
 
     let uid = user_id_of_msg(&msg).unwrap_or(0);
-    if !is_admin(uid, &cfg.admin_ids) {
+    let role = resolve_role(uid, &cfg.admin_ids, &settings);
+    if role == Role::Denied {
         tracing::warn!(user_id = uid, "отклонён доступ (message)");
         let lang = settings.lang(uid);
         bot.send_message(msg.chat.id, i18n::access_denied(lang))
@@ -871,7 +997,8 @@ async fn callback_handler(
     let msg_id = src.id();
 
     let uid = user_id_of_cb(&q);
-    if !is_admin(uid, &cfg.admin_ids) {
+    let role = resolve_role(uid, &cfg.admin_ids, &settings);
+    if role == Role::Denied {
         tracing::warn!(user_id = uid, "отклонён доступ (callback)");
         return Ok(());
     }
@@ -929,7 +1056,7 @@ async fn callback_handler(
                         chat,
                         msg_id,
                         format_client_card(lang, c, now, expiry, &traffic),
-                        menu::client_card(lang, &name),
+                        menu::client_card(lang, &name, role.is_owner()),
                     )
                     .await;
                 }
@@ -1083,6 +1210,9 @@ async fn callback_handler(
             }
         }
         Action::RegenAll => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             edit_or_send(
                 &bot,
                 chat,
@@ -1093,6 +1223,9 @@ async fn callback_handler(
             .await;
         }
         Action::RegenAllRun(reset_routes) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             let waiting = bot
                 .send_message(chat, i18n::regen_all_running(lang))
                 .await
@@ -1201,6 +1334,9 @@ async fn callback_handler(
             dialogue.exit().await?;
         }
         Action::AddBulk => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             // Шаг 1/4 массового диалога: запрос префикса (текстовый ввод, а не
             // кнопка). Валидация префикса — на следующем шаге (gen_bulk_names с
             // count=1 как smoke-проверка), тут только приглашение к вводу.
@@ -1208,6 +1344,9 @@ async fn callback_handler(
             dialogue.update(State::AwaitingBulkPrefix).await?;
         }
         Action::AddBulkRun(count) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             // callback_data — untrusted input (craftable). Клавиатура эмитит
             // только 1/3/5/10, но защищаемся от crafted bulk:N извне.
             if count == 0 || count > crate::vpn::validate::MAX_BULK as usize {
@@ -1238,6 +1377,9 @@ async fn callback_handler(
                 .await?;
         }
         Action::BulkExpiry(kind) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             // Шаг 3/4: срок выбран. «custom» → текстовый ввод срока,
             // иначе — переход к выбору PSK с уже готовым expires.
             let (prefix, count) = match dialogue.get().await?.unwrap_or_default() {
@@ -1276,6 +1418,9 @@ async fn callback_handler(
             }
         }
         Action::AddBulkPsk(psk) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             // Шаг 4/4: PSK выбран — финальный забег (превентивные проверки +
             // add_many + альбом). После finish_bulk диалог закрывается.
             let (prefix, count, expires) = match dialogue.get().await?.unwrap_or_default() {
@@ -1308,9 +1453,15 @@ async fn callback_handler(
             dialogue.exit().await?;
         }
         Action::Settings => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             show_settings(&bot, chat, msg_id, lang, &settings).await;
         }
         Action::Modify(name) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             edit_or_send(
                 &bot,
                 chat,
@@ -1322,6 +1473,9 @@ async fn callback_handler(
             dialogue.update(State::AwaitingModifyParam { name }).await?;
         }
         Action::ModifyParam(name, param) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             bot.send_message(chat, i18n::ask_modify_param(lang, param))
                 .await?;
             dialogue
@@ -1329,6 +1483,9 @@ async fn callback_handler(
                 .await?;
         }
         Action::Restart => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             edit_or_send(
                 &bot,
                 chat,
@@ -1339,6 +1496,9 @@ async fn callback_handler(
             .await;
         }
         Action::RestartRun => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             let waiting = bot.send_message(chat, i18n::creating(lang)).await.ok();
             match vpn.restart().await {
                 Ok(out) => {
@@ -1361,6 +1521,9 @@ async fn callback_handler(
             }
         }
         Action::RepairModule => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             let waiting = bot.send_message(chat, i18n::creating(lang)).await.ok();
             match vpn.repair_module().await {
                 Ok(out) => {
@@ -1397,6 +1560,9 @@ async fn callback_handler(
             .await;
         }
         Action::SetLang(code) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             if let Some(l) = i18n::parse_lang(&code) {
                 settings.set_lang(uid, l);
             }
@@ -1404,26 +1570,44 @@ async fn callback_handler(
             show_settings(&bot, chat, msg_id, lang, &settings).await;
         }
         Action::SetPsk(on) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             settings.set_psk_default(on);
             show_settings(&bot, chat, msg_id, lang, &settings).await;
         }
         Action::SetSlug(on) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             settings.set_name_slug(on);
             show_settings(&bot, chat, msg_id, lang, &settings).await;
         }
         Action::SetConf(on) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             settings.set_deliver_conf(on);
             show_settings(&bot, chat, msg_id, lang, &settings).await;
         }
         Action::SetQr(on) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             settings.set_deliver_qr(on);
             show_settings(&bot, chat, msg_id, lang, &settings).await;
         }
         Action::SetLink(on) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             settings.set_deliver_link(on);
             show_settings(&bot, chat, msg_id, lang, &settings).await;
         }
         Action::SetListFilter(f) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             // Сохраняем фильтр персистентно, затем перерисовываем список с
             // НУЛЕВОЙ страницей — содержимое сменилось, старая страница могла
             // стать невалидной (напр. был на стр.2 оффлайн, переключил на онлайн).
@@ -1431,6 +1615,9 @@ async fn callback_handler(
             render_clients_list(&bot, chat, msg_id, lang, &vpn, &settings, 0).await;
         }
         Action::Backup => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             edit_or_send(
                 &bot,
                 chat,
@@ -1441,6 +1628,9 @@ async fn callback_handler(
             .await;
         }
         Action::BackupNew => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             let waiting = bot
                 .send_message(chat, i18n::backup_creating(lang))
                 .await
@@ -1463,99 +1653,122 @@ async fn callback_handler(
                 let _ = bot.delete_message(chat, m.id).await;
             }
         }
-        Action::BackupList => match vpn.list_backups() {
-            Ok(list) if list.is_empty() => {
-                edit_or_send(
-                    &bot,
-                    chat,
-                    msg_id,
-                    i18n::backups_empty(lang),
-                    menu::main_menu(lang),
-                )
-                .await;
+        Action::BackupList => {
+            if !role.is_owner() {
+                return Ok(());
             }
-            Ok(list) => {
-                edit_or_send(
-                    &bot,
-                    chat,
-                    msg_id,
-                    i18n::backups_list_title(lang),
-                    menu::backups_list(lang, &list),
-                )
-                .await;
-            }
-            Err(e) => {
-                bot.send_message(chat, i18n::error_text(lang, &e)).await?;
-            }
-        },
-        Action::BackupCard(idx) => match vpn.list_backups() {
-            Ok(list) => match list.get(idx) {
-                Some(bf) => {
-                    let text = format!("<code>{}</code>", i18n::html_escape(&bf.name));
-                    edit_or_send(&bot, chat, msg_id, text, menu::backup_card(lang, idx)).await;
-                }
-                None => {
+            match vpn.list_backups() {
+                Ok(list) if list.is_empty() => {
                     edit_or_send(
                         &bot,
                         chat,
                         msg_id,
-                        i18n::backup_not_found(lang),
+                        i18n::backups_empty(lang),
                         menu::main_menu(lang),
                     )
                     .await;
                 }
-            },
-            Err(e) => {
-                bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                Ok(list) => {
+                    edit_or_send(
+                        &bot,
+                        chat,
+                        msg_id,
+                        i18n::backups_list_title(lang),
+                        menu::backups_list(lang, &list),
+                    )
+                    .await;
+                }
+                Err(e) => {
+                    bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                }
             }
-        },
-        Action::BackupDownload(idx) => match vpn.list_backups() {
-            Ok(list) => match list.get(idx) {
-                Some(bf) => {
-                    if let Err(e) = bot.send_document(chat, InputFile::file(&bf.path)).await {
-                        tracing::error!(error = %e, "send_document провалился");
-                        let err = crate::error::Error::Telegram(e.to_string());
-                        bot.send_message(chat, i18n::error_text(lang, &err)).await?;
+        }
+        Action::BackupCard(idx) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
+            match vpn.list_backups() {
+                Ok(list) => match list.get(idx) {
+                    Some(bf) => {
+                        let text = format!("<code>{}</code>", i18n::html_escape(&bf.name));
+                        edit_or_send(&bot, chat, msg_id, text, menu::backup_card(lang, idx)).await;
                     }
+                    None => {
+                        edit_or_send(
+                            &bot,
+                            chat,
+                            msg_id,
+                            i18n::backup_not_found(lang),
+                            menu::main_menu(lang),
+                        )
+                        .await;
+                    }
+                },
+                Err(e) => {
+                    bot.send_message(chat, i18n::error_text(lang, &e)).await?;
                 }
-                None => {
-                    bot.send_message(chat, i18n::backup_not_found(lang))
-                        .reply_markup(menu::main_menu(lang))
-                        .await?;
-                }
-            },
-            Err(e) => {
-                bot.send_message(chat, i18n::error_text(lang, &e)).await?;
             }
-        },
-        Action::Restore(idx) => match vpn.list_backups() {
-            Ok(list) => match list.get(idx) {
-                Some(bf) => {
-                    edit_or_send(
-                        &bot,
-                        chat,
-                        msg_id,
-                        i18n::confirm_restore(lang, &bf.name),
-                        menu::confirm_restore(lang, idx),
-                    )
-                    .await;
-                }
-                None => {
-                    edit_or_send(
-                        &bot,
-                        chat,
-                        msg_id,
-                        i18n::backup_not_found(lang),
-                        menu::main_menu(lang),
-                    )
-                    .await;
-                }
-            },
-            Err(e) => {
-                bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+        }
+        Action::BackupDownload(idx) => {
+            if !role.is_owner() {
+                return Ok(());
             }
-        },
+            match vpn.list_backups() {
+                Ok(list) => match list.get(idx) {
+                    Some(bf) => {
+                        if let Err(e) = bot.send_document(chat, InputFile::file(&bf.path)).await {
+                            tracing::error!(error = %e, "send_document провалился");
+                            let err = crate::error::Error::Telegram(e.to_string());
+                            bot.send_message(chat, i18n::error_text(lang, &err)).await?;
+                        }
+                    }
+                    None => {
+                        bot.send_message(chat, i18n::backup_not_found(lang))
+                            .reply_markup(menu::main_menu(lang))
+                            .await?;
+                    }
+                },
+                Err(e) => {
+                    bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                }
+            }
+        }
+        Action::Restore(idx) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
+            match vpn.list_backups() {
+                Ok(list) => match list.get(idx) {
+                    Some(bf) => {
+                        edit_or_send(
+                            &bot,
+                            chat,
+                            msg_id,
+                            i18n::confirm_restore(lang, &bf.name),
+                            menu::confirm_restore(lang, idx),
+                        )
+                        .await;
+                    }
+                    None => {
+                        edit_or_send(
+                            &bot,
+                            chat,
+                            msg_id,
+                            i18n::backup_not_found(lang),
+                            menu::main_menu(lang),
+                        )
+                        .await;
+                    }
+                },
+                Err(e) => {
+                    bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                }
+            }
+        }
         Action::RestoreYes(idx) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             let waiting = bot.send_message(chat, i18n::restoring(lang)).await.ok();
             match vpn.restore(idx).await {
                 Ok(()) => {
@@ -1575,6 +1788,9 @@ async fn callback_handler(
             }
         }
         Action::Check => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             let waiting = bot.send_message(chat, i18n::check_running(lang)).await.ok();
             match vpn.check().await {
                 Ok(report) => {
@@ -1594,6 +1810,9 @@ async fn callback_handler(
             }
         }
         Action::Diagnose => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             let waiting = bot
                 .send_message(chat, i18n::diagnose_running(lang))
                 .await
@@ -1614,6 +1833,30 @@ async fn callback_handler(
             if let Some(m) = waiting {
                 let _ = bot.delete_message(chat, m.id).await;
             }
+        }
+        // Ветки групп реализуются в задачах 10–12; до тех пор — Unknown-ответ,
+        // чтобы каждая задача оставляла бот в рабочем состоянии.
+        Action::Groups
+        | Action::GroupCreate
+        | Action::GroupCard(_)
+        | Action::GroupRenameAsk(_)
+        | Action::GroupQuotaAsk(_)
+        | Action::GroupAdmins(_)
+        | Action::GroupAdminRemove(_, _)
+        | Action::GroupInvite(_)
+        | Action::GroupInviteRevoke(_)
+        | Action::GroupAdminById(_)
+        | Action::GroupDeleteAsk(_)
+        | Action::GroupDeleteDetach(_)
+        | Action::GroupDeleteAllAsk(_)
+        | Action::GroupDeleteAllYes(_)
+        | Action::GroupRegenAsk(_)
+        | Action::GroupRegenRun(_)
+        | Action::GroupSelect(_)
+        | Action::GroupSelectMenu
+        | Action::MoveClientAsk(_)
+        | Action::MoveClientTo(_, _) => {
+            bot.send_message(chat, unknown_action_text(lang)).await?;
         }
         Action::Unknown => {
             bot.send_message(chat, unknown_action_text(lang)).await?;
@@ -1823,6 +2066,52 @@ mod tests {
     }
 
     #[test]
+    fn parse_callback_group_actions() {
+        assert_eq!(parse_callback("groups"), Action::Groups);
+        assert_eq!(parse_callback("g:new"), Action::GroupCreate);
+        assert_eq!(parse_callback("g:card:5"), Action::GroupCard(5));
+        assert_eq!(parse_callback("g:ren:5"), Action::GroupRenameAsk(5));
+        assert_eq!(parse_callback("g:quota:5"), Action::GroupQuotaAsk(5));
+        assert_eq!(parse_callback("g:adm:5"), Action::GroupAdmins(5));
+        assert_eq!(
+            parse_callback("g:admdel:5:42"),
+            Action::GroupAdminRemove(5, 42)
+        );
+        assert_eq!(parse_callback("g:inv:5"), Action::GroupInvite(5));
+        assert_eq!(parse_callback("g:invrev:5"), Action::GroupInviteRevoke(5));
+        assert_eq!(parse_callback("g:admid:5"), Action::GroupAdminById(5));
+        assert_eq!(parse_callback("g:del:5"), Action::GroupDeleteAsk(5));
+        assert_eq!(
+            parse_callback("g:deldetach:5"),
+            Action::GroupDeleteDetach(5)
+        );
+        assert_eq!(parse_callback("g:delall:5"), Action::GroupDeleteAllAsk(5));
+        assert_eq!(
+            parse_callback("g:delallyes:5"),
+            Action::GroupDeleteAllYes(5)
+        );
+        assert_eq!(parse_callback("g:regen:5"), Action::GroupRegenAsk(5));
+        assert_eq!(parse_callback("g:regengo:5"), Action::GroupRegenRun(5));
+        assert_eq!(parse_callback("g:sel:5"), Action::GroupSelect(5));
+        assert_eq!(parse_callback("g:selmenu"), Action::GroupSelectMenu);
+        assert_eq!(
+            parse_callback("gmove:alice"),
+            Action::MoveClientAsk("alice".into())
+        );
+        assert_eq!(
+            parse_callback("gmoveto:none:alice"),
+            Action::MoveClientTo(None, "alice".into())
+        );
+        assert_eq!(
+            parse_callback("gmoveto:7:alice"),
+            Action::MoveClientTo(Some(7), "alice".into())
+        );
+        // мусор → Unknown
+        assert_eq!(parse_callback("g:card:x"), Action::Unknown);
+        assert_eq!(parse_callback("gmoveto:xx:alice"), Action::Unknown);
+    }
+
+    #[test]
     fn truncate_for_message_respects_char_boundary() {
         // Трёхбайтовый символ: 3500 не кратно 3 → индекс попадает внутрь
         // символа, обрезка должна откатиться к границе, а не паниковать.
@@ -1873,10 +2162,19 @@ mod tests {
             mtime: 1,
         };
 
+        fn sample_group() -> crate::store::GroupRow {
+            crate::store::GroupRow {
+                id: 1,
+                name: "family".into(),
+                max_clients: None,
+                created_at: 0,
+            }
+        }
+
         let keyboards = vec![
             menu::main_menu(Lang::Ru),
             menu::expiry_menu(Lang::Ru),
-            menu::client_card(Lang::Ru, "alice"),
+            menu::client_card(Lang::Ru, "alice", true),
             menu::confirm_delete(Lang::Ru, "bob"),
             menu::confirm_recreate(Lang::Ru, "alice"),
             menu::clients_list(
@@ -1901,17 +2199,21 @@ mod tests {
             menu::confirm_restore(Lang::Ru, 0),
             menu::modify_param_menu(Lang::Ru, "alice"),
             menu::confirm_restart_menu(Lang::Ru),
+            menu::groups_menu(Lang::Ru, &[(sample_group(), 2)]),
+            menu::group_card_menu(Lang::Ru, 1, true),
+            menu::group_card_menu(Lang::Ru, 1, false),
+            menu::group_admins_menu(Lang::Ru, 1, &[42]),
+            menu::group_delete_choice_menu(Lang::Ru, 1),
+            menu::confirm_group_delete_clients_menu(Lang::Ru, 1),
+            menu::confirm_group_regen_menu(Lang::Ru, 1),
+            menu::group_select_menu(Lang::Ru, &[sample_group()]),
+            menu::ga_main_menu(Lang::Ru, true),
+            menu::move_client_menu(Lang::Ru, "alice", &[sample_group()]),
+            menu::slug_recommend_menu(Lang::Ru),
         ];
 
         for kb in &keyboards {
             for data in all_callback_data(kb) {
-                // «🗂 Группы» добавлена в main_menu в Task 8 (клавиатуры групп);
-                // parse_callback получит ветку `groups`/`g:*`/`gmove*` в Task 9
-                // вместе с остальными префиксами группового раздела — там же
-                // этот тест расширится проверкой на сами group-клавиатуры.
-                if data == "groups" {
-                    continue;
-                }
                 assert_ne!(
                     parse_callback(&data),
                     Action::Unknown,
