@@ -273,7 +273,7 @@ pub fn clients_list(
         .skip(start)
         .take(per_page)
         .map(|(i, c)| {
-            let mark = c.status_mark();
+            let mark = c.mark(now);
             // Компактный handshake («2 мин», «никогда») — требуется stats()
             // (last_handshake есть только в stats --json, не в list --json).
             let hs = format_handshake_compact(lang, now, c.last_handshake.unwrap_or(0));
@@ -789,8 +789,9 @@ mod tests {
 
     #[test]
     fn clients_list_three_color_marks_by_status_code() {
-        // 🟢 active / 🟡 no_handshake / 🔴 inactive — трёхцветная индикация
-        // вместо прежнего бинарного active→🟢 / всё прочее→🔴.
+        // 🟢 недавний handshake / 🟡 никогда не подключался / 🔴 handshake давно —
+        // трёхцветная индикация, цвет считает бот из last_handshake (см. model::mark).
+        let now = 1_700_000_000;
         let clients = vec![
             Client {
                 name: "online".into(),
@@ -800,7 +801,7 @@ mod tests {
                 status_code: "active".into(),
                 rx: 0,
                 tx: 0,
-                last_handshake: None,
+                last_handshake: Some(now - 30), // недавно — онлайн
             },
             Client {
                 name: "never".into(),
@@ -820,14 +821,14 @@ mod tests {
                 status_code: "inactive".into(),
                 rx: 0,
                 tx: 0,
-                last_handshake: None,
+                last_handshake: Some(now - 6 * 3600), // был, но давно
             },
         ];
         let texts = all_button_texts(&clients_list(
             Lang::Ru,
             &clients,
             &[],
-            0,
+            now,
             0,
             10,
             ClientFilter::All,

@@ -6,11 +6,12 @@ use crate::i18n::{self, Lang};
 use crate::vpn::model::{format_expiry, format_handshake, human_bytes, AddResult, Client};
 
 pub fn format_client_card(lang: Lang, c: &Client, now: i64, expiry: Option<i64>) -> String {
-    let status = i18n::status_label(lang, &c.status_code, &c.status);
+    let mark = c.mark(now);
+    let status = i18n::status_label_mark(lang, mark);
     i18n::client_card(
         lang,
         &c.name,
-        &c.status_code,
+        mark,
         &status,
         &c.ip,
         &human_bytes(c.rx),
@@ -20,12 +21,12 @@ pub fn format_client_card(lang: Lang, c: &Client, now: i64, expiry: Option<i64>)
     )
 }
 
-pub fn format_stats(lang: Lang, clients: &[Client]) -> String {
+pub fn format_stats(lang: Lang, clients: &[Client], now: i64) -> String {
     let total = clients.len();
-    let active = clients.iter().filter(|c| c.active()).count();
+    let online = clients.iter().filter(|c| c.online(now)).count();
     let rx: u64 = clients.iter().map(|c| c.rx).sum();
     let tx: u64 = clients.iter().map(|c| c.tx).sum();
-    i18n::stats_summary(lang, total, active, &human_bytes(rx), &human_bytes(tx))
+    i18n::stats_summary(lang, total, online, &human_bytes(rx), &human_bytes(tx))
 }
 
 pub async fn send_client_files(bot: &Bot, chat: ChatId, lang: Lang, res: &AddResult) -> Result<()> {
@@ -118,7 +119,7 @@ mod tests {
             status_code: "active".into(),
             rx: 1288490188,
             tx: 356515840,
-            last_handshake: Some(1752000000),
+            last_handshake: Some(1_700_000_000 - 30), // близко к now — статус 🟢
         }
     }
 
@@ -128,7 +129,7 @@ mod tests {
         let expiry = Some(now + 5 * 86400);
         let text = format_client_card(Lang::Ru, &sample(), now, expiry);
         assert!(text.contains("alice"));
-        assert!(text.contains("Активен"));
+        assert!(text.contains("Онлайн"));
         assert!(text.contains("1.2 GB"));
         assert!(text.contains("Рукопожатие:")); // строка рукопожатия отрендерена
         assert!(text.contains("ещё")); // истечение через 5 дней
@@ -153,7 +154,7 @@ mod tests {
         assert!(text.contains("Expires:"));
         assert!(text.contains("1.2 GB"));
         // translated values, not raw backend Russian text
-        assert!(text.contains("Active"));
+        assert!(text.contains("Online"));
         assert!(text.contains("just now")); // last_handshake is close to `now`
         assert!(text.contains("left")); // expiry is in the future
                                         // no Russian leaked into the EN card
@@ -164,8 +165,9 @@ mod tests {
 
     #[test]
     fn stats_counts_clients() {
+        let now = 1_700_000_000;
         let clients = vec![
-            sample(),
+            sample(), // last_handshake близко к now → онлайн
             Client {
                 name: "bob".into(),
                 ip: "10.0.0.3".into(),
@@ -177,9 +179,35 @@ mod tests {
                 last_handshake: None,
             },
         ];
-        let text = format_stats(Lang::Ru, &clients);
-        assert!(text.contains("2")); // всего клиентов
-        assert!(text.contains("1")); // активных
+        let text = format_stats(Lang::Ru, &clients, now);
+        assert!(text.contains("Всего клиентов: 2"));
+        assert!(text.contains("Онлайн: 1"));
+    }
+
+    // Регресс бага: хэндшейк 6 часов назад больше НЕ «Активен»/🟢.
+    #[test]
+    fn card_stale_handshake_is_offline() {
+        let now = 1_700_000_000;
+        let mut c = sample();
+        c.status_code = "recent".into(); // инсталлер считает это «недавно»
+        c.last_handshake = Some(now - 6 * 3600); // а на деле — 6 часов назад
+        let text = format_client_card(Lang::Ru, &c, now, None);
+        assert!(text.contains("🔴"));
+        assert!(text.contains("Оффлайн"));
+        assert!(!text.contains("🟢"));
+    }
+
+    #[test]
+    fn stats_counts_online_by_handshake() {
+        let now = 1_700_000_000;
+        let mut fresh = sample();
+        fresh.last_handshake = Some(now - 30);
+        let mut stale = sample();
+        stale.name = "bob".into();
+        stale.status_code = "recent".into();
+        stale.last_handshake = Some(now - 7200);
+        let text = format_stats(Lang::Ru, &[fresh, stale], now);
+        assert!(text.contains("Онлайн: 1"));
     }
 
     #[test]

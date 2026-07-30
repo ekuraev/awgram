@@ -22,20 +22,6 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn active(&self) -> bool {
-        self.status_code == "active"
-    }
-
-    /// Трёхцветная метка статуса для индикации в списке и карточке.
-    /// Опирается на стабильный `status_code` инсталлера (а не на handshake):
-    /// инсталлер уже считает эти градации корректно с учётом keepalive/недавности.
-    ///   🟢 `active` / `recent`      — подключён / был недавно
-    ///   🟡 `no_handshake` / `no_data` — никогда не подключался / нет данных
-    ///   🔴 прочее (`inactive`/`key_error`/...) — был, но давно / ошибка ключа
-    pub fn status_mark(&self) -> &'static str {
-        status_mark_code(&self.status_code)
-    }
-
     /// Цвет статуса, вычисленный ботом из `last_handshake` (см. `status_mark_at`).
     /// `now` — текущее время (epoch, сек), передаётся явно ради тестируемости.
     pub fn mark(&self, now: i64) -> &'static str {
@@ -45,16 +31,6 @@ impl Client {
     /// Онлайн ли клиент прямо сейчас (хэндшейк моложе `ONLINE_THRESHOLD_SECS`).
     pub fn online(&self, now: i64) -> bool {
         self.mark(now) == "🟢"
-    }
-}
-
-/// Цвет статуса по строковому `status_code`. Вынесен из `Client::status_mark`,
-/// чтобы слой `i18n` мог выбрать эмодзи для карточки без владения `Client`.
-pub fn status_mark_code(status_code: &str) -> &'static str {
-    match status_code {
-        "active" | "recent" => "🟢",
-        "no_handshake" | "no_data" => "🟡",
-        _ => "🔴",
     }
 }
 
@@ -415,17 +391,6 @@ mod tests {
     }
 
     #[test]
-    fn active_true_only_for_active_status_code() {
-        let clients = parse_client_list(LIST_JSON).unwrap();
-        assert!(clients[0].active());
-        assert!(!clients[1].active());
-
-        let stats = parse_client_list(STATS_JSON).unwrap();
-        assert!(stats[0].active());
-        assert!(!stats[1].active());
-    }
-
-    #[test]
     fn human_bytes_formats() {
         assert_eq!(human_bytes(0), "0 B");
         assert_eq!(human_bytes(512), "512 B");
@@ -614,46 +579,6 @@ mod tests {
     fn format_handshake_compact_boundary_60_seconds() {
         let now = 2_000_000;
         assert_eq!(format_handshake_compact(Lang::Ru, now, now - 60), "1 мин");
-    }
-
-    // --- status_mark_code: трёхцветная карта по status_code инсталлера. ---
-
-    #[test]
-    fn status_mark_green_for_active_and_recent() {
-        assert_eq!(status_mark_code("active"), "🟢");
-        assert_eq!(status_mark_code("recent"), "🟢");
-    }
-
-    #[test]
-    fn status_mark_yellow_for_no_handshake_and_no_data() {
-        // Клиент, который НИКОГДА не подключался / нет данных — отличается от
-        // «был, но давно»: жёлтый, а не красный.
-        assert_eq!(status_mark_code("no_handshake"), "🟡");
-        assert_eq!(status_mark_code("no_data"), "🟡");
-    }
-
-    #[test]
-    fn status_mark_red_for_inactive_key_error_and_unknown() {
-        assert_eq!(status_mark_code("inactive"), "🔴");
-        assert_eq!(status_mark_code("key_error"), "🔴");
-        // Неизвестный код в будущей версии инсталлера — безопасный дефолт красный.
-        assert_eq!(status_mark_code("totally_new_code"), "🔴");
-        assert_eq!(status_mark_code(""), "🔴");
-    }
-
-    #[test]
-    fn client_status_mark_matches_helper() {
-        let c = Client {
-            name: "x".into(),
-            ip: String::new(),
-            client_ipv6: String::new(),
-            status: String::new(),
-            status_code: "no_handshake".into(),
-            rx: 0,
-            tx: 0,
-            last_handshake: None,
-        };
-        assert_eq!(c.status_mark(), "🟡");
     }
 
     // --- ClientFilter: as_str/from_str roundtrip + mark --- //

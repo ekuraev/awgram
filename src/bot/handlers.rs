@@ -869,13 +869,13 @@ async fn callback_handler(
             // переживает навигацию по страницам (Action::Page его не меняет).
             render_clients_list(&bot, chat, msg_id, lang, &vpn, &settings, p).await;
         }
-        Action::Stats => match vpn.stats().await {
+        Action::Stats => match vpn.list_enriched().await {
             Ok(clients) => {
                 edit_or_send(
                     &bot,
                     chat,
                     msg_id,
-                    format_stats(lang, &clients),
+                    format_stats(lang, &clients, now_epoch()),
                     menu::main_menu(lang),
                 )
                 .await;
@@ -884,7 +884,7 @@ async fn callback_handler(
                 bot.send_message(chat, i18n::error_text(lang, &e)).await?;
             }
         },
-        Action::ShowClient(name) => match vpn.stats().await {
+        Action::ShowClient(name) => match vpn.list_enriched().await {
             Ok(clients) => match clients.iter().find(|c| c.name == name) {
                 Some(c) => {
                     let now = now_epoch();
