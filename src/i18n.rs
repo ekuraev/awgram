@@ -444,6 +444,15 @@ pub fn history_empty(lang: Lang, name: &str) -> String {
     }
 }
 
+/// Плейсхолдер для блока «топ клиентов» на экране статистики, когда данных
+/// за период ещё нет (пустой список).
+pub fn top_empty(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "пока нет данных".to_string(),
+        Lang::En => "no data yet".to_string(),
+    }
+}
+
 /// Подпись события журнала для экрана «История». `kind` — строка из БД
 /// (см. `EventRow`): online/offline пишет `ingest`, остальные — `log_event`.
 /// Неизвестный вид события — возвращаем `kind` как есть (не должно случаться

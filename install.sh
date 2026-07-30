@@ -688,9 +688,14 @@ migrate_state() { # при смене root<->hardened переносит state.j
   fi
   # БД (db_path) тоже живёт в STATE_DIR; при переходе в hardened существующий
   # файл должен принадлежать awgram, иначе сервис не сможет в него писать;
+  # старый root-процесс мог держать БД в режиме WAL, тогда рядом лежат
+  # awgram.db-wal/awgram.db-shm (тоже root-owned) — переносим владение на все
+  # файлы БД, иначе новый процесс упадёт с EACCES при открытии;
   # при переходе обратно в root ничего не делаем — root читает/пишет всё
-  if [ "$MODE" = "hardened" ] && [ -f "$STATE_DIR/awgram.db" ]; then
-    chown "$SVC_USER:$SVC_USER" "$STATE_DIR/awgram.db"
+  if [ "$MODE" = "hardened" ]; then
+    for f in "$STATE_DIR"/awgram.db*; do
+      [ -f "$f" ] && chown "$SVC_USER:$SVC_USER" "$f"
+    done
   fi
 }
 

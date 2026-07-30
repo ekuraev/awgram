@@ -121,10 +121,7 @@ pub fn format_stats(
         summary.prev7.rx + summary.prev7.tx,
     );
     let top_lines = if top.is_empty() {
-        match lang {
-            Lang::Ru => "пока нет данных".to_string(),
-            Lang::En => "no data yet".to_string(),
-        }
+        i18n::top_empty(lang)
     } else {
         top.iter()
             .enumerate()

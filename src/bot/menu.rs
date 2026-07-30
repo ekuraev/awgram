@@ -800,7 +800,7 @@ mod tests {
     }
 
     #[test]
-    fn clients_list_three_color_marks_by_status_code() {
+    fn clients_list_three_color_marks_by_handshake() {
         // 🟢 недавний handshake / 🟡 никогда не подключался / 🔴 handshake давно —
         // трёхцветная индикация, цвет считает бот из last_handshake (см. model::mark).
         let now = 1_700_000_000;
