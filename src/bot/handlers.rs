@@ -997,17 +997,21 @@ async fn finish_add(
 ) {
     let waiting = bot.send_message(chat, i18n::creating(lang)).await.ok();
     // Квота группы: авторитетная проверка непосредственно перед созданием.
-    if let Some(gid) = group {
-        if let Some(remaining) = settings.group_remaining(gid) {
-            if remaining < 1 {
-                if let Some(m) = waiting {
-                    let _ = bot.delete_message(chat, m.id).await;
+    // Только для не-recreate: recreate удаляет старого клиента перед add,
+    // нетто-число клиентов группы не растёт, квоту это не расходует.
+    if !recreate {
+        if let Some(gid) = group {
+            if let Some(remaining) = settings.group_remaining(gid) {
+                if remaining < 1 {
+                    if let Some(m) = waiting {
+                        let _ = bot.delete_message(chat, m.id).await;
+                    }
+                    let quota = settings.group(gid).and_then(|g| g.max_clients).unwrap_or(0);
+                    let _ = bot
+                        .send_message(chat, i18n::quota_reached(lang, quota))
+                        .await;
+                    return;
                 }
-                let quota = settings.group(gid).and_then(|g| g.max_clients).unwrap_or(0);
-                let _ = bot
-                    .send_message(chat, i18n::quota_reached(lang, quota))
-                    .await;
-                return;
             }
         }
     }
@@ -1032,9 +1036,13 @@ async fn finish_add(
                 Some(uid),
                 None,
             );
-            if let Some(gid) = group {
-                settings.assign_client_group(name, Some(gid), now_epoch());
-            }
+            // Безусловно, а не только при Some(group): строка клиента с этим
+            // именем могла остаться от ранее удалённого клиента с чужим
+            // group_id (ON CONFLICT... DO UPDATE в assign_client_group её не
+            // создаёт заново, а перезатирает). Без безусловного вызова при
+            // group=None «воскресшая» строка сохранила бы старую привязку —
+            // группа-владелец получил бы доступ к новому чужому клиенту.
+            settings.assign_client_group(name, group, now_epoch());
             // Фильтр выдачи по тумблерам настроек (deliver_conf/qr/link): после
             // создания шлём только включённые артефакты. Ручная повторная выдача
             // через карточку клиента (SendConf/SendQr/SendLink/SendAll) фильтр
@@ -1203,6 +1211,11 @@ async fn finish_bulk(
                     Some(uid),
                     Some("bulk"),
                 );
+                // Безусловно (см. finish_add): имя может быть переиспользовано
+                // после удаления клиента с чужим group_id — bulk всегда
+                // owner-only и без группы, поэтому явно отвязываем строку,
+                // а не оставляем «воскресшую» привязку от прежнего клиента.
+                settings.assign_client_group(&r.name, None, now_epoch());
             }
             // 5. Альбом .conf — одним sendMediaGroup (только если включён и есть
             // что отправлять; пустой альбом Telegram отклонит).
@@ -1817,6 +1830,18 @@ async fn callback_handler(
                     return Ok(());
                 }
             };
+            // Recreate: право на объект проверялось только на входе в
+            // Action::Recreate — за время диалога (выбор срока/PSK) владелец
+            // мог отозвать группу у админа или перенести клиента в другую
+            // группу. Перепроверяем непосредственно перед finish_add.
+            if recreate && !client_in_scope(&role, &settings, &name) {
+                bot.send_message(chat, session_expired_text(lang))
+                    .reply_markup(home_menu(&role, lang))
+                    .parse_mode(ParseMode::Html)
+                    .await?;
+                dialogue.exit().await?;
+                return Ok(());
+            }
             // Группа для привязки: групповому админу — его текущая группа (если
             // она вдруг стала недоступна за время диалога — не создаём «в
             // никуда», отправляем на выбор группы); владельцу — без группы.
@@ -2509,7 +2534,7 @@ async fn callback_handler(
             let name = settings.group(id).map(|g| g.name).unwrap_or_default();
             let clients = settings.group_client_names(id);
             let waiting = bot
-                .send_message(chat, i18n::regen_all_running(lang))
+                .send_message(chat, i18n::group_delete_running(lang))
                 .await
                 .ok();
             let mut failed = 0usize;

@@ -1173,10 +1173,15 @@ pub fn ask_group_name(lang: Lang) -> String {
 }
 pub fn bad_group_name(lang: Lang) -> String {
     match lang {
-        Lang::Ru => {
-            "⚠️ Некорректное имя группы (латиница/цифры/пробел/-/_, 1–32 символа). Введите ещё раз:"
-        }
-        Lang::En => "⚠️ Invalid group name (a-z0-9 space -_, 1–32 chars). Try again:",
+        Lang::Ru => "⚠️ Некорректное имя группы (1–32 символа). Введите ещё раз:",
+        Lang::En => "⚠️ Invalid group name (1–32 chars). Try again:",
+    }
+    .to_string()
+}
+pub fn group_delete_running(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "🗑 Удаляю клиентов группы…",
+        Lang::En => "🗑 Removing group clients…",
     }
     .to_string()
 }
