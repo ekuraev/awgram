@@ -11,7 +11,7 @@ use crate::bot::render::{self, format_client_card, format_stats};
 use crate::bot::State;
 use crate::config::Config;
 use crate::i18n::{self, Lang};
-use crate::settings::SettingsStore;
+use crate::store::{EventKind, Store};
 use crate::vpn::Vpn;
 
 #[derive(Debug, PartialEq)]
@@ -22,6 +22,7 @@ pub enum Action {
     Stats,
     Page(usize),
     ShowClient(String),
+    ClientHistory(String),
     SendConf(String),
     AskDelete(String),
     ConfirmDelete(String),
@@ -100,6 +101,11 @@ fn parse_callback(data: &str) -> Action {
                 Action::SendLink(v.to_string())
             } else if let Some(v) = data.strip_prefix("all:") {
                 Action::SendAll(v.to_string())
+            } else if let Some(v) = data.strip_prefix("history:") {
+                // "history" ничей не префикс среди существующих веток и сам не
+                // конфликтует ни с одной из них — порядок относительно соседей
+                // произвольный.
+                Action::ClientHistory(v.to_string())
             } else if let Some(v) = data.strip_prefix("bulkadd:psk:") {
                 // Must be checked before "bulk:" — same reason as delyes:/del:
                 // ("bulkadd:..." also starts with "bulk", so "bulk:" would
@@ -291,13 +297,7 @@ async fn edit_or_send(
 /// Перерисовывает экран настроек: заголовок и клавиатура собираются из одних
 /// и тех же текущих значений тумблеров (единственное место, где они читаются
 /// для этого экрана).
-async fn show_settings(
-    bot: &Bot,
-    chat: ChatId,
-    msg_id: MessageId,
-    lang: Lang,
-    settings: &SettingsStore,
-) {
+async fn show_settings(bot: &Bot, chat: ChatId, msg_id: MessageId, lang: Lang, settings: &Store) {
     edit_or_send(
         bot,
         chat,
@@ -328,7 +328,7 @@ async fn message_handler(
     msg: Message,
     cfg: Arc<Config>,
     vpn: Arc<Vpn>,
-    settings: Arc<SettingsStore>,
+    settings: Arc<Store>,
 ) -> HandlerResult {
     if !msg.chat.is_private() {
         // Бот доставляет секреты (конфиги, QR, ссылки, бэкапы, диагностику) в чат
@@ -438,6 +438,13 @@ async fn message_handler(
                         .ok();
                     match vpn.modify(&name, param, &value).await {
                         Ok(out) => {
+                            settings.log_event(
+                                now_epoch(),
+                                EventKind::Modify,
+                                Some(&name),
+                                Some(uid),
+                                Some(param.as_str()),
+                            );
                             if let Some(m) = waiting {
                                 let _ = bot.delete_message(msg.chat.id, m.id).await;
                             }
@@ -552,12 +559,13 @@ async fn finish_add(
     bot: &Bot,
     chat: ChatId,
     vpn: &Vpn,
-    settings: &SettingsStore,
+    settings: &Store,
     lang: Lang,
     name: &str,
     expires: Option<&str>,
     psk: bool,
     recreate: bool,
+    uid: i64,
 ) {
     let waiting = bot.send_message(chat, i18n::creating(lang)).await.ok();
     if recreate {
@@ -574,6 +582,13 @@ async fn finish_add(
     }
     match vpn.add(name, expires, psk).await {
         Ok(res) => {
+            settings.log_event(
+                now_epoch(),
+                EventKind::ClientAdd,
+                Some(name),
+                Some(uid),
+                None,
+            );
             // Фильтр выдачи по тумблерам настроек (deliver_conf/qr/link): после
             // создания шлём только включённые артефакты. Ручная повторная выдача
             // через карточку клиента (SendConf/SendQr/SendLink/SendAll) фильтр
@@ -643,12 +658,13 @@ async fn finish_bulk(
     bot: &Bot,
     chat: ChatId,
     vpn: &Vpn,
-    settings: &SettingsStore,
+    settings: &Store,
     lang: Lang,
     prefix: &str,
     count: usize,
     expires: Option<&str>,
     psk: bool,
+    uid: i64,
 ) {
     let waiting = bot.send_message(chat, i18n::bulk_creating(lang)).await.ok();
 
@@ -733,6 +749,15 @@ async fn finish_bulk(
     // BulkResult{created, skipped} — все результаты, не только первый.
     match vpn.add_many(&names, expires, psk).await {
         Ok(res) => {
+            for r in &res.created {
+                settings.log_event(
+                    now_epoch(),
+                    EventKind::ClientAdd,
+                    Some(&r.name),
+                    Some(uid),
+                    Some("bulk"),
+                );
+            }
             // 5. Альбом .conf — одним sendMediaGroup (только если включён и есть
             // что отправлять; пустой альбом Telegram отклонит).
             if settings.deliver_conf() && !res.created.is_empty() {
@@ -772,7 +797,7 @@ async fn render_clients_list(
     msg_id: MessageId,
     lang: Lang,
     vpn: &Vpn,
-    settings: &SettingsStore,
+    settings: &Store,
     page: usize,
 ) {
     // list_enriched = status_code из list (корректная трёхцветная классификация)
@@ -784,7 +809,8 @@ async fn render_clients_list(
             // Фильтр + сортировка «онлайн вперёд» (🟢 → 🔴 → 🟡, внутри — по имени).
             // apply_filter_and_sort возвращает owned Vec — clients_list берёт срез по странице.
             let filter = settings.client_filter();
-            let clients = crate::vpn::model::apply_filter_and_sort(&all_clients, filter);
+            let clients =
+                crate::vpn::model::apply_filter_and_sort(&all_clients, filter, now_epoch());
             if clients.is_empty() {
                 edit_or_send(
                     bot,
@@ -824,7 +850,7 @@ async fn callback_handler(
     q: CallbackQuery,
     cfg: Arc<Config>,
     vpn: Arc<Vpn>,
-    settings: Arc<SettingsStore>,
+    settings: Arc<Store>,
 ) -> HandlerResult {
     bot.answer_callback_query(q.id.clone()).await.ok();
 
@@ -874,13 +900,16 @@ async fn callback_handler(
             // переживает навигацию по страницам (Action::Page его не меняет).
             render_clients_list(&bot, chat, msg_id, lang, &vpn, &settings, p).await;
         }
-        Action::Stats => match vpn.stats().await {
+        Action::Stats => match vpn.list_enriched().await {
             Ok(clients) => {
+                let now = now_epoch();
+                let summary = settings.traffic_summary(None, now);
+                let top = settings.top_clients(7, 5, now);
                 edit_or_send(
                     &bot,
                     chat,
                     msg_id,
-                    format_stats(lang, &clients),
+                    format_stats(lang, &clients, now, &summary, &top),
                     menu::main_menu(lang),
                 )
                 .await;
@@ -889,16 +918,17 @@ async fn callback_handler(
                 bot.send_message(chat, i18n::error_text(lang, &e)).await?;
             }
         },
-        Action::ShowClient(name) => match vpn.stats().await {
+        Action::ShowClient(name) => match vpn.list_enriched().await {
             Ok(clients) => match clients.iter().find(|c| c.name == name) {
                 Some(c) => {
                     let now = now_epoch();
                     let expiry = vpn.client_expiry(&name);
+                    let traffic = settings.traffic_summary(Some(&name), now);
                     edit_or_send(
                         &bot,
                         chat,
                         msg_id,
-                        format_client_card(lang, c, now, expiry),
+                        format_client_card(lang, c, now, expiry, &traffic),
                         menu::client_card(lang, &name),
                     )
                     .await;
@@ -911,6 +941,18 @@ async fn callback_handler(
                 bot.send_message(chat, i18n::error_text(lang, &e)).await?;
             }
         },
+        Action::ClientHistory(name) => {
+            let now = now_epoch();
+            let events = settings.client_events(&name, 10);
+            edit_or_send(
+                &bot,
+                chat,
+                msg_id,
+                render::format_client_history(lang, &name, &events, now),
+                menu::client_history(lang, &name),
+            )
+            .await;
+        }
         Action::SendConf(name) => {
             // 📄 Конфиг — только .conf, без QR/ссылки (фильтр выдачи не применяется:
             // это ручная повторная выдача конкретного артефакта).
@@ -988,6 +1030,13 @@ async fn callback_handler(
         }
         Action::ConfirmDelete(name) => match vpn.remove(&name).await {
             Ok(()) => {
+                settings.log_event(
+                    now_epoch(),
+                    EventKind::ClientRemove,
+                    Some(&name),
+                    Some(uid),
+                    None,
+                );
                 bot.send_message(chat, i18n::deleted(lang, &name))
                     .reply_markup(menu::main_menu(lang))
                     .parse_mode(ParseMode::Html)
@@ -1013,6 +1062,7 @@ async fn callback_handler(
             let waiting = bot.send_message(chat, i18n::regen_running(lang)).await.ok();
             match vpn.regen_client(&name).await {
                 Ok(res) => {
+                    settings.log_event(now_epoch(), EventKind::Regen, Some(&name), Some(uid), None);
                     if let Err(e) = render::send_client_files(&bot, chat, lang, &res).await {
                         tracing::error!(error = %e, "не удалось отправить файлы после regen");
                         bot.send_message(chat, i18n::error_text(lang, &e)).await?;
@@ -1047,7 +1097,11 @@ async fn callback_handler(
                 .send_message(chat, i18n::regen_all_running(lang))
                 .await
                 .ok();
-            match vpn.regen_all(reset_routes).await {
+            let regen_all_result = vpn.regen_all(reset_routes).await;
+            if regen_all_result.is_ok() {
+                settings.log_event(now_epoch(), EventKind::RegenAll, None, Some(uid), None);
+            }
+            match regen_all_result {
                 Ok(crate::vpn::RegenAllOutcome::NoClients) => {
                     bot.send_message(chat, i18n::clients_empty(lang))
                         .reply_markup(menu::main_menu(lang))
@@ -1141,6 +1195,7 @@ async fn callback_handler(
                 expires.as_deref(),
                 psk,
                 recreate,
+                uid,
             )
             .await;
             dialogue.exit().await?;
@@ -1247,6 +1302,7 @@ async fn callback_handler(
                 count,
                 expires.as_deref(),
                 psk,
+                uid,
             )
             .await;
             dialogue.exit().await?;
@@ -1286,6 +1342,7 @@ async fn callback_handler(
             let waiting = bot.send_message(chat, i18n::creating(lang)).await.ok();
             match vpn.restart().await {
                 Ok(out) => {
+                    settings.log_event(now_epoch(), EventKind::Restart, None, Some(uid), None);
                     if let Some(m) = waiting {
                         let _ = bot.delete_message(chat, m.id).await;
                     }
@@ -1307,6 +1364,7 @@ async fn callback_handler(
             let waiting = bot.send_message(chat, i18n::creating(lang)).await.ok();
             match vpn.repair_module().await {
                 Ok(out) => {
+                    settings.log_event(now_epoch(), EventKind::Repair, None, Some(uid), None);
                     if let Some(m) = waiting {
                         let _ = bot.delete_message(chat, m.id).await;
                     }
@@ -1389,6 +1447,7 @@ async fn callback_handler(
                 .ok();
             match vpn.backup().await {
                 Ok(bf) => {
+                    settings.log_event(now_epoch(), EventKind::Backup, None, Some(uid), None);
                     // Свежесозданный бэкап — самый новый по mtime, т.е. индекс 0 в list_backups().
                     bot.send_message(chat, i18n::backup_done(lang, &bf.name))
                         .reply_markup(menu::backup_card(lang, 0))
@@ -1500,6 +1559,7 @@ async fn callback_handler(
             let waiting = bot.send_message(chat, i18n::restoring(lang)).await.ok();
             match vpn.restore(idx).await {
                 Ok(()) => {
+                    settings.log_event(now_epoch(), EventKind::Restore, None, Some(uid), None);
                     bot.send_message(chat, i18n::restore_done(lang))
                         .reply_markup(menu::main_menu(lang))
                         .parse_mode(ParseMode::Html)
@@ -1563,7 +1623,7 @@ async fn callback_handler(
 }
 
 /// dptree-схема для `Dispatcher`. Зависимости (`Arc<Vpn>`, `Arc<Config>`,
-/// `Arc<SettingsStore>`, `InMemStorage<State>`) регистрируются в `main` через
+/// `Arc<Store>`, `InMemStorage<State>`) регистрируются в `main` через
 /// `dptree::deps![...]`.
 pub fn schema() -> teloxide::dispatching::UpdateHandler<Box<dyn std::error::Error + Send + Sync>> {
     dptree::entry()
@@ -1628,6 +1688,14 @@ mod tests {
         assert_eq!(parse_callback("bk:card:0"), Action::BackupCard(0));
         assert_eq!(parse_callback("check"), Action::Check);
         assert_eq!(parse_callback("garbage"), Action::Unknown);
+    }
+
+    #[test]
+    fn parse_history_callback() {
+        assert_eq!(
+            parse_callback("history:alice"),
+            Action::ClientHistory("alice".to_string())
+        );
     }
 
     #[test]

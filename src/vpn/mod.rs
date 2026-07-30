@@ -659,6 +659,23 @@ pub enum RegenAllOutcome {
 }
 
 #[cfg(test)]
+impl Vpn {
+    /// Конструктор для тестов других модулей (collector): стаб-скрипт вместо
+    /// инсталлера. Поля приватные — снаружи структуру не собрать.
+    pub(crate) fn test_with_script(
+        script: std::path::PathBuf,
+        clients_dir: std::path::PathBuf,
+    ) -> Vpn {
+        Vpn {
+            script,
+            sudo_prefix: String::new(),
+            timeout_secs: 5,
+            clients_dir,
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use serial_test::serial;
@@ -691,7 +708,7 @@ mod tests {
         let clients = vpn.list().await.unwrap();
         assert_eq!(clients.len(), 1);
         assert_eq!(clients[0].name, "alice");
-        assert!(clients[0].active());
+        assert_eq!(clients[0].status_code, "active");
     }
 
     #[tokio::test]
@@ -745,8 +762,8 @@ esac
         let (_d, vpn) = vpn_with_script(stub);
         let clients = vpn.list_enriched().await.unwrap();
         assert_eq!(clients.len(), 1);
-        // 🟡 (no_handshake из list), НЕ 🔴 (inactive из stats).
-        assert_eq!(clients[0].status_mark(), "🟡");
+        // 🟡 (нет handshake), НЕ 🔴 (inactive из stats).
+        assert_eq!(clients[0].mark(1_700_000_000), "🟡");
     }
 
     #[tokio::test]
@@ -766,7 +783,7 @@ esac
         );
         let (_d, vpn) = vpn_with_script(&stub);
         let clients = vpn.list_enriched().await.unwrap();
-        assert_eq!(clients[0].status_mark(), "🟢");
+        assert_eq!(clients[0].mark(now), "🟢");
         assert_eq!(clients[0].last_handshake, Some(now - 120));
         assert_eq!(clients[0].rx, 100);
         assert_eq!(clients[0].tx, 200);
@@ -777,6 +794,9 @@ esac
     async fn list_enriched_fail_open_when_stats_errors() {
         // stats упал — список показывается по list (status_code корректен),
         // handshake отсутствует. Лучше, чем прятать список целиком.
+        // Цвет теперь считается ботом из last_handshake (см. status_mark_at):
+        // без данных handshake доверять status_code «active» и красить 🟢
+        // нельзя (это и был баг) — корректный цвет здесь 🟡 «не подключался».
         let stub = r#"#!/bin/sh
 case "$1" in
   list)  echo '[{"name":"alice","status_code":"active"}]' ;;
@@ -786,7 +806,7 @@ esac
 "#;
         let (_d, vpn) = vpn_with_script(stub);
         let clients = vpn.list_enriched().await.unwrap();
-        assert_eq!(clients[0].status_mark(), "🟢");
+        assert_eq!(clients[0].mark(1_700_000_000), "🟡");
         assert_eq!(clients[0].last_handshake, None);
     }
 

@@ -273,7 +273,7 @@ pub fn clients_list(
         .skip(start)
         .take(per_page)
         .map(|(i, c)| {
-            let mark = c.status_mark();
+            let mark = c.mark(now);
             // Компактный handshake («2 мин», «никогда») — требуется stats()
             // (last_handshake есть только в stats --json, не в list --json).
             let hs = format_handshake_compact(lang, now, c.last_handshake.unwrap_or(0));
@@ -288,8 +288,8 @@ pub fn clients_list(
 
     let total_pages = clients.len().div_ceil(per_page).max(1);
     // 🔄 всегда в nav-ряду: перерисовывает ТЕКУЩУЮ страницу со свежими данными.
-    // Callback `page:{page}` → Action::Page (он заново зовёт vpn.stats() —
-    // список переключён на stats ради last_handshake в кнопках), поэтому
+    // Callback `page:{page}` → Action::Page (он заново зовёт vpn.list_enriched() —
+    // список берёт status_code из list и last_handshake/rx/tx из stats), поэтому
     // refresh сохраняет страницу, а не сбрасывает на 0. На одностраничном списке
     // это единственная кнопка ряда; на многостраничном встаёт между пагинацией:
     // [◀️] [🔄] [▶️].
@@ -330,9 +330,21 @@ pub fn client_card(lang: Lang, name: &str) -> InlineKeyboardMarkup {
             cb(&i18n::btn_regen(lang), &format!("regen:{name}")),
             cb(del_txt, &format!("del:{name}")),
         ],
-        vec![cb(&i18n::btn_modify(lang), &format!("mod:{name}"))],
+        vec![
+            cb(&i18n::btn_modify(lang), &format!("mod:{name}")),
+            cb(&i18n::btn_history(lang), &format!("history:{name}")),
+        ],
         vec![cb(&i18n::btn_back(lang), "menu")],
     ])
+}
+
+/// Клавиатура экрана «История»: одна кнопка возврата к карточке клиента
+/// (не к главному меню — история открывается из карточки).
+pub fn client_history(lang: Lang, name: &str) -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![vec![cb(
+        &i18n::btn_history_back(lang),
+        &format!("client:{name}"),
+    )]])
 }
 
 pub fn confirm_delete(lang: Lang, name: &str) -> InlineKeyboardMarkup {
@@ -788,9 +800,10 @@ mod tests {
     }
 
     #[test]
-    fn clients_list_three_color_marks_by_status_code() {
-        // 🟢 active / 🟡 no_handshake / 🔴 inactive — трёхцветная индикация
-        // вместо прежнего бинарного active→🟢 / всё прочее→🔴.
+    fn clients_list_three_color_marks_by_handshake() {
+        // 🟢 недавний handshake / 🟡 никогда не подключался / 🔴 handshake давно —
+        // трёхцветная индикация, цвет считает бот из last_handshake (см. model::mark).
+        let now = 1_700_000_000;
         let clients = vec![
             Client {
                 name: "online".into(),
@@ -800,7 +813,7 @@ mod tests {
                 status_code: "active".into(),
                 rx: 0,
                 tx: 0,
-                last_handshake: None,
+                last_handshake: Some(now - 30), // недавно — онлайн
             },
             Client {
                 name: "never".into(),
@@ -820,14 +833,14 @@ mod tests {
                 status_code: "inactive".into(),
                 rx: 0,
                 tx: 0,
-                last_handshake: None,
+                last_handshake: Some(now - 6 * 3600), // был, но давно
             },
         ];
         let texts = all_button_texts(&clients_list(
             Lang::Ru,
             &clients,
             &[],
-            0,
+            now,
             0,
             10,
             ClientFilter::All,

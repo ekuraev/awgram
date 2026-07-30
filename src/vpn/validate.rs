@@ -156,6 +156,19 @@ pub enum ModifyParam {
     Endpoint,
 }
 
+impl ModifyParam {
+    /// Короткое имя для `details` в журнале событий (не путать с CLI-именем
+    /// из `modify_param_cli`, которое уходит в manage.sh).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ModifyParam::Keepalive => "keepalive",
+            ModifyParam::Dns => "dns",
+            ModifyParam::AllowedIps => "allowedips",
+            ModifyParam::Endpoint => "endpoint",
+        }
+    }
+}
+
 pub fn modify_param_cli(p: ModifyParam) -> &'static str {
     match p {
         ModifyParam::Keepalive => "PersistentKeepalive",
@@ -519,6 +532,14 @@ mod tests {
         assert_eq!(modify_param_cli(ModifyParam::Dns), "DNS");
         assert_eq!(modify_param_cli(ModifyParam::AllowedIps), "AllowedIPs");
         assert_eq!(modify_param_cli(ModifyParam::Endpoint), "Endpoint");
+    }
+
+    #[test]
+    fn modify_param_as_str_names() {
+        assert_eq!(ModifyParam::Keepalive.as_str(), "keepalive");
+        assert_eq!(ModifyParam::Dns.as_str(), "dns");
+        assert_eq!(ModifyParam::AllowedIps.as_str(), "allowedips");
+        assert_eq!(ModifyParam::Endpoint.as_str(), "endpoint");
     }
 
     #[test]

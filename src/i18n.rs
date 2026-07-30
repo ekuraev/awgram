@@ -380,7 +380,7 @@ pub fn link_unavailable(lang: Lang) -> String {
 pub fn client_card(
     lang: Lang,
     name: &str,
-    status_code: &str,
+    mark: &str,
     status: &str,
     ip: &str,
     rx: &str,
@@ -389,7 +389,6 @@ pub fn client_card(
     expires: &str,
 ) -> String {
     let (name, status, ip) = (html_escape(name), html_escape(status), html_escape(ip));
-    let mark = crate::vpn::model::status_mark_code(status_code);
     let ip_line = if ip.is_empty() {
         String::new()
     } else {
@@ -403,10 +402,103 @@ pub fn client_card(
         Lang::En => format!("👤 <b>{name}</b>\n{mark} Status: {status}\n{ip_line}📊 Traffic:  ↓ {rx} · ↑ {tx}\n⏱ Handshake: {handshake}\n📅 Expires: {expires}"),
     }
 }
-pub fn stats_summary(lang: Lang, total: usize, active: usize, rx: &str, tx: &str) -> String {
+
+/// Блок трафика по периодам в карточке клиента: дополняет `client_card`
+/// объёмами за сегодня/7/30 дней/всё время и онлайн-временем за 7 дней.
+/// Объёмы и длительность уже отформатированы вызывающим кодом
+/// (`human_bytes`/`format_minutes`).
+pub fn client_card_traffic(
+    lang: Lang,
+    today: &str,
+    d7: &str,
+    d30: &str,
+    total: &str,
+    online7: &str,
+) -> String {
     match lang {
-        Lang::Ru => format!("📊 <b>Статистика</b>\nВсего клиентов: {total}\nАктивных: {active}\nТрафик суммарно: ↓ {rx}  ↑ {tx}"),
-        Lang::En => format!("📊 <b>Stats</b>\nTotal clients: {total}\nActive: {active}\nTotal traffic: ↓ {rx}  ↑ {tx}"),
+        Lang::Ru => format!(
+            "📈 Сегодня: {today} · 7 дн: {d7} (онлайн {online7}) · 30 дн: {d30} · Всего: {total}"
+        ),
+        Lang::En => format!(
+            "📈 Today: {today} · 7 d: {d7} (online {online7}) · 30 d: {d30} · Total: {total}"
+        ),
+    }
+}
+
+/// Экран «История»: заголовок с именем клиента (экранируется) + готовый
+/// многострочный блок событий, собранный вызывающим кодом.
+pub fn history_screen(lang: Lang, name: &str, lines: &str) -> String {
+    let name = html_escape(name);
+    match lang {
+        Lang::Ru => format!("📜 <b>История {name}</b>\n{lines}"),
+        Lang::En => format!("📜 <b>History {name}</b>\n{lines}"),
+    }
+}
+
+/// Экран «История» без событий — дружелюбная плашка вместо пустого списка.
+pub fn history_empty(lang: Lang, name: &str) -> String {
+    let name = html_escape(name);
+    match lang {
+        Lang::Ru => format!("📜 <b>История {name}</b>\nпока нет событий."),
+        Lang::En => format!("📜 <b>History {name}</b>\nno events yet."),
+    }
+}
+
+/// Плейсхолдер для блока «топ клиентов» на экране статистики, когда данных
+/// за период ещё нет (пустой список).
+pub fn top_empty(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "пока нет данных".to_string(),
+        Lang::En => "no data yet".to_string(),
+    }
+}
+
+/// Подпись события журнала для экрана «История». `kind` — строка из БД
+/// (см. `EventRow`): online/offline пишет `ingest`, остальные — `log_event`.
+/// Неизвестный вид события — возвращаем `kind` как есть (не должно случаться
+/// в норме, но не роняем рендер на будущих/чужих значениях).
+pub fn event_label(lang: Lang, kind: &str) -> String {
+    match (lang, kind) {
+        (Lang::Ru, "online") => "🟢 подключился",
+        (Lang::En, "online") => "🟢 connected",
+        (Lang::Ru, "offline") => "⚪ отключился",
+        (Lang::En, "offline") => "⚪ disconnected",
+        (Lang::Ru, "client_add") => "➕ создан",
+        (Lang::En, "client_add") => "➕ created",
+        (Lang::Ru, "client_remove") => "🗑 удалён",
+        (Lang::En, "client_remove") => "🗑 removed",
+        (Lang::Ru, "regen") | (Lang::Ru, "regen_all") => "♻️ перевыпуск",
+        (Lang::En, "regen") | (Lang::En, "regen_all") => "♻️ regenerated",
+        (Lang::Ru, "modify") => "✏️ изменён",
+        (Lang::En, "modify") => "✏️ modified",
+        _ => return kind.to_string(),
+    }
+    .to_string()
+}
+/// Расширенный экран статистики: периоды трафика (сегодня/7/30 дней/всё
+/// время), тренд недели, среднее в день и топ клиентов. Все объёмы уже
+/// отформатированы вызывающим кодом через `human_bytes`; `top_lines` —
+/// готовый многострочный блок (или плашка «нет данных»).
+#[allow(clippy::too_many_arguments)]
+pub fn stats_screen(
+    lang: Lang,
+    total: usize,
+    online: usize,
+    today: &str,
+    d7: &str,
+    d30: &str,
+    all_time: &str,
+    avg_day: &str,
+    trend: &str,
+    top_lines: &str,
+) -> String {
+    match lang {
+        Lang::Ru => format!(
+            "📊 <b>Статистика сервера</b>\n👥 Клиентов: {total} · Онлайн: {online}\n\n📈 Трафик (↓+↑):\n• Сегодня: {today}\n• 7 дн: {d7} {trend}\n• 30 дн: {d30}\n• Всего: {all_time}\n• В среднем/день (7 дн): {avg_day}\n\n🏆 Топ за 7 дн:\n{top_lines}"
+        ),
+        Lang::En => format!(
+            "📊 <b>Server stats</b>\n👥 Clients: {total} · Online: {online}\n\n📈 Traffic (↓+↑):\n• Today: {today}\n• 7 d: {d7} {trend}\n• 30 d: {d30}\n• All time: {all_time}\n• Avg/day (7 d): {avg_day}\n\n🏆 Top for 7 d:\n{top_lines}"
+        ),
     }
 }
 pub fn clients_empty(lang: Lang) -> String {
@@ -742,40 +834,17 @@ pub fn diagnose_result(lang: Lang, body: &str) -> String {
     }
 }
 
-// --- статус клиента (по стабильному status_code) ---
-/// Возвращает локализованную метку статуса по стабильному `status_code`.
-/// Текст НЕ экранируется — вызывающий код (`client_card`) сам делает html_escape,
-/// экранировать здесь означало бы двойное экранирование.
-pub fn status_label(lang: Lang, status_code: &str, raw: &str) -> String {
-    match (lang, status_code) {
-        (Lang::Ru, "active") => "Активен",
-        (Lang::En, "active") => "Active",
-        (Lang::Ru, "recent") => "Недавно",
-        (Lang::En, "recent") => "Recently",
-        (Lang::Ru, "no_handshake") => "Нет handshake",
-        (Lang::En, "no_handshake") => "No handshake",
-        (Lang::Ru, "inactive") => "Неактивен",
-        (Lang::En, "inactive") => "Inactive",
-        (Lang::Ru, "key_error") => "Ошибка ключа",
-        (Lang::En, "key_error") => "Key error",
-        (Lang::Ru, "no_data") => "Нет данных",
-        (Lang::En, "no_data") => "No data",
-        (Lang::Ru, _) => {
-            return if raw.is_empty() {
-                "неизвестно".to_string()
-            } else {
-                raw.to_string()
-            };
-        }
-        (Lang::En, _) => {
-            return if raw.is_empty() {
-                "unknown".to_string()
-            } else {
-                raw.to_string()
-            };
-        }
+// --- статус клиента (по вычисленной ботом метке) ---
+/// Подпись статуса по вычисленной боту метке (см. `model::status_mark_at`).
+pub fn status_label_mark(lang: Lang, mark: &str) -> String {
+    match (lang, mark) {
+        (Lang::Ru, "🟢") => "Онлайн".into(),
+        (Lang::Ru, "🟡") => "Не подключался".into(),
+        (Lang::Ru, _) => "Оффлайн".into(),
+        (Lang::En, "🟢") => "Online".into(),
+        (Lang::En, "🟡") => "Never connected".into(),
+        (Lang::En, _) => "Offline".into(),
     }
-    .to_string()
 }
 
 // --- ошибки (локализованные, без утечки stderr) ---
@@ -810,6 +879,22 @@ pub fn btn_modify(lang: Lang) -> String {
     match lang {
         Lang::Ru => "⚙️ Изменить",
         Lang::En => "⚙️ Modify",
+    }
+    .to_string()
+}
+pub fn btn_history(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "📜 История",
+        Lang::En => "📜 History",
+    }
+    .to_string()
+}
+/// Кнопка «Назад» экрана «История» — возвращает к карточке клиента (не к
+/// главному меню, в отличие от `btn_back`), поэтому текст короче.
+pub fn btn_history_back(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "⬅️ Назад",
+        Lang::En => "⬅️ Back",
     }
     .to_string()
 }
@@ -1119,7 +1204,7 @@ mod tests {
             let card = client_card(
                 l,
                 "a<b>",
-                "active",
+                "🟢",
                 "Активен",
                 "10.0.0.2",
                 "1 KB",
@@ -1129,22 +1214,18 @@ mod tests {
             );
             assert!(card.contains("a&lt;b&gt;"));
             assert!(!card.contains("a<b>"));
-            assert!(card.contains("🟢")); // цвет статуса по status_code
+            assert!(card.contains("🟢")); // цвет статуса передан напрямую (mark)
         }
     }
 
     #[test]
-    fn status_label_known_codes_translated() {
-        assert_eq!(status_label(Lang::En, "active", "Активен"), "Active");
-        assert_eq!(status_label(Lang::Ru, "active", ""), "Активен");
-    }
-
-    #[test]
-    fn status_label_unknown_code_falls_back_to_raw() {
-        // status_label не экранирует — экранирование делает client_card ниже по цепочке.
-        assert_eq!(status_label(Lang::En, "weird_code", "<x>"), "<x>");
-        assert_eq!(status_label(Lang::Ru, "weird_code", ""), "неизвестно");
-        assert_eq!(status_label(Lang::En, "weird_code", ""), "unknown");
+    fn status_label_mark_known_marks_translated() {
+        assert_eq!(status_label_mark(Lang::Ru, "🟢"), "Онлайн");
+        assert_eq!(status_label_mark(Lang::En, "🟢"), "Online");
+        assert_eq!(status_label_mark(Lang::Ru, "🟡"), "Не подключался");
+        assert_eq!(status_label_mark(Lang::En, "🟡"), "Never connected");
+        assert_eq!(status_label_mark(Lang::Ru, "🔴"), "Оффлайн");
+        assert_eq!(status_label_mark(Lang::En, "🔴"), "Offline");
     }
 
     #[test]

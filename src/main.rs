@@ -6,7 +6,7 @@ use teloxide::prelude::*;
 
 use awgram::bot::{handlers, State};
 use awgram::config::Config;
-use awgram::settings::SettingsStore;
+use awgram::store::Store;
 use awgram::vpn::Vpn;
 
 #[tokio::main]
@@ -33,16 +33,20 @@ async fn main() {
 
     let bot = Bot::new(&cfg.bot_token);
     let vpn = Arc::new(Vpn::from_config(&cfg));
-    let settings = Arc::new(SettingsStore::load(cfg.state_file.clone()));
+    let store = match Store::open(&cfg.db_path) {
+        Ok(s) => Arc::new(s),
+        Err(e) => {
+            tracing::error!(error = %e, path = %cfg.db_path.display(), "не удалось открыть БД");
+            std::process::exit(1);
+        }
+    };
+    store.migrate_state_json(&cfg.state_file);
+
+    tokio::spawn(awgram::collector::run(vpn.clone(), store.clone()));
 
     tracing::info!("запуск long polling");
     Dispatcher::builder(bot, handlers::schema())
-        .dependencies(dptree::deps![
-            InMemStorage::<State>::new(),
-            cfg,
-            vpn,
-            settings
-        ])
+        .dependencies(dptree::deps![InMemStorage::<State>::new(), cfg, vpn, store])
         .enable_ctrlc_handler()
         .build()
         .dispatch()
