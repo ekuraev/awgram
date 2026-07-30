@@ -98,6 +98,10 @@ impl Store {
     /// Сворачивает сэмплы в hourly, hourly — в daily. Обрабатываются только
     /// часы/дни, затронутые с прошлого запуска (минус час перекрытия), поэтому
     /// дёшев и идемпотентен: строки пересчитываются целиком (INSERT OR REPLACE).
+    ///
+    /// ИНВАРИАНТ: rollup вызывается ПЕРЕД prune в одном тике collector'а.
+    /// Clamp окон к границам ретенции — защита от затирания агрегатов частичными
+    /// данными, если инвариант нарушат (независимый prune, потеря meta).
     pub fn rollup(&self, now: i64) {
         let res = self.with_conn(|c| {
             let last: i64 = c
@@ -105,7 +109,7 @@ impl Store {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(0);
-            let from_hour = (last - 3600).max(0) / 3600 * 3600;
+            let from_hour = ((last - 3600).max(now - RAW_RETENTION_SECS)).max(0) / 3600 * 3600;
             let tx = c.unchecked_transaction()?;
             c.execute(
                 "INSERT OR REPLACE INTO traffic_hourly(client_id, hour_ts, rx_bytes, tx_bytes, online_minutes)
@@ -113,7 +117,7 @@ impl Store {
                  FROM traffic_samples WHERE ts >= ?1 GROUP BY client_id, ts/3600*3600",
                 [from_hour],
             )?;
-            let from_day = (last - 86400).max(0) / 86400 * 86400;
+            let from_day = ((last - 86400).max(now - HOURLY_RETENTION_SECS)).max(0) / 86400 * 86400;
             c.execute(
                 "INSERT OR REPLACE INTO traffic_daily(client_id, day_ts, rx_bytes, tx_bytes, online_minutes)
                  SELECT client_id, hour_ts/86400*86400, SUM(rx_bytes), SUM(tx_bytes), SUM(online_minutes)
@@ -324,5 +328,33 @@ mod tests {
             .with_conn(|c| c.query_row("SELECT COUNT(*) FROM traffic_daily", [], |r| r.get(0)))
             .unwrap();
         assert!(daily >= 1); // дневные живут вечно
+    }
+
+    #[test]
+    fn rollup_never_overwrites_aggregates_beyond_retention() {
+        let store = Store::open_in_memory();
+        let day = 1_700_006_400;
+        store.ingest(day + 60, &[s("alice", 100, 10, Some(day))]);
+        store.ingest(day + 120, &[s("alice", 400, 40, Some(day))]); // дельта 300
+        store.rollup(day + 200); // hourly(day) = 300
+                                 // имитация нарушенного инварианта: часть сэмплов удалена, meta потеряна
+        store
+            .with_conn(|c| c.execute("DELETE FROM traffic_samples WHERE ts = ?1", [day + 120]))
+            .unwrap();
+        store
+            .with_conn(|c| c.execute("UPDATE meta SET value='0' WHERE key='last_rollup_ts'", []))
+            .unwrap();
+        let now = day + 8 * 86400; // час day уже за границей RAW_RETENTION
+        store.rollup(now);
+        let rx: i64 = store
+            .with_conn(|c| {
+                c.query_row(
+                    "SELECT rx_bytes FROM traffic_hourly WHERE hour_ts=?1",
+                    [day],
+                    |r| r.get(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(rx, 300); // агрегат НЕ затёрт частичной суммой
     }
 }
