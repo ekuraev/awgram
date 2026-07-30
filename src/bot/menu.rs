@@ -23,8 +23,136 @@ pub fn main_menu(lang: Lang) -> InlineKeyboardMarkup {
             cb(&i18n::btn_restart(lang), "restart"),
             cb(&i18n::btn_repair(lang), "repair"),
         ],
+        vec![cb(&i18n::btn_groups(lang), "groups")],
         vec![cb(&i18n::btn_settings(lang), "settings")],
     ])
+}
+
+/// Раздел «Группы» — только для владельцев (handlers не показывают его другим).
+pub fn groups_menu(lang: Lang, groups: &[(crate::store::GroupRow, i64)]) -> InlineKeyboardMarkup {
+    let mut rows: Vec<Vec<InlineKeyboardButton>> = groups
+        .iter()
+        .map(|(g, n)| {
+            vec![cb(
+                &format!("🗂 {} ({n})", g.name),
+                &format!("g:card:{}", g.id),
+            )]
+        })
+        .collect();
+    rows.push(vec![cb(&i18n::btn_group_create(lang), "g:new")]);
+    rows.push(vec![cb(&i18n::btn_back(lang), "menu")]);
+    InlineKeyboardMarkup::new(rows)
+}
+
+pub fn group_card_menu(lang: Lang, id: i64, has_invite: bool) -> InlineKeyboardMarkup {
+    let invite_btn = if has_invite {
+        cb(&i18n::btn_invite_revoke(lang), &format!("g:invrev:{id}"))
+    } else {
+        cb(&i18n::btn_group_invite(lang), &format!("g:inv:{id}"))
+    };
+    InlineKeyboardMarkup::new(vec![
+        vec![
+            cb(&i18n::btn_group_rename(lang), &format!("g:ren:{id}")),
+            cb(&i18n::btn_group_quota(lang), &format!("g:quota:{id}")),
+        ],
+        vec![cb(&i18n::btn_group_admins(lang), &format!("g:adm:{id}"))],
+        vec![
+            invite_btn,
+            cb(&i18n::btn_admin_by_id(lang), &format!("g:admid:{id}")),
+        ],
+        vec![cb(&i18n::btn_group_regen(lang), &format!("g:regen:{id}"))],
+        vec![cb(&i18n::btn_group_delete(lang), &format!("g:del:{id}"))],
+        vec![cb(&i18n::btn_back(lang), "groups")],
+    ])
+}
+
+pub fn group_admins_menu(lang: Lang, id: i64, admins: &[i64]) -> InlineKeyboardMarkup {
+    let mut rows: Vec<Vec<InlineKeyboardButton>> = admins
+        .iter()
+        .map(|uid| vec![cb(&format!("❌ {uid}"), &format!("g:admdel:{id}:{uid}"))])
+        .collect();
+    rows.push(vec![cb(&i18n::btn_back(lang), &format!("g:card:{id}"))]);
+    InlineKeyboardMarkup::new(rows)
+}
+
+pub fn group_delete_choice_menu(lang: Lang, id: i64) -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![
+        vec![cb(
+            &i18n::btn_delete_detach(lang),
+            &format!("g:deldetach:{id}"),
+        )],
+        vec![cb(
+            &i18n::btn_delete_with_clients(lang),
+            &format!("g:delall:{id}"),
+        )],
+        vec![cb(&i18n::btn_back(lang), &format!("g:card:{id}"))],
+    ])
+}
+
+pub fn confirm_group_delete_clients_menu(lang: Lang, id: i64) -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![
+        vec![cb(
+            &i18n::btn_delete_with_clients(lang),
+            &format!("g:delallyes:{id}"),
+        )],
+        vec![cb(&i18n::btn_back(lang), &format!("g:card:{id}"))],
+    ])
+}
+
+pub fn confirm_group_regen_menu(lang: Lang, id: i64) -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![
+        vec![cb(&i18n::btn_group_regen(lang), &format!("g:regengo:{id}"))],
+        vec![cb(&i18n::btn_back(lang), &format!("g:card:{id}"))],
+    ])
+}
+
+pub fn group_select_menu(lang: Lang, groups: &[crate::store::GroupRow]) -> InlineKeyboardMarkup {
+    let rows: Vec<Vec<InlineKeyboardButton>> = groups
+        .iter()
+        .map(|g| vec![cb(&format!("🗂 {}", g.name), &format!("g:sel:{}", g.id))])
+        .collect();
+    let _ = lang; // подписи — имена групп, локализация не нужна
+    InlineKeyboardMarkup::new(rows)
+}
+
+/// Меню группового админа: список/добавить/статистика группы; смена группы —
+/// только если групп несколько.
+pub fn ga_main_menu(lang: Lang, multi: bool) -> InlineKeyboardMarkup {
+    let mut rows = vec![
+        vec![cb(&i18n::btn_clients(lang), "list")],
+        vec![cb(&i18n::btn_add(lang), "add")],
+        vec![cb(&i18n::btn_stats(lang), "stats")],
+    ];
+    if multi {
+        rows.push(vec![cb(&i18n::btn_switch_group(lang), "g:selmenu")]);
+    }
+    InlineKeyboardMarkup::new(rows)
+}
+
+pub fn move_client_menu(
+    lang: Lang,
+    name: &str,
+    groups: &[crate::store::GroupRow],
+) -> InlineKeyboardMarkup {
+    let mut rows: Vec<Vec<InlineKeyboardButton>> = groups
+        .iter()
+        .map(|g| {
+            vec![cb(
+                &format!("🗂 {}", g.name),
+                &format!("gmoveto:{}:{name}", g.id),
+            )]
+        })
+        .collect();
+    rows.push(vec![cb(
+        &i18n::no_group_label(lang),
+        &format!("gmoveto:none:{name}"),
+    )]);
+    rows.push(vec![cb(&i18n::btn_back(lang), &format!("client:{name}"))]);
+    InlineKeyboardMarkup::new(rows)
+}
+
+pub fn slug_recommend_menu(lang: Lang) -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![vec![cb(&i18n::btn_slug_enable(lang), "set:slug:on")]])
 }
 
 /// Экран выбора языка при первом запуске — показывает оба варианта
@@ -1098,6 +1226,57 @@ mod tests {
         let data = all_callback_data(&confirm_restore(Lang::Ru, 3));
         assert!(data.contains(&"bk:restore_yes:3".to_string()));
         assert!(data.contains(&"menu".to_string()));
+    }
+
+    fn g(id: i64, name: &str) -> crate::store::GroupRow {
+        crate::store::GroupRow {
+            id,
+            name: name.into(),
+            max_clients: None,
+            created_at: 0,
+        }
+    }
+
+    #[test]
+    fn group_keyboards_emit_expected_callbacks() {
+        let kb = groups_menu(Lang::Ru, &[(g(1, "family"), 3)]);
+        let data = all_callback_data(&kb);
+        assert!(data.contains(&"g:card:1".to_string()));
+        assert!(data.contains(&"g:new".to_string()));
+
+        let card = group_card_menu(Lang::Ru, 7, true);
+        let card_data = all_callback_data(&card);
+        for expected in [
+            "g:ren:7",
+            "g:quota:7",
+            "g:adm:7",
+            "g:invrev:7",
+            "g:del:7",
+            "g:regen:7",
+        ] {
+            assert!(card_data.contains(&expected.to_string()), "нет {expected}");
+        }
+        // has_invite=false → вместо отзыва кнопка создания
+        let card2 = group_card_menu(Lang::Ru, 7, false);
+        let d2 = format!("{card2:?}");
+        assert!(d2.contains("g:inv:7"));
+
+        let mv = move_client_menu(Lang::Ru, "alice", &[g(1, "family")]);
+        let mv_dbg = format!("{mv:?}");
+        assert!(mv_dbg.contains("gmoveto:1:alice"));
+        assert!(mv_dbg.contains("gmoveto:none:alice"));
+    }
+
+    #[test]
+    fn main_menu_has_groups_button() {
+        let dbg = format!("{:?}", main_menu(Lang::Ru));
+        assert!(dbg.contains("\"groups\""));
+    }
+
+    #[test]
+    fn ga_menu_switch_only_when_multi() {
+        assert!(format!("{:?}", ga_main_menu(Lang::Ru, true)).contains("g:selmenu"));
+        assert!(!format!("{:?}", ga_main_menu(Lang::Ru, false)).contains("g:selmenu"));
     }
 
     #[test]

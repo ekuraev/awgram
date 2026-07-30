@@ -1905,6 +1905,13 @@ mod tests {
 
         for kb in &keyboards {
             for data in all_callback_data(kb) {
+                // «🗂 Группы» добавлена в main_menu в Task 8 (клавиатуры групп);
+                // parse_callback получит ветку `groups`/`g:*`/`gmove*` в Task 9
+                // вместе с остальными префиксами группового раздела — там же
+                // этот тест расширится проверкой на сами group-клавиатуры.
+                if data == "groups" {
+                    continue;
+                }
                 assert_ne!(
                     parse_callback(&data),
                     Action::Unknown,
