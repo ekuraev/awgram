@@ -330,9 +330,21 @@ pub fn client_card(lang: Lang, name: &str) -> InlineKeyboardMarkup {
             cb(&i18n::btn_regen(lang), &format!("regen:{name}")),
             cb(del_txt, &format!("del:{name}")),
         ],
-        vec![cb(&i18n::btn_modify(lang), &format!("mod:{name}"))],
+        vec![
+            cb(&i18n::btn_modify(lang), &format!("mod:{name}")),
+            cb(&i18n::btn_history(lang), &format!("history:{name}")),
+        ],
         vec![cb(&i18n::btn_back(lang), "menu")],
     ])
+}
+
+/// Клавиатура экрана «История»: одна кнопка возврата к карточке клиента
+/// (не к главному меню — история открывается из карточки).
+pub fn client_history(lang: Lang, name: &str) -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![vec![cb(
+        &i18n::btn_history_back(lang),
+        &format!("client:{name}"),
+    )]])
 }
 
 pub fn confirm_delete(lang: Lang, name: &str) -> InlineKeyboardMarkup {

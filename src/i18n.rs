@@ -402,6 +402,70 @@ pub fn client_card(
         Lang::En => format!("👤 <b>{name}</b>\n{mark} Status: {status}\n{ip_line}📊 Traffic:  ↓ {rx} · ↑ {tx}\n⏱ Handshake: {handshake}\n📅 Expires: {expires}"),
     }
 }
+
+/// Блок трафика по периодам в карточке клиента: дополняет `client_card`
+/// объёмами за сегодня/7/30 дней/всё время и онлайн-временем за 7 дней.
+/// Объёмы и длительность уже отформатированы вызывающим кодом
+/// (`human_bytes`/`format_minutes`).
+pub fn client_card_traffic(
+    lang: Lang,
+    today: &str,
+    d7: &str,
+    d30: &str,
+    total: &str,
+    online7: &str,
+) -> String {
+    match lang {
+        Lang::Ru => format!(
+            "📈 Сегодня: {today} · 7 дн: {d7} (онлайн {online7}) · 30 дн: {d30} · Всего: {total}"
+        ),
+        Lang::En => format!(
+            "📈 Today: {today} · 7 d: {d7} (online {online7}) · 30 d: {d30} · Total: {total}"
+        ),
+    }
+}
+
+/// Экран «История»: заголовок с именем клиента (экранируется) + готовый
+/// многострочный блок событий, собранный вызывающим кодом.
+pub fn history_screen(lang: Lang, name: &str, lines: &str) -> String {
+    let name = html_escape(name);
+    match lang {
+        Lang::Ru => format!("📜 <b>История {name}</b>\n{lines}"),
+        Lang::En => format!("📜 <b>History {name}</b>\n{lines}"),
+    }
+}
+
+/// Экран «История» без событий — дружелюбная плашка вместо пустого списка.
+pub fn history_empty(lang: Lang, name: &str) -> String {
+    let name = html_escape(name);
+    match lang {
+        Lang::Ru => format!("📜 <b>История {name}</b>\nпока нет событий."),
+        Lang::En => format!("📜 <b>History {name}</b>\nno events yet."),
+    }
+}
+
+/// Подпись события журнала для экрана «История». `kind` — строка из БД
+/// (см. `EventRow`): online/offline пишет `ingest`, остальные — `log_event`.
+/// Неизвестный вид события — возвращаем `kind` как есть (не должно случаться
+/// в норме, но не роняем рендер на будущих/чужих значениях).
+pub fn event_label(lang: Lang, kind: &str) -> String {
+    match (lang, kind) {
+        (Lang::Ru, "online") => "🟢 подключился",
+        (Lang::En, "online") => "🟢 connected",
+        (Lang::Ru, "offline") => "⚪ отключился",
+        (Lang::En, "offline") => "⚪ disconnected",
+        (Lang::Ru, "client_add") => "➕ создан",
+        (Lang::En, "client_add") => "➕ created",
+        (Lang::Ru, "client_remove") => "🗑 удалён",
+        (Lang::En, "client_remove") => "🗑 removed",
+        (Lang::Ru, "regen") | (Lang::Ru, "regen_all") => "♻️ перевыпуск",
+        (Lang::En, "regen") | (Lang::En, "regen_all") => "♻️ regenerated",
+        (Lang::Ru, "modify") => "✏️ изменён",
+        (Lang::En, "modify") => "✏️ modified",
+        _ => return kind.to_string(),
+    }
+    .to_string()
+}
 /// Расширенный экран статистики: периоды трафика (сегодня/7/30 дней/всё
 /// время), тренд недели, среднее в день и топ клиентов. Все объёмы уже
 /// отформатированы вызывающим кодом через `human_bytes`; `top_lines` —
@@ -806,6 +870,22 @@ pub fn btn_modify(lang: Lang) -> String {
     match lang {
         Lang::Ru => "⚙️ Изменить",
         Lang::En => "⚙️ Modify",
+    }
+    .to_string()
+}
+pub fn btn_history(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "📜 История",
+        Lang::En => "📜 History",
+    }
+    .to_string()
+}
+/// Кнопка «Назад» экрана «История» — возвращает к карточке клиента (не к
+/// главному меню, в отличие от `btn_back`), поэтому текст короче.
+pub fn btn_history_back(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "⬅️ Назад",
+        Lang::En => "⬅️ Back",
     }
     .to_string()
 }

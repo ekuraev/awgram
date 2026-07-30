@@ -3,13 +3,19 @@ use teloxide::types::{ChatId, InputFile, InputMedia, InputMediaDocument, ParseMo
 
 use crate::error::{Error, Result};
 use crate::i18n::{self, html_escape, Lang};
-use crate::store::TrafficSummary;
+use crate::store::{EventRow, TrafficSummary};
 use crate::vpn::model::{format_expiry, format_handshake, human_bytes, AddResult, Client};
 
-pub fn format_client_card(lang: Lang, c: &Client, now: i64, expiry: Option<i64>) -> String {
+pub fn format_client_card(
+    lang: Lang,
+    c: &Client,
+    now: i64,
+    expiry: Option<i64>,
+    traffic: &TrafficSummary,
+) -> String {
     let mark = c.mark(now);
     let status = i18n::status_label_mark(lang, mark);
-    i18n::client_card(
+    let base = i18n::client_card(
         lang,
         &c.name,
         mark,
@@ -19,7 +25,62 @@ pub fn format_client_card(lang: Lang, c: &Client, now: i64, expiry: Option<i64>)
         &human_bytes(c.tx),
         &format_handshake(lang, now, c.last_handshake.unwrap_or(0)),
         &format_expiry(lang, now, expiry),
-    )
+    );
+    let periods = i18n::client_card_traffic(
+        lang,
+        &human_bytes(traffic.today.rx + traffic.today.tx),
+        &human_bytes(traffic.d7.rx + traffic.d7.tx),
+        &human_bytes(traffic.d30.rx + traffic.d30.tx),
+        &human_bytes(traffic.total.rx + traffic.total.tx),
+        &format_minutes(lang, traffic.d7.online_minutes),
+    );
+    format!("{base}\n{periods}")
+}
+
+/// «4 ч» / «35 мин» / «2 дн» — короткая длительность (онлайн-время, сессии).
+pub fn format_minutes(lang: Lang, minutes: u64) -> String {
+    let (m, h, d) = (minutes, minutes / 60, minutes / 1440);
+    match lang {
+        Lang::Ru if d > 0 => format!("{d} дн"),
+        Lang::Ru if h > 0 => format!("{h} ч"),
+        Lang::Ru => format!("{m} мин"),
+        Lang::En if d > 0 => format!("{d} d"),
+        Lang::En if h > 0 => format!("{h} h"),
+        Lang::En => format!("{m} min"),
+    }
+}
+
+/// Экран «История»: события клиента newest→oldest, с человекочитаемым временем
+/// и меткой события. Для `offline` дописывает длительность сессии, если среди
+/// более старых событий в списке находится парный `online`.
+pub fn format_client_history(lang: Lang, name: &str, events: &[EventRow], now: i64) -> String {
+    if events.is_empty() {
+        return i18n::history_empty(lang, name);
+    }
+    // События идут новые→старые. Для offline ищем ПАРНЫЙ online дальше по
+    // списку (он старше) и дописываем длительность сессии.
+    let lines: Vec<String> = events
+        .iter()
+        .enumerate()
+        .map(|(i, e)| {
+            let when = format_handshake(lang, now, e.ts);
+            let label = i18n::event_label(lang, &e.kind);
+            let session = (e.kind == "offline")
+                .then(|| {
+                    events[i + 1..]
+                        .iter()
+                        .find(|p| p.kind == "online")
+                        .map(|p| {
+                            let dur = format_minutes(lang, ((e.ts - p.ts).max(0) / 60) as u64);
+                            format!(" ({dur})")
+                        })
+                })
+                .flatten()
+                .unwrap_or_default();
+            format!("• {when} — {label}{session}")
+        })
+        .collect();
+    i18n::history_screen(lang, name, &lines.join("\n"))
 }
 
 /// Стрелка тренда за 7 дней относительно предыдущей недели. Целочисленная
@@ -177,7 +238,7 @@ mod tests {
     fn card_contains_name_and_traffic() {
         let now = 1_700_000_000;
         let expiry = Some(now + 5 * 86400);
-        let text = format_client_card(Lang::Ru, &sample(), now, expiry);
+        let text = format_client_card(Lang::Ru, &sample(), now, expiry, &TrafficSummary::default());
         assert!(text.contains("alice"));
         assert!(text.contains("Онлайн"));
         assert!(text.contains("1.2 GB"));
@@ -190,7 +251,7 @@ mod tests {
         let now = 1_700_000_000;
         let mut c = sample();
         c.name = "a<b>&c".to_string();
-        let text = format_client_card(Lang::Ru, &c, now, None);
+        let text = format_client_card(Lang::Ru, &c, now, None, &TrafficSummary::default());
         assert!(text.contains("a&lt;b&gt;&amp;c"));
         assert!(!text.contains("a<b>&c"));
     }
@@ -198,7 +259,13 @@ mod tests {
     #[test]
     fn card_localized_en() {
         let now = 1_700_000_000;
-        let text = format_client_card(Lang::En, &sample(), now, Some(now + 86400));
+        let text = format_client_card(
+            Lang::En,
+            &sample(),
+            now,
+            Some(now + 86400),
+            &TrafficSummary::default(),
+        );
         assert!(text.contains("Status:"));
         assert!(text.contains("Handshake:"));
         assert!(text.contains("Expires:"));
@@ -242,7 +309,7 @@ mod tests {
         let mut c = sample();
         c.status_code = "recent".into(); // инсталлер считает это «недавно»
         c.last_handshake = Some(now - 6 * 3600); // а на деле — 6 часов назад
-        let text = format_client_card(Lang::Ru, &c, now, None);
+        let text = format_client_card(Lang::Ru, &c, now, None, &TrafficSummary::default());
         assert!(text.contains("🔴"));
         assert!(text.contains("Оффлайн"));
         assert!(!text.contains("🟢"));
@@ -338,10 +405,96 @@ mod tests {
             tx: 524288,
             last_handshake: Some(1700000000 - 600),
         };
-        let text = format_client_card(Lang::Ru, &client, now, None);
+        let text = format_client_card(Lang::Ru, &client, now, None, &TrafficSummary::default());
         assert!(!text.contains("IP:"));
         assert!(text.contains("charlie"));
         assert!(text.contains("Трафик"));
+    }
+
+    #[test]
+    fn card_includes_traffic_periods() {
+        let now = 1_700_000_000;
+        let summary = TrafficSummary {
+            today: PeriodTotals {
+                rx: 1024,
+                tx: 0,
+                online_minutes: 30,
+            },
+            d7: PeriodTotals {
+                rx: 2048,
+                tx: 1024,
+                online_minutes: 240,
+            },
+            ..Default::default()
+        };
+        let text = format_client_card(Lang::Ru, &sample(), now, None, &summary);
+        assert!(text.contains("Сегодня"));
+        assert!(text.contains("7 дн"));
+        assert!(text.contains("4 ч")); // 240 минут онлайна за 7 дн
+    }
+
+    #[test]
+    fn history_lists_events_newest_first() {
+        let now = 1_700_000_000;
+        let events = vec![
+            EventRow {
+                ts: now - 60,
+                kind: "offline".into(),
+                client: Some("alice".into()),
+                actor: None,
+                details: None,
+            },
+            EventRow {
+                ts: now - 3600,
+                kind: "online".into(),
+                client: Some("alice".into()),
+                actor: None,
+                details: None,
+            },
+            EventRow {
+                ts: now - 86400,
+                kind: "client_add".into(),
+                client: Some("alice".into()),
+                actor: Some(42),
+                details: None,
+            },
+        ];
+        let text = format_client_history(Lang::Ru, "alice", &events, now);
+        assert!(text.contains("отключился"));
+        assert!(text.contains("подключился"));
+        assert!(text.contains("создан"));
+        let off = text.find("отключился").unwrap();
+        let on = text.find("подключился").unwrap();
+        assert!(off < on); // новые сверху
+    }
+
+    #[test]
+    fn history_empty_friendly() {
+        let text = format_client_history(Lang::Ru, "alice", &[], 0);
+        assert!(text.contains("пока нет"));
+    }
+
+    #[test]
+    fn history_offline_shows_session_duration() {
+        let now = 1_700_000_000;
+        let events = vec![
+            EventRow {
+                ts: now - 600,
+                kind: "offline".into(),
+                client: None,
+                actor: None,
+                details: None,
+            },
+            EventRow {
+                ts: now - 4200,
+                kind: "online".into(),
+                client: None,
+                actor: None,
+                details: None,
+            },
+        ];
+        let text = format_client_history(Lang::Ru, "alice", &events, now);
+        assert!(text.contains("(1 ч)")); // сессия 3600 с = 60 мин
     }
 
     #[test]

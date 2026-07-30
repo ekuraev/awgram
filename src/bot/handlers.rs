@@ -22,6 +22,7 @@ pub enum Action {
     Stats,
     Page(usize),
     ShowClient(String),
+    ClientHistory(String),
     SendConf(String),
     AskDelete(String),
     ConfirmDelete(String),
@@ -100,6 +101,11 @@ fn parse_callback(data: &str) -> Action {
                 Action::SendLink(v.to_string())
             } else if let Some(v) = data.strip_prefix("all:") {
                 Action::SendAll(v.to_string())
+            } else if let Some(v) = data.strip_prefix("history:") {
+                // "history" ничей не префикс среди существующих веток и сам не
+                // конфликтует ни с одной из них — порядок относительно соседей
+                // произвольный.
+                Action::ClientHistory(v.to_string())
             } else if let Some(v) = data.strip_prefix("bulkadd:psk:") {
                 // Must be checked before "bulk:" — same reason as delyes:/del:
                 // ("bulkadd:..." also starts with "bulk", so "bulk:" would
@@ -917,11 +923,12 @@ async fn callback_handler(
                 Some(c) => {
                     let now = now_epoch();
                     let expiry = vpn.client_expiry(&name);
+                    let traffic = settings.traffic_summary(Some(&name), now);
                     edit_or_send(
                         &bot,
                         chat,
                         msg_id,
-                        format_client_card(lang, c, now, expiry),
+                        format_client_card(lang, c, now, expiry, &traffic),
                         menu::client_card(lang, &name),
                     )
                     .await;
@@ -934,6 +941,18 @@ async fn callback_handler(
                 bot.send_message(chat, i18n::error_text(lang, &e)).await?;
             }
         },
+        Action::ClientHistory(name) => {
+            let now = now_epoch();
+            let events = settings.client_events(&name, 10);
+            edit_or_send(
+                &bot,
+                chat,
+                msg_id,
+                render::format_client_history(lang, &name, &events, now),
+                menu::client_history(lang, &name),
+            )
+            .await;
+        }
         Action::SendConf(name) => {
             // 📄 Конфиг — только .conf, без QR/ссылки (фильтр выдачи не применяется:
             // это ручная повторная выдача конкретного артефакта).
@@ -1669,6 +1688,14 @@ mod tests {
         assert_eq!(parse_callback("bk:card:0"), Action::BackupCard(0));
         assert_eq!(parse_callback("check"), Action::Check);
         assert_eq!(parse_callback("garbage"), Action::Unknown);
+    }
+
+    #[test]
+    fn parse_history_callback() {
+        assert_eq!(
+            parse_callback("history:alice"),
+            Action::ClientHistory("alice".to_string())
+        );
     }
 
     #[test]
