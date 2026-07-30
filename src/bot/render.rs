@@ -75,7 +75,7 @@ pub async fn send_album(bot: &Bot, chat: ChatId, conf_paths: &[String]) -> Resul
 }
 
 /// Авто-выдача после создания с учётом фильтра настроек. `conf/qr/link` —
-/// тумблеры из `SettingsStore`; каждый артефакт шлётся только если включён и
+/// тумблеры из `Store`; каждый артефакт шлётся только если включён и
 /// существует (QR/ссылка условны — qrencode может отсутствовать).
 pub async fn send_client_files_filtered(
     bot: &Bot,

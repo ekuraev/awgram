@@ -3,6 +3,5 @@ pub mod bot;
 pub mod config;
 pub mod error;
 pub mod i18n;
-pub mod settings;
 pub mod store;
 pub mod vpn;

@@ -9,6 +9,7 @@ pub struct Config {
     pub sudo_prefix: String,
     pub op_timeout_secs: u64,
     pub state_file: PathBuf,
+    pub db_path: PathBuf,
 }
 
 impl std::fmt::Debug for Config {
@@ -21,6 +22,7 @@ impl std::fmt::Debug for Config {
             .field("sudo_prefix", &self.sudo_prefix)
             .field("op_timeout_secs", &self.op_timeout_secs)
             .field("state_file", &self.state_file)
+            .field("db_path", &self.db_path)
             .finish()
     }
 }
@@ -51,6 +53,8 @@ struct Raw {
     op_timeout_secs: u64,
     #[serde(default = "default_state_file")]
     state_file: PathBuf,
+    #[serde(default = "default_db_path")]
+    db_path: PathBuf,
 }
 
 fn default_timeout() -> u64 {
@@ -59,6 +63,10 @@ fn default_timeout() -> u64 {
 
 fn default_state_file() -> PathBuf {
     PathBuf::from("/etc/awgram/state.json")
+}
+
+fn default_db_path() -> PathBuf {
+    PathBuf::from("/var/lib/awgram/awgram.db")
 }
 
 impl Config {
@@ -87,6 +95,7 @@ impl Config {
             sudo_prefix: raw.sudo_prefix,
             op_timeout_secs: raw.op_timeout_secs,
             state_file: raw.state_file,
+            db_path: raw.db_path,
         })
     }
 }
@@ -217,6 +226,42 @@ mod tests {
         );
         let cfg = Config::load(&cfg_path).unwrap();
         assert_eq!(cfg.state_file, PathBuf::from("/custom/state.json"));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn db_path_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = write(&dir, "manage.sh", "#!/bin/sh\n");
+        let cfg_path = write(
+            &dir,
+            "config.toml",
+            &format!(
+                "bot_token = \"t\"\nadmin_ids = [1]\nmanage_script = \"{}\"\nclients_dir = \"{}\"\n",
+                script.display(),
+                dir.path().display()
+            ),
+        );
+        let cfg = Config::load(&cfg_path).unwrap();
+        assert_eq!(cfg.db_path, PathBuf::from("/var/lib/awgram/awgram.db"));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn db_path_explicit_value_used() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = write(&dir, "manage.sh", "#!/bin/sh\n");
+        let cfg_path = write(
+            &dir,
+            "config.toml",
+            &format!(
+                "bot_token = \"t\"\nadmin_ids = [1]\nmanage_script = \"{}\"\nclients_dir = \"{}\"\ndb_path = \"/custom/awgram.db\"\n",
+                script.display(),
+                dir.path().display()
+            ),
+        );
+        let cfg = Config::load(&cfg_path).unwrap();
+        assert_eq!(cfg.db_path, PathBuf::from("/custom/awgram.db"));
     }
 
     #[test]

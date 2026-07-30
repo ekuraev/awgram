@@ -11,7 +11,7 @@ use crate::bot::render::{self, format_client_card, format_stats};
 use crate::bot::State;
 use crate::config::Config;
 use crate::i18n::{self, Lang};
-use crate::settings::SettingsStore;
+use crate::store::Store;
 use crate::vpn::Vpn;
 
 #[derive(Debug, PartialEq)]
@@ -291,13 +291,7 @@ async fn edit_or_send(
 /// Перерисовывает экран настроек: заголовок и клавиатура собираются из одних
 /// и тех же текущих значений тумблеров (единственное место, где они читаются
 /// для этого экрана).
-async fn show_settings(
-    bot: &Bot,
-    chat: ChatId,
-    msg_id: MessageId,
-    lang: Lang,
-    settings: &SettingsStore,
-) {
+async fn show_settings(bot: &Bot, chat: ChatId, msg_id: MessageId, lang: Lang, settings: &Store) {
     edit_or_send(
         bot,
         chat,
@@ -328,7 +322,7 @@ async fn message_handler(
     msg: Message,
     cfg: Arc<Config>,
     vpn: Arc<Vpn>,
-    settings: Arc<SettingsStore>,
+    settings: Arc<Store>,
 ) -> HandlerResult {
     if !msg.chat.is_private() {
         // Бот доставляет секреты (конфиги, QR, ссылки, бэкапы, диагностику) в чат
@@ -552,7 +546,7 @@ async fn finish_add(
     bot: &Bot,
     chat: ChatId,
     vpn: &Vpn,
-    settings: &SettingsStore,
+    settings: &Store,
     lang: Lang,
     name: &str,
     expires: Option<&str>,
@@ -643,7 +637,7 @@ async fn finish_bulk(
     bot: &Bot,
     chat: ChatId,
     vpn: &Vpn,
-    settings: &SettingsStore,
+    settings: &Store,
     lang: Lang,
     prefix: &str,
     count: usize,
@@ -772,7 +766,7 @@ async fn render_clients_list(
     msg_id: MessageId,
     lang: Lang,
     vpn: &Vpn,
-    settings: &SettingsStore,
+    settings: &Store,
     page: usize,
 ) {
     // list_enriched = status_code из list (корректная трёхцветная классификация)
@@ -824,7 +818,7 @@ async fn callback_handler(
     q: CallbackQuery,
     cfg: Arc<Config>,
     vpn: Arc<Vpn>,
-    settings: Arc<SettingsStore>,
+    settings: Arc<Store>,
 ) -> HandlerResult {
     bot.answer_callback_query(q.id.clone()).await.ok();
 
@@ -1563,7 +1557,7 @@ async fn callback_handler(
 }
 
 /// dptree-схема для `Dispatcher`. Зависимости (`Arc<Vpn>`, `Arc<Config>`,
-/// `Arc<SettingsStore>`, `InMemStorage<State>`) регистрируются в `main` через
+/// `Arc<Store>`, `InMemStorage<State>`) регистрируются в `main` через
 /// `dptree::deps![...]`.
 pub fn schema() -> teloxide::dispatching::UpdateHandler<Box<dyn std::error::Error + Send + Sync>> {
     dptree::entry()

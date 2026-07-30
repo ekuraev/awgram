@@ -1,5 +1,5 @@
 //! Настройки бота в таблице `settings` (key → JSON-значение).
-//! API повторяет прежний SettingsStore 1:1 — хендлеры не заметили замены.
+//! API повторяет прежнее JSON-хранилище настроек 1:1 — хендлеры не заметили замены.
 //! Точечные чтения SQLite на WAL — микросекунды, поэтому методы синхронные
 //! и зовутся прямо из async-хендлеров (как раньше Mutex<BotState>).
 
@@ -250,9 +250,9 @@ mod tests {
         assert_eq!(s2.client_filter(), ClientFilter::Offline);
     }
 
-    // Тесты "default_..._when_missing_in_old_state" из старого SettingsStore
+    // Тесты "default_..._when_missing_in_old_state" из старого хранилища
     // проверяли десериализацию произвольного state.json напрямую через
-    // SettingsStore::load. Store так JSON не читает — единственная точка
+    // старую загрузку из файла. Store так JSON не читает — единственная точка
     // разбора legacy-формата это migrate_state_json, поэтому проверяем
     // те же дефолты там, на неполном файле без deliver_*/client_filter.
     #[test]
@@ -292,7 +292,7 @@ mod tests {
         std::fs::write(
             &state,
             // ВАЖНО: Lang сериализуется как "Ru"/"En" (derive без rename_all) —
-            // ровно так пишет старый SettingsStore.
+            // ровно так писало старое JSON-хранилище настроек.
             r#"{"psk_default":true,"name_slug":true,"langs":{"42":"En"},
                 "deliver_conf":false,"deliver_qr":true,"deliver_link":false,
                 "client_filter":"online"}"#,
