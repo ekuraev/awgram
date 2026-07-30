@@ -624,8 +624,18 @@ async fn message_handler(
                                 .await?;
                         }
                         Ok(true) => {
+                            // Клавиатуру «Пересоздать» показываем только если этот
+                            // клиент в скоупе роли — иначе групповой админ увидел бы
+                            // кнопку для чужого клиента (клик всё равно блокирует
+                            // client_in_scope в Action::Recreate, но предлагать её
+                            // нельзя).
+                            let kb = if client_in_scope(&role, &settings, &valid) {
+                                menu::confirm_recreate(lang, &valid)
+                            } else {
+                                home_menu(&role, lang)
+                            };
                             bot.send_message(msg.chat.id, i18n::client_exists(lang, &valid))
-                                .reply_markup(menu::confirm_recreate(lang, &valid))
+                                .reply_markup(kb)
                                 .parse_mode(ParseMode::Html)
                                 .await?;
                             dialogue.update(State::Idle).await?;
@@ -1225,6 +1235,7 @@ async fn render_clients_list(
     settings: &Store,
     page: usize,
     scope: ListScope,
+    home: InlineKeyboardMarkup,
 ) {
     // list_enriched = status_code из list (корректная трёхцветная классификация)
     // + last_handshake/rx/tx из stats (метка времени для кнопки). Чистый stats
@@ -1244,14 +1255,7 @@ async fn render_clients_list(
                 .filter(|c| scope.admits(settings.client_group(&c.name)))
                 .collect();
             if clients.is_empty() {
-                edit_or_send(
-                    bot,
-                    chat,
-                    msg_id,
-                    i18n::clients_empty(lang),
-                    menu::main_menu(lang),
-                )
-                .await;
+                edit_or_send(bot, chat, msg_id, i18n::clients_empty(lang), home).await;
                 return;
             }
             // Полный вектор (не страница): clients_list индексирует expiries[i]
@@ -1376,7 +1380,18 @@ async fn callback_handler(
                     return Ok(());
                 }
             };
-            render_clients_list(&bot, chat, msg_id, lang, &vpn, &settings, 0, scope).await;
+            render_clients_list(
+                &bot,
+                chat,
+                msg_id,
+                lang,
+                &vpn,
+                &settings,
+                0,
+                scope,
+                home_menu(&role, lang),
+            )
+            .await;
         }
         Action::Page(p) => {
             // Пагинация: тот же рендер, но страница p. Фильтр из настроек —
@@ -1390,7 +1405,18 @@ async fn callback_handler(
                     return Ok(());
                 }
             };
-            render_clients_list(&bot, chat, msg_id, lang, &vpn, &settings, p, scope).await;
+            render_clients_list(
+                &bot,
+                chat,
+                msg_id,
+                lang,
+                &vpn,
+                &settings,
+                p,
+                scope,
+                home_menu(&role, lang),
+            )
+            .await;
         }
         Action::Stats => {
             let scope = match scope_for(&role, &settings, uid) {
@@ -1721,7 +1747,7 @@ async fn callback_handler(
                 State::AwaitingExpiry { name, recreate } => (name, recreate),
                 _ => {
                     bot.send_message(chat, session_expired_text(lang))
-                        .reply_markup(menu::main_menu(lang))
+                        .reply_markup(home_menu(&role, lang))
                         .parse_mode(ParseMode::Html)
                         .await?;
                     return Ok(());
@@ -1761,7 +1787,7 @@ async fn callback_handler(
                 } => (name, expires, recreate),
                 _ => {
                     bot.send_message(chat, session_expired_text(lang))
-                        .reply_markup(menu::main_menu(lang))
+                        .reply_markup(home_menu(&role, lang))
                         .parse_mode(ParseMode::Html)
                         .await?;
                     return Ok(());
@@ -2088,7 +2114,18 @@ async fn callback_handler(
             // Сохраняем фильтр персистентно, затем перерисовываем список с
             // НУЛЕВОЙ страницей — содержимое сменилось, старая страница могла
             // стать невалидной (напр. был на стр.2 оффлайн, переключил на онлайн).
-            render_clients_list(&bot, chat, msg_id, lang, &vpn, &settings, 0, scope).await;
+            render_clients_list(
+                &bot,
+                chat,
+                msg_id,
+                lang,
+                &vpn,
+                &settings,
+                0,
+                scope,
+                home_menu(&role, lang),
+            )
+            .await;
         }
         Action::Backup => {
             if !role.is_owner() {
