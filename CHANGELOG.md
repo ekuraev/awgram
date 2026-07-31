@@ -7,6 +7,16 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
 
 ### 🇷🇺 Русский
 
+_Пусто — изменений после v0.8.1 пока нет._
+
+### 🇬🇧 English
+
+_Empty — no changes since v0.8.1 yet._
+
+## [0.8.1] — 2026-07-31
+
+### 🇷🇺 Русский
+
 #### 🐛 Исправлено
 
 - **Гонка квоты группы**: при двух одновременных созданиях/переносах
@@ -470,6 +480,7 @@ config paths have changed. On a running VPS, perform once:
 - Environment diagnostics (🔬 button), ⏳ client expiry badges.
 - RU/EN localization, PSK default, backup/restore, persistent state.
 
+[0.8.1]: https://github.com/ekuraev/awgram/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/ekuraev/awgram/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/ekuraev/awgram/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/ekuraev/awgram/compare/v0.5.0...v0.6.0
