@@ -46,6 +46,15 @@ tangible on budget VPS hosts.
 - 🧩 **Per-artifact delivery** — from the client card you can request config,
   QR, link, or all of them separately.
 
+### Groups & delegation
+
+- 🗂️ **Client groups**: create, rename, delete; move clients between
+  groups and re-issue all configs of a group at once.
+- 🤝 **Delegation**: group admins see and manage only their own group;
+  assigned via a one-time invite link (24 h TTL) or by user ID.
+- 📏 **Quotas**: per-group client limit — applies to group admins (the
+  owner is unlimited).
+
 ### Server
 
 - 🩺 **Check**: card with service, interface, port, module, clients and
@@ -58,9 +67,9 @@ tangible on budget VPS hosts.
 
 - ⚙️ **Settings**: RU/EN language (per admin), default PSK, client name
   ID prefix; everything survives restarts (persistent state).
-- 🔒 **Security**: access restricted to `admin_ids`, shell-free manage-script
-  invocation, secrets never reach the logs, hardened mode (dedicated user +
-  sudoers).
+- 🔒 **Security**: access restricted to owners from `admin_ids` and the
+  group admins they appoint, shell-free manage-script invocation, secrets
+  never reach the logs, hardened mode (dedicated user + sudoers).
 
 ## Quick start
 
@@ -107,8 +116,9 @@ curl -fsSL https://github.com/ekuraev/awgram/releases/download/vX.Y.Z-rc.N/insta
 webhook) living on the same VPS as the VPN. It never touches the AmneziaWG
 configuration directly — it invokes the standard `manage_amneziawg.sh`
 script (shell-free, with `--json`) and renders the result as an inline
-Telegram menu. Access is restricted to `admin_ids`; the token and
-`.conf`/QR contents never reach the logs.
+Telegram menu. Access is restricted to owners from `admin_ids` and the
+group admins they appoint; the token and `.conf`/QR contents never reach
+the logs.
 
 ## AmneziaWG installer compatibility
 
