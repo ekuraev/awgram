@@ -5,13 +5,13 @@ use teloxide::dispatching::{HandlerExt, UpdateFilterExt};
 use teloxide::prelude::*;
 use teloxide::types::{CallbackQuery, InlineKeyboardMarkup, InputFile, MessageId, ParseMode};
 
-use crate::auth::is_admin;
+use crate::auth::{resolve_role, Role};
 use crate::bot::menu;
 use crate::bot::render::{self, format_client_card, format_stats};
 use crate::bot::State;
 use crate::config::Config;
 use crate::i18n::{self, Lang};
-use crate::store::{EventKind, Store};
+use crate::store::{EventKind, ListScope, Store};
 use crate::vpn::Vpn;
 
 #[derive(Debug, PartialEq)]
@@ -66,6 +66,29 @@ pub enum Action {
     SetLink(bool),
     // --- Фильтр списка клиентов (#28) ---
     SetListFilter(crate::vpn::model::ClientFilter),
+    // --- Группы (#20): делегирование управления групповым админам ---
+    Groups,
+    GroupCreate,
+    GroupCard(i64),
+    GroupRenameAsk(i64),
+    GroupQuotaAsk(i64),
+    GroupAdmins(i64),
+    GroupAdminRemove(i64, i64),
+    GroupInvite(i64),
+    GroupInviteRevoke(i64),
+    GroupAdminById(i64),
+    GroupDeleteAsk(i64),
+    GroupDeleteDetach(i64),
+    GroupDeleteAllAsk(i64),
+    GroupDeleteAllYes(i64),
+    GroupRegenAsk(i64),
+    GroupRegenRun(i64),
+    GroupSelect(i64),
+    GroupSelectMenu,
+    MoveClientAsk(String),
+    MoveClientTo(Option<i64>, String),
+    GroupScopeAsk,
+    GroupScopeSet(ListScope),
     Unknown,
 }
 
@@ -88,8 +111,104 @@ fn parse_callback(data: &str) -> Action {
         "restart" => Action::Restart,
         "restart_go" => Action::RestartRun,
         "repair" => Action::RepairModule,
+        "groups" => Action::Groups,
+        "g:new" => Action::GroupCreate,
+        "g:selmenu" => Action::GroupSelectMenu,
+        "gscope" => Action::GroupScopeAsk,
         _ => {
-            if let Some(v) = data.strip_prefix("page:") {
+            if let Some(v) = data.strip_prefix("g:card:") {
+                v.parse().map(Action::GroupCard).unwrap_or(Action::Unknown)
+            } else if let Some(v) = data.strip_prefix("g:ren:") {
+                v.parse()
+                    .map(Action::GroupRenameAsk)
+                    .unwrap_or(Action::Unknown)
+            } else if let Some(v) = data.strip_prefix("g:quota:") {
+                v.parse()
+                    .map(Action::GroupQuotaAsk)
+                    .unwrap_or(Action::Unknown)
+            } else if let Some(v) = data.strip_prefix("g:admdel:") {
+                // ДО g:adm: (g:admdel:… тоже начинается с g:adm) — как delyes:/del:.
+                let parts: Vec<&str> = v.splitn(2, ':').collect();
+                match (
+                    parts.first().and_then(|p| p.parse().ok()),
+                    parts.get(1).and_then(|p| p.parse().ok()),
+                ) {
+                    (Some(g), Some(u)) => Action::GroupAdminRemove(g, u),
+                    _ => Action::Unknown,
+                }
+            } else if let Some(v) = data.strip_prefix("g:admid:") {
+                // ДО g:adm: — тот же принцип.
+                v.parse()
+                    .map(Action::GroupAdminById)
+                    .unwrap_or(Action::Unknown)
+            } else if let Some(v) = data.strip_prefix("g:adm:") {
+                v.parse()
+                    .map(Action::GroupAdmins)
+                    .unwrap_or(Action::Unknown)
+            } else if let Some(v) = data.strip_prefix("g:invrev:") {
+                // ДО g:inv: — тот же принцип.
+                v.parse()
+                    .map(Action::GroupInviteRevoke)
+                    .unwrap_or(Action::Unknown)
+            } else if let Some(v) = data.strip_prefix("g:inv:") {
+                v.parse()
+                    .map(Action::GroupInvite)
+                    .unwrap_or(Action::Unknown)
+            } else if let Some(v) = data.strip_prefix("g:delallyes:") {
+                // ДО g:delall: — тот же принцип.
+                v.parse()
+                    .map(Action::GroupDeleteAllYes)
+                    .unwrap_or(Action::Unknown)
+            } else if let Some(v) = data.strip_prefix("g:delall:") {
+                // ДО g:del: — тот же принцип.
+                v.parse()
+                    .map(Action::GroupDeleteAllAsk)
+                    .unwrap_or(Action::Unknown)
+            } else if let Some(v) = data.strip_prefix("g:deldetach:") {
+                // ДО g:del: — тот же принцип.
+                v.parse()
+                    .map(Action::GroupDeleteDetach)
+                    .unwrap_or(Action::Unknown)
+            } else if let Some(v) = data.strip_prefix("g:del:") {
+                v.parse()
+                    .map(Action::GroupDeleteAsk)
+                    .unwrap_or(Action::Unknown)
+            } else if let Some(v) = data.strip_prefix("g:regengo:") {
+                // ДО g:regen: — тот же принцип.
+                v.parse()
+                    .map(Action::GroupRegenRun)
+                    .unwrap_or(Action::Unknown)
+            } else if let Some(v) = data.strip_prefix("g:regen:") {
+                v.parse()
+                    .map(Action::GroupRegenAsk)
+                    .unwrap_or(Action::Unknown)
+            } else if let Some(v) = data.strip_prefix("g:sel:") {
+                v.parse()
+                    .map(Action::GroupSelect)
+                    .unwrap_or(Action::Unknown)
+            } else if let Some(v) = data.strip_prefix("gmoveto:") {
+                // ДО gmove: (gmoveto:… начинается с gmove) — как delyes:/del:.
+                let parts: Vec<&str> = v.splitn(2, ':').collect();
+                match (parts.first(), parts.get(1)) {
+                    (Some(&"none"), Some(name)) => Action::MoveClientTo(None, name.to_string()),
+                    (Some(id), Some(name)) => id
+                        .parse()
+                        .map(|g| Action::MoveClientTo(Some(g), name.to_string()))
+                        .unwrap_or(Action::Unknown),
+                    _ => Action::Unknown,
+                }
+            } else if let Some(v) = data.strip_prefix("gmove:") {
+                Action::MoveClientAsk(v.to_string())
+            } else if let Some(v) = data.strip_prefix("gscope:") {
+                match v {
+                    "all" => Action::GroupScopeSet(crate::store::ListScope::All),
+                    "none" => Action::GroupScopeSet(crate::store::ListScope::NoGroup),
+                    id => id
+                        .parse()
+                        .map(|g| Action::GroupScopeSet(crate::store::ListScope::Group(g)))
+                        .unwrap_or(Action::Unknown),
+                }
+            } else if let Some(v) = data.strip_prefix("page:") {
                 v.parse().map(Action::Page).unwrap_or(Action::Unknown)
             } else if let Some(v) = data.strip_prefix("client:") {
                 Action::ShowClient(v.to_string())
@@ -294,6 +413,80 @@ async fn edit_or_send(
     }
 }
 
+/// Домашняя клавиатура по роли: владельцу — полное меню, групповому админу —
+/// его сокращённое (кнопка смены группы при нескольких группах).
+pub fn home_menu(role: &Role, lang: Lang) -> InlineKeyboardMarkup {
+    match role {
+        Role::GroupAdmin(groups) => menu::ga_main_menu(lang, groups.len() > 1),
+        _ => menu::main_menu(lang),
+    }
+}
+
+/// Рабочая группа группового админа: единственная — сразу она; из нескольких —
+/// сохранённый выбор, если он всё ещё валиден; иначе None (нужен экран выбора).
+pub fn current_ga_group(settings: &Store, uid: i64, groups: &[i64]) -> Option<i64> {
+    match groups {
+        [only] => Some(*only),
+        _ => settings.current_group(uid).filter(|g| groups.contains(g)),
+    }
+}
+
+/// Клиент в зоне видимости роли? Владелец видит всех; групповой админ — только
+/// клиентов своих групп (без группы — не видны). Логика в Role::can_see_client.
+fn client_in_scope(role: &Role, settings: &Store, name: &str) -> bool {
+    role.can_see_client(settings.client_group(name))
+}
+
+/// Группа для привязки клиента в finish_add. При recreate — существующая
+/// привязка: пересоздание не отвязывает клиента у владельца и не переносит
+/// его в текущую группу группового админа (скоуп на объект уже перепроверен
+/// вызывающим). Новому клиенту: групповому админу — его текущая группа,
+/// владельцу — без группы. None — текущей группы нет (нужен экран выбора).
+fn group_for_new_client(
+    role: &Role,
+    settings: &Store,
+    uid: i64,
+    recreate: bool,
+    name: &str,
+) -> Option<Option<i64>> {
+    if recreate {
+        return Some(settings.client_group(name));
+    }
+    match role {
+        Role::GroupAdmin(groups) => current_ga_group(settings, uid, groups).map(Some),
+        _ => Some(None),
+    }
+}
+
+/// Скоуп по роли: владельцу — сохранённый фильтр группы; групповому админу —
+/// текущая группа или None (нужен экран выбора группы).
+fn scope_for(role: &Role, settings: &Store, uid: i64) -> Option<ListScope> {
+    match role {
+        Role::GroupAdmin(groups) => current_ga_group(settings, uid, groups).map(ListScope::Group),
+        _ => Some(settings.owner_scope(uid)),
+    }
+}
+
+/// Экран выбора группы для группового админа (общий для List/Stats/Menu/Add).
+async fn show_group_select(
+    bot: &Bot,
+    chat: ChatId,
+    msg_id: MessageId,
+    lang: Lang,
+    settings: &Store,
+    groups: &[i64],
+) {
+    let rows: Vec<_> = groups.iter().filter_map(|g| settings.group(*g)).collect();
+    edit_or_send(
+        bot,
+        chat,
+        msg_id,
+        i18n::select_group_title(lang),
+        menu::group_select_menu(lang, &rows),
+    )
+    .await;
+}
+
 /// Перерисовывает экран настроек: заголовок и клавиатура собираются из одних
 /// и тех же текущих значений тумблеров (единственное место, где они читаются
 /// для этого экрана).
@@ -322,6 +515,32 @@ async fn show_settings(bot: &Bot, chat: ChatId, msg_id: MessageId, lang: Lang, s
     .await;
 }
 
+/// Перерисовывает карточку группы: заголовок и клавиатура из одного чтения БД.
+async fn show_group_card(
+    bot: &Bot,
+    chat: ChatId,
+    msg_id: MessageId,
+    lang: Lang,
+    settings: &Store,
+    id: i64,
+) {
+    let Some(g) = settings.group(id) else {
+        let _ = bot.send_message(chat, i18n::not_found(lang)).await;
+        return;
+    };
+    let count = settings.group_client_count(id);
+    let admins = settings.group_admin_ids(id);
+    let has_invite = settings.active_invite(id, now_epoch()).is_some();
+    edit_or_send(
+        bot,
+        chat,
+        msg_id,
+        i18n::group_card(lang, &g.name, count, g.max_clients, admins.len()),
+        menu::group_card_menu(lang, id, has_invite),
+    )
+    .await;
+}
+
 async fn message_handler(
     bot: Bot,
     dialogue: MyDialogue,
@@ -338,8 +557,72 @@ async fn message_handler(
         return Ok(());
     }
 
+    // Инвайт-ссылка: /start inv_<token>. Обрабатывается ДО роль-гейта —
+    // приглашённый ещё не имеет никакой роли. Токен одноразовый с TTL, так что
+    // подбор мусорных токенов даёт лишь "ссылка недействительна".
+    if let Some(payload) = msg
+        .text()
+        .and_then(|t| t.strip_prefix("/start inv_"))
+        .map(str::trim)
+    {
+        let uid = user_id_of_msg(&msg).unwrap_or(0);
+        let lang = settings.lang(uid);
+        match settings.use_invite(payload, uid, now_epoch()) {
+            crate::store::InviteUse::Joined(gid) => {
+                let gname = settings.group(gid).map(|g| g.name).unwrap_or_default();
+                settings.log_event(
+                    now_epoch(),
+                    EventKind::InviteUse,
+                    None,
+                    Some(uid),
+                    Some(&format!("group={gid}")),
+                );
+                settings.log_event(
+                    now_epoch(),
+                    EventKind::AdminAdd,
+                    None,
+                    Some(uid),
+                    Some(&format!("group={gid} via=invite")),
+                );
+                settings.set_current_group(uid, gid);
+                // multi по факту: пользователь мог уже быть админом других
+                // групп — кнопку смены группы прячем только при единственной.
+                let multi = settings.admin_group_ids(uid).len() > 1;
+                bot.send_message(msg.chat.id, i18n::joined_group(lang, &gname))
+                    .parse_mode(ParseMode::Html)
+                    .reply_markup(menu::ga_main_menu(lang, multi))
+                    .await?;
+                // Уведомить владельцев о новом админе.
+                for owner in &cfg.admin_ids {
+                    let _ = bot
+                        .send_message(
+                            ChatId(*owner),
+                            i18n::owner_notified_join(settings.lang(*owner), uid, &gname),
+                        )
+                        .parse_mode(ParseMode::Html)
+                        .await;
+                }
+            }
+            crate::store::InviteUse::AlreadyAdmin(gid) => {
+                let gname = settings.group(gid).map(|g| g.name).unwrap_or_default();
+                let multi = settings.admin_group_ids(uid).len() > 1;
+                bot.send_message(msg.chat.id, i18n::joined_group(lang, &gname))
+                    .parse_mode(ParseMode::Html)
+                    .reply_markup(menu::ga_main_menu(lang, multi))
+                    .await?;
+            }
+            crate::store::InviteUse::Invalid => {
+                bot.send_message(msg.chat.id, i18n::invite_invalid(lang))
+                    .await?;
+            }
+        }
+        dialogue.update(State::Idle).await?;
+        return Ok(());
+    }
+
     let uid = user_id_of_msg(&msg).unwrap_or(0);
-    if !is_admin(uid, &cfg.admin_ids) {
+    let role = resolve_role(uid, &cfg.admin_ids, &settings);
+    if role == Role::Denied {
         tracing::warn!(user_id = uid, "отклонён доступ (message)");
         let lang = settings.lang(uid);
         bot.send_message(msg.chat.id, i18n::access_denied(lang))
@@ -379,8 +662,18 @@ async fn message_handler(
                                 .await?;
                         }
                         Ok(true) => {
+                            // Клавиатуру «Пересоздать» показываем только если этот
+                            // клиент в скоупе роли — иначе групповой админ увидел бы
+                            // кнопку для чужого клиента (клик всё равно блокирует
+                            // client_in_scope в Action::Recreate, но предлагать её
+                            // нельзя).
+                            let kb = if client_in_scope(&role, &settings, &valid) {
+                                menu::confirm_recreate(lang, &valid)
+                            } else {
+                                home_menu(&role, lang)
+                            };
                             bot.send_message(msg.chat.id, i18n::client_exists(lang, &valid))
-                                .reply_markup(menu::confirm_recreate(lang, &valid))
+                                .reply_markup(kb)
                                 .parse_mode(ParseMode::Html)
                                 .await?;
                             dialogue.update(State::Idle).await?;
@@ -534,6 +827,169 @@ async fn message_handler(
                 }
             }
         }
+        State::AwaitingGroupName => {
+            if !role.is_owner() {
+                dialogue.update(State::Idle).await?;
+                return Ok(());
+            }
+            let raw = msg.text().unwrap_or_default().trim().to_string();
+            if raw.is_empty() || raw.chars().count() > 32 {
+                bot.send_message(msg.chat.id, i18n::bad_group_name(lang))
+                    .await?;
+            } else {
+                match settings.create_group(&raw, now_epoch()) {
+                    Ok(_) => {
+                        settings.log_event(
+                            now_epoch(),
+                            EventKind::GroupCreate,
+                            None,
+                            Some(uid),
+                            Some(&raw),
+                        );
+                        bot.send_message(msg.chat.id, i18n::group_created(lang, &raw))
+                            .parse_mode(ParseMode::Html)
+                            .reply_markup(menu::main_menu(lang))
+                            .await?;
+                        dialogue.update(State::Idle).await?;
+                    }
+                    Err(crate::store::GroupError::NameTaken) => {
+                        bot.send_message(msg.chat.id, i18n::group_name_taken(lang, &raw))
+                            .parse_mode(ParseMode::Html)
+                            .await?;
+                    }
+                    // NotFound для INSERT недостижим — сворачиваем в общий сбой.
+                    Err(crate::store::GroupError::Db | crate::store::GroupError::NotFound) => {
+                        let err = crate::error::Error::Telegram("db".into());
+                        bot.send_message(msg.chat.id, i18n::error_text(lang, &err))
+                            .await?;
+                        dialogue.update(State::Idle).await?;
+                    }
+                }
+            }
+        }
+        State::AwaitingGroupRename { id } => {
+            if !role.is_owner() {
+                dialogue.update(State::Idle).await?;
+                return Ok(());
+            }
+            let raw = msg.text().unwrap_or_default().trim().to_string();
+            if raw.is_empty() || raw.chars().count() > 32 {
+                bot.send_message(msg.chat.id, i18n::bad_group_name(lang))
+                    .await?;
+            } else {
+                match settings.rename_group(id, &raw) {
+                    Ok(()) => {
+                        settings.log_event(
+                            now_epoch(),
+                            EventKind::GroupRename,
+                            None,
+                            Some(uid),
+                            Some(&raw),
+                        );
+                        bot.send_message(msg.chat.id, i18n::group_renamed(lang, &raw))
+                            .parse_mode(ParseMode::Html)
+                            .reply_markup(menu::main_menu(lang))
+                            .await?;
+                        dialogue.update(State::Idle).await?;
+                    }
+                    Err(crate::store::GroupError::NameTaken) => {
+                        bot.send_message(msg.chat.id, i18n::group_name_taken(lang, &raw))
+                            .parse_mode(ParseMode::Html)
+                            .await?;
+                    }
+                    Err(crate::store::GroupError::NotFound) => {
+                        // Группу удалили, пока владелец вводил новое имя.
+                        bot.send_message(msg.chat.id, i18n::not_found(lang))
+                            .reply_markup(menu::main_menu(lang))
+                            .await?;
+                        dialogue.update(State::Idle).await?;
+                    }
+                    Err(crate::store::GroupError::Db) => {
+                        let err = crate::error::Error::Telegram("db".into());
+                        bot.send_message(msg.chat.id, i18n::error_text(lang, &err))
+                            .await?;
+                        dialogue.update(State::Idle).await?;
+                    }
+                }
+            }
+        }
+        State::AwaitingGroupQuota { id } => {
+            if !role.is_owner() {
+                dialogue.update(State::Idle).await?;
+                return Ok(());
+            }
+            let raw = msg.text().unwrap_or_default().trim().to_string();
+            match raw.parse::<i64>() {
+                Ok(n) if (0..=100_000).contains(&n) => {
+                    let quota = if n == 0 { None } else { Some(n) };
+                    if settings.set_group_quota(id, quota) {
+                        settings.log_event(
+                            now_epoch(),
+                            EventKind::GroupQuota,
+                            None,
+                            Some(uid),
+                            Some(&format!(
+                                "group={id} quota={}",
+                                quota.map_or_else(|| "unlimited".to_string(), |q| q.to_string())
+                            )),
+                        );
+                        bot.send_message(msg.chat.id, i18n::group_quota_set(lang, quota))
+                            .reply_markup(menu::main_menu(lang))
+                            .parse_mode(ParseMode::Html)
+                            .await?;
+                    } else {
+                        // Группу удалили, пока владелец вводил лимит.
+                        bot.send_message(msg.chat.id, i18n::not_found(lang))
+                            .reply_markup(menu::main_menu(lang))
+                            .await?;
+                    }
+                    dialogue.update(State::Idle).await?;
+                }
+                _ => {
+                    bot.send_message(msg.chat.id, i18n::bad_group_quota(lang))
+                        .await?;
+                }
+            }
+        }
+        State::AwaitingGroupAdminId { id } => {
+            if !role.is_owner() {
+                dialogue.update(State::Idle).await?;
+                return Ok(());
+            }
+            let raw = msg.text().unwrap_or_default().trim().to_string();
+            match raw.parse::<i64>() {
+                Ok(new_admin) if new_admin > 0 => {
+                    let first_admin_ever = !settings.has_any_group_admin();
+                    let gname = settings.group(id).map(|g| g.name).unwrap_or_default();
+                    if settings.add_group_admin(id, new_admin, uid, now_epoch()) {
+                        settings.log_event(
+                            now_epoch(),
+                            EventKind::AdminAdd,
+                            None,
+                            Some(uid),
+                            Some(&format!("group={id} user={new_admin} via=manual")),
+                        );
+                        bot.send_message(msg.chat.id, i18n::admin_added(lang, new_admin, &gname))
+                            .parse_mode(ParseMode::Html)
+                            .reply_markup(menu::main_menu(lang))
+                            .await?;
+                        if first_admin_ever && !settings.name_slug() {
+                            bot.send_message(msg.chat.id, i18n::slug_recommend(lang))
+                                .reply_markup(menu::slug_recommend_menu(lang))
+                                .await?;
+                        }
+                    } else {
+                        bot.send_message(msg.chat.id, i18n::admin_already(lang, new_admin))
+                            .await?;
+                    }
+                    dialogue.update(State::Idle).await?;
+                }
+                _ => {
+                    bot.send_message(msg.chat.id, i18n::bad_admin_id(lang))
+                        .await?;
+                }
+            }
+        }
         _ => {
             // /start и всё прочее.
             if !settings.has_lang(uid) {
@@ -543,10 +999,30 @@ async fn message_handler(
                     .reply_markup(menu::language_select())
                     .await?;
             } else {
-                bot.send_message(msg.chat.id, i18n::menu_title(lang))
-                    .reply_markup(menu::main_menu(lang))
-                    .parse_mode(ParseMode::Html)
-                    .await?;
+                match &role {
+                    Role::GroupAdmin(groups) => match current_ga_group(&settings, uid, groups) {
+                        Some(gid) => {
+                            let gname = settings.group(gid).map(|g| g.name).unwrap_or_default();
+                            bot.send_message(msg.chat.id, i18n::ga_menu_title(lang, &gname))
+                                .reply_markup(menu::ga_main_menu(lang, groups.len() > 1))
+                                .parse_mode(ParseMode::Html)
+                                .await?;
+                        }
+                        None => {
+                            let rows: Vec<_> =
+                                groups.iter().filter_map(|g| settings.group(*g)).collect();
+                            bot.send_message(msg.chat.id, i18n::select_group_title(lang))
+                                .reply_markup(menu::group_select_menu(lang, &rows))
+                                .await?;
+                        }
+                    },
+                    _ => {
+                        bot.send_message(msg.chat.id, i18n::menu_title(lang))
+                            .reply_markup(menu::main_menu(lang))
+                            .parse_mode(ParseMode::Html)
+                            .await?;
+                    }
+                }
             }
             dialogue.update(State::Idle).await?;
         }
@@ -566,8 +1042,32 @@ async fn finish_add(
     psk: bool,
     recreate: bool,
     uid: i64,
+    group: Option<i64>,
+    role: &Role,
 ) {
+    let home = home_menu(role, lang);
     let waiting = bot.send_message(chat, i18n::creating(lang)).await.ok();
+    // Квота группы: проверка непосредственно перед созданием. Best-effort:
+    // при двух конкурентных созданиях обе проверки могут пройти до add —
+    // перелёт максимум на глубину гонки, системно квота не копится. Только
+    // для не-recreate: recreate удаляет старого клиента перед add и сохраняет
+    // его группу (group_for_new_client), нетто-число клиентов не растёт.
+    if !recreate {
+        if let Some(gid) = group {
+            if let Some(remaining) = settings.group_remaining(gid) {
+                if remaining < 1 {
+                    if let Some(m) = waiting {
+                        let _ = bot.delete_message(chat, m.id).await;
+                    }
+                    let quota = settings.group(gid).and_then(|g| g.max_clients).unwrap_or(0);
+                    let _ = bot
+                        .send_message(chat, i18n::quota_reached(lang, quota))
+                        .await;
+                    return;
+                }
+            }
+        }
+    }
     if recreate {
         // Удаляем старого клиента перед созданием нового. Если remove упадёт —
         // не создаём нового, показываем ошибку; старый клиент остаётся.
@@ -589,6 +1089,13 @@ async fn finish_add(
                 Some(uid),
                 None,
             );
+            // Безусловно, а не только при Some(group): строка клиента с этим
+            // именем могла остаться от ранее удалённого клиента с чужим
+            // group_id (ON CONFLICT... DO UPDATE в assign_client_group её не
+            // создаёт заново, а перезатирает). Без безусловного вызова при
+            // group=None «воскресшая» строка сохранила бы старую привязку —
+            // группа-владелец получил бы доступ к новому чужому клиенту.
+            settings.assign_client_group(name, group, now_epoch());
             // Фильтр выдачи по тумблерам настроек (deliver_conf/qr/link): после
             // создания шлём только включённые артефакты. Ручная повторная выдача
             // через карточку клиента (SendConf/SendQr/SendLink/SendAll) фильтр
@@ -609,15 +1116,22 @@ async fn finish_add(
             }
         }
         // Гонка: клиент появился между проверкой exists() и add — скрипт молча
-        // пропустил создание (rc 0). Показываем то же предупреждение с кнопкой
-        // пересоздания, что и при обычном совпадении имени.
+        // пропустил создание (rc 0). Показываем то же предупреждение, что и при
+        // обычном совпадении имени; кнопку «Пересоздать» — только если клиент
+        // в скоупе роли (как в AwaitingName: групповому админу нельзя
+        // предлагать пересоздание чужого клиента).
         Err(crate::error::Error::ClientExists(_)) => {
             if let Some(m) = waiting {
                 let _ = bot.delete_message(chat, m.id).await;
             }
+            let kb = if client_in_scope(role, settings, name) {
+                menu::confirm_recreate(lang, name)
+            } else {
+                home
+            };
             let _ = bot
                 .send_message(chat, i18n::client_exists(lang, name))
-                .reply_markup(menu::confirm_recreate(lang, name))
+                .reply_markup(kb)
                 .parse_mode(ParseMode::Html)
                 .await;
             return;
@@ -632,7 +1146,7 @@ async fn finish_add(
     }
     let _ = bot
         .send_message(chat, i18n::done(lang))
-        .reply_markup(menu::main_menu(lang))
+        .reply_markup(home)
         .parse_mode(ParseMode::Html)
         .await;
 }
@@ -757,6 +1271,11 @@ async fn finish_bulk(
                     Some(uid),
                     Some("bulk"),
                 );
+                // Безусловно (см. finish_add): имя может быть переиспользовано
+                // после удаления клиента с чужим group_id — bulk всегда
+                // owner-only и без группы, поэтому явно отвязываем строку,
+                // а не оставляем «воскресшую» привязку от прежнего клиента.
+                settings.assign_client_group(&r.name, None, now_epoch());
             }
             // 5. Альбом .conf — одним sendMediaGroup (только если включён и есть
             // что отправлять; пустой альбом Telegram отклонит).
@@ -791,6 +1310,7 @@ async fn finish_bulk(
 /// Action::SetListFilter (различаются только страницей и тем, кто читает/
 /// устанавливает фильтр из настроек). Пустой список (до или после фильтра) →
 /// friendly-сообщение + главное меню.
+#[allow(clippy::too_many_arguments)]
 async fn render_clients_list(
     bot: &Bot,
     chat: ChatId,
@@ -798,7 +1318,11 @@ async fn render_clients_list(
     lang: Lang,
     vpn: &Vpn,
     settings: &Store,
+    uid: i64,
     page: usize,
+    scope: ListScope,
+    home: InlineKeyboardMarkup,
+    is_owner: bool,
 ) {
     // list_enriched = status_code из list (корректная трёхцветная классификация)
     // + last_handshake/rx/tx из stats (метка времени для кнопки). Чистый stats
@@ -808,18 +1332,17 @@ async fn render_clients_list(
         Ok(all_clients) => {
             // Фильтр + сортировка «онлайн вперёд» (🟢 → 🔴 → 🟡, внутри — по имени).
             // apply_filter_and_sort возвращает owned Vec — clients_list берёт срез по странице.
-            let filter = settings.client_filter();
+            let filter = settings.client_filter(uid);
             let clients =
                 crate::vpn::model::apply_filter_and_sort(&all_clients, filter, now_epoch());
+            // Скоуп: групповому админу — его текущая группа; владельцу — выбранный
+            // фильтр группы (Task 13) или все.
+            let clients: Vec<_> = clients
+                .into_iter()
+                .filter(|c| scope.admits(settings.client_group(&c.name)))
+                .collect();
             if clients.is_empty() {
-                edit_or_send(
-                    bot,
-                    chat,
-                    msg_id,
-                    i18n::clients_empty(lang),
-                    menu::main_menu(lang),
-                )
-                .await;
+                edit_or_send(bot, chat, msg_id, i18n::clients_empty(lang), home).await;
                 return;
             }
             // Полный вектор (не страница): clients_list индексирует expiries[i]
@@ -833,7 +1356,16 @@ async fn render_clients_list(
                 chat,
                 msg_id,
                 title,
-                menu::clients_list(lang, &clients, &expiries, now_epoch(), page, 8, filter),
+                menu::clients_list(
+                    lang,
+                    &clients,
+                    &expiries,
+                    now_epoch(),
+                    page,
+                    8,
+                    filter,
+                    is_owner,
+                ),
             )
             .await;
         }
@@ -871,7 +1403,8 @@ async fn callback_handler(
     let msg_id = src.id();
 
     let uid = user_id_of_cb(&q);
-    if !is_admin(uid, &cfg.admin_ids) {
+    let role = resolve_role(uid, &cfg.admin_ids, &settings);
+    if role == Role::Denied {
         tracing::warn!(user_id = uid, "отклонён доступ (callback)");
         return Ok(());
     }
@@ -881,67 +1414,202 @@ async fn callback_handler(
     match parse_callback(&data) {
         Action::Menu => {
             dialogue.update(State::Idle).await?;
-            edit_or_send(
-                &bot,
-                chat,
-                msg_id,
-                i18n::menu_title(lang),
-                menu::main_menu(lang),
-            )
-            .await;
-        }
-        Action::List => {
-            // Экран списка: stats → filter+sort (фильтр из настроек) → рендер.
-            // Фильтр/сортировку см. render_clients_list.
-            render_clients_list(&bot, chat, msg_id, lang, &vpn, &settings, 0).await;
-        }
-        Action::Page(p) => {
-            // Пагинация: тот же рендер, но страница p. Фильтр из настроек —
-            // переживает навигацию по страницам (Action::Page его не меняет).
-            render_clients_list(&bot, chat, msg_id, lang, &vpn, &settings, p).await;
-        }
-        Action::Stats => match vpn.list_enriched().await {
-            Ok(clients) => {
-                let now = now_epoch();
-                let summary = settings.traffic_summary(None, now);
-                let top = settings.top_clients(7, 5, now);
-                edit_or_send(
-                    &bot,
-                    chat,
-                    msg_id,
-                    format_stats(lang, &clients, now, &summary, &top),
-                    menu::main_menu(lang),
-                )
-                .await;
-            }
-            Err(e) => {
-                bot.send_message(chat, i18n::error_text(lang, &e)).await?;
-            }
-        },
-        Action::ShowClient(name) => match vpn.list_enriched().await {
-            Ok(clients) => match clients.iter().find(|c| c.name == name) {
-                Some(c) => {
-                    let now = now_epoch();
-                    let expiry = vpn.client_expiry(&name);
-                    let traffic = settings.traffic_summary(Some(&name), now);
+            match &role {
+                Role::GroupAdmin(groups) => match current_ga_group(&settings, uid, groups) {
+                    Some(gid) => {
+                        let gname = settings.group(gid).map(|g| g.name).unwrap_or_default();
+                        edit_or_send(
+                            &bot,
+                            chat,
+                            msg_id,
+                            i18n::ga_menu_title(lang, &gname),
+                            menu::ga_main_menu(lang, groups.len() > 1),
+                        )
+                        .await;
+                    }
+                    None => {
+                        show_group_select(&bot, chat, msg_id, lang, &settings, groups).await;
+                    }
+                },
+                _ => {
                     edit_or_send(
                         &bot,
                         chat,
                         msg_id,
-                        format_client_card(lang, c, now, expiry, &traffic),
-                        menu::client_card(lang, &name),
+                        i18n::menu_title(lang),
+                        menu::main_menu(lang),
                     )
                     .await;
                 }
-                None => {
-                    bot.send_message(chat, i18n::not_found(lang)).await?;
-                }
-            },
-            Err(e) => {
-                bot.send_message(chat, i18n::error_text(lang, &e)).await?;
             }
-        },
+        }
+        Action::GroupSelectMenu => {
+            if let Role::GroupAdmin(groups) = &role {
+                show_group_select(&bot, chat, msg_id, lang, &settings, groups).await;
+            }
+        }
+        Action::GroupSelect(id) => {
+            if let Role::GroupAdmin(groups) = &role {
+                if groups.contains(&id) {
+                    settings.set_current_group(uid, id);
+                    let gname = settings.group(id).map(|g| g.name).unwrap_or_default();
+                    edit_or_send(
+                        &bot,
+                        chat,
+                        msg_id,
+                        i18n::ga_menu_title(lang, &gname),
+                        menu::ga_main_menu(lang, groups.len() > 1),
+                    )
+                    .await;
+                }
+            }
+        }
+        Action::List => {
+            // Экран списка: stats → filter+sort (фильтр из настроек) → скоуп роли → рендер.
+            // Фильтр/сортировку/скоуп см. render_clients_list/scope_for.
+            let scope = match scope_for(&role, &settings, uid) {
+                Some(s) => s,
+                None => {
+                    if let Role::GroupAdmin(groups) = &role {
+                        show_group_select(&bot, chat, msg_id, lang, &settings, groups).await;
+                    }
+                    return Ok(());
+                }
+            };
+            render_clients_list(
+                &bot,
+                chat,
+                msg_id,
+                lang,
+                &vpn,
+                &settings,
+                uid,
+                0,
+                scope,
+                home_menu(&role, lang),
+                role.is_owner(),
+            )
+            .await;
+        }
+        Action::Page(p) => {
+            // Пагинация: тот же рендер, но страница p. Фильтр из настроек —
+            // переживает навигацию по страницам (Action::Page его не меняет).
+            let scope = match scope_for(&role, &settings, uid) {
+                Some(s) => s,
+                None => {
+                    if let Role::GroupAdmin(groups) = &role {
+                        show_group_select(&bot, chat, msg_id, lang, &settings, groups).await;
+                    }
+                    return Ok(());
+                }
+            };
+            render_clients_list(
+                &bot,
+                chat,
+                msg_id,
+                lang,
+                &vpn,
+                &settings,
+                uid,
+                p,
+                scope,
+                home_menu(&role, lang),
+                role.is_owner(),
+            )
+            .await;
+        }
+        Action::Stats => {
+            let scope = match scope_for(&role, &settings, uid) {
+                Some(s) => s,
+                None => {
+                    if let Role::GroupAdmin(groups) = &role {
+                        show_group_select(&bot, chat, msg_id, lang, &settings, groups).await;
+                    }
+                    return Ok(());
+                }
+            };
+            match vpn.list_enriched().await {
+                Ok(mut clients) => {
+                    clients.retain(|c| scope.admits(settings.client_group(&c.name)));
+                    let now = now_epoch();
+                    // Суммарный трафик: All — глобальный одним запросом,
+                    // иначе — сумма пер-клиентских сводок отфильтрованного списка.
+                    let summary = if scope == ListScope::All {
+                        settings.traffic_summary(None, now)
+                    } else {
+                        let mut acc = crate::store::TrafficSummary::default();
+                        for c in &clients {
+                            acc.add(&settings.traffic_summary(Some(&c.name), now));
+                        }
+                        acc
+                    };
+                    let top = if scope == ListScope::All {
+                        settings.top_clients(7, 5, now)
+                    } else {
+                        let names: std::collections::HashSet<&str> =
+                            clients.iter().map(|c| c.name.as_str()).collect();
+                        settings
+                            .top_clients(7, 10_000, now)
+                            .into_iter()
+                            .filter(|(n, _)| names.contains(n.as_str()))
+                            .take(5)
+                            .collect()
+                    };
+                    edit_or_send(
+                        &bot,
+                        chat,
+                        msg_id,
+                        format_stats(lang, &clients, now, &summary, &top),
+                        home_menu(&role, lang),
+                    )
+                    .await;
+                }
+                Err(e) => {
+                    bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                }
+            }
+        }
+        Action::ShowClient(name) => {
+            if !client_in_scope(&role, &settings, &name) {
+                return Ok(());
+            }
+            match vpn.list_enriched().await {
+                Ok(clients) => match clients.iter().find(|c| c.name == name) {
+                    Some(c) => {
+                        let now = now_epoch();
+                        let expiry = vpn.client_expiry(&name);
+                        let traffic = settings.traffic_summary(Some(&name), now);
+                        let group_line = settings
+                            .client_group(&name)
+                            .and_then(|gid| settings.group(gid))
+                            .map(|g| i18n::group_label_line(lang, &g.name))
+                            .unwrap_or_default();
+                        edit_or_send(
+                            &bot,
+                            chat,
+                            msg_id,
+                            format!(
+                                "{}{}",
+                                format_client_card(lang, c, now, expiry, &traffic),
+                                group_line
+                            ),
+                            menu::client_card(lang, &name, role.is_owner()),
+                        )
+                        .await;
+                    }
+                    None => {
+                        bot.send_message(chat, i18n::not_found(lang)).await?;
+                    }
+                },
+                Err(e) => {
+                    bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                }
+            }
+        }
         Action::ClientHistory(name) => {
+            if !client_in_scope(&role, &settings, &name) {
+                return Ok(());
+            }
             let now = now_epoch();
             let events = settings.client_events(&name, 10);
             edit_or_send(
@@ -954,6 +1622,9 @@ async fn callback_handler(
             .await;
         }
         Action::SendConf(name) => {
+            if !client_in_scope(&role, &settings, &name) {
+                return Ok(());
+            }
             // 📄 Конфиг — только .conf, без QR/ссылки (фильтр выдачи не применяется:
             // это ручная повторная выдача конкретного артефакта).
             match vpn.existing_files(&name) {
@@ -972,6 +1643,9 @@ async fn callback_handler(
             }
         }
         Action::SendQr(name) => {
+            if !client_in_scope(&role, &settings, &name) {
+                return Ok(());
+            }
             // 🖼 QR — опционален (qrencode может отсутствовать на сервере).
             match vpn.existing_files(&name) {
                 Ok(res) if std::path::Path::new(&res.qr_path).exists() => {
@@ -989,6 +1663,9 @@ async fn callback_handler(
             }
         }
         Action::SendLink(name) => {
+            if !client_in_scope(&role, &settings, &name) {
+                return Ok(());
+            }
             // 🔗 Ссылка vpn:// — опциональна (qrencode генерирует её заодно с QR).
             match vpn.existing_files(&name) {
                 Ok(res) if !res.uri.is_empty() => {
@@ -1005,6 +1682,9 @@ async fn callback_handler(
             }
         }
         Action::SendAll(name) => {
+            if !client_in_scope(&role, &settings, &name) {
+                return Ok(());
+            }
             // 📦 Всё — безусловная выдача conf+QR+ссылка (фильтр настроек игнорируется:
             // пользователь явно запросил всё через карточку клиента).
             match vpn.existing_files(&name) {
@@ -1019,6 +1699,9 @@ async fn callback_handler(
             }
         }
         Action::AskDelete(name) => {
+            if !client_in_scope(&role, &settings, &name) {
+                return Ok(());
+            }
             edit_or_send(
                 &bot,
                 chat,
@@ -1028,26 +1711,34 @@ async fn callback_handler(
             )
             .await;
         }
-        Action::ConfirmDelete(name) => match vpn.remove(&name).await {
-            Ok(()) => {
-                settings.log_event(
-                    now_epoch(),
-                    EventKind::ClientRemove,
-                    Some(&name),
-                    Some(uid),
-                    None,
-                );
-                bot.send_message(chat, i18n::deleted(lang, &name))
-                    .reply_markup(menu::main_menu(lang))
-                    .parse_mode(ParseMode::Html)
-                    .await?;
+        Action::ConfirmDelete(name) => {
+            if !client_in_scope(&role, &settings, &name) {
+                return Ok(());
             }
-            Err(e) => {
-                tracing::error!(error = %e, "remove провалился");
-                bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+            match vpn.remove(&name).await {
+                Ok(()) => {
+                    settings.log_event(
+                        now_epoch(),
+                        EventKind::ClientRemove,
+                        Some(&name),
+                        Some(uid),
+                        None,
+                    );
+                    bot.send_message(chat, i18n::deleted(lang, &name))
+                        .reply_markup(home_menu(&role, lang))
+                        .parse_mode(ParseMode::Html)
+                        .await?;
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "remove провалился");
+                    bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                }
             }
-        },
+        }
         Action::Recreate(name) => {
+            if !client_in_scope(&role, &settings, &name) {
+                return Ok(());
+            }
             bot.send_message(chat, i18n::ask_expiry(lang))
                 .reply_markup(menu::expiry_menu(lang))
                 .await?;
@@ -1059,6 +1750,9 @@ async fn callback_handler(
                 .await?;
         }
         Action::Regen(name) => {
+            if !client_in_scope(&role, &settings, &name) {
+                return Ok(());
+            }
             let waiting = bot.send_message(chat, i18n::regen_running(lang)).await.ok();
             match vpn.regen_client(&name).await {
                 Ok(res) => {
@@ -1068,7 +1762,7 @@ async fn callback_handler(
                         bot.send_message(chat, i18n::error_text(lang, &e)).await?;
                     } else {
                         bot.send_message(chat, i18n::done(lang))
-                            .reply_markup(menu::main_menu(lang))
+                            .reply_markup(home_menu(&role, lang))
                             .parse_mode(ParseMode::Html)
                             .await?;
                     }
@@ -1083,6 +1777,9 @@ async fn callback_handler(
             }
         }
         Action::RegenAll => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             edit_or_send(
                 &bot,
                 chat,
@@ -1093,6 +1790,9 @@ async fn callback_handler(
             .await;
         }
         Action::RegenAllRun(reset_routes) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             let waiting = bot
                 .send_message(chat, i18n::regen_all_running(lang))
                 .await
@@ -1130,6 +1830,14 @@ async fn callback_handler(
             }
         }
         Action::Add => {
+            // Групповой админ без выбранной группы не может создавать «в никуда» —
+            // сначала экран выбора группы (та же логика, что и в List).
+            if let Role::GroupAdmin(groups) = &role {
+                if current_ga_group(&settings, uid, groups).is_none() {
+                    show_group_select(&bot, chat, msg_id, lang, &settings, groups).await;
+                    return Ok(());
+                }
+            }
             bot.send_message(chat, i18n::ask_client_name(lang, settings.name_slug()))
                 .await?;
             dialogue.update(State::AwaitingName).await?;
@@ -1139,7 +1847,7 @@ async fn callback_handler(
                 State::AwaitingExpiry { name, recreate } => (name, recreate),
                 _ => {
                     bot.send_message(chat, session_expired_text(lang))
-                        .reply_markup(menu::main_menu(lang))
+                        .reply_markup(home_menu(&role, lang))
                         .parse_mode(ParseMode::Html)
                         .await?;
                     return Ok(());
@@ -1179,9 +1887,36 @@ async fn callback_handler(
                 } => (name, expires, recreate),
                 _ => {
                     bot.send_message(chat, session_expired_text(lang))
-                        .reply_markup(menu::main_menu(lang))
+                        .reply_markup(home_menu(&role, lang))
                         .parse_mode(ParseMode::Html)
                         .await?;
+                    return Ok(());
+                }
+            };
+            // Recreate: право на объект проверялось только на входе в
+            // Action::Recreate — за время диалога (выбор срока/PSK) владелец
+            // мог отозвать группу у админа или перенести клиента в другую
+            // группу. Перепроверяем непосредственно перед finish_add.
+            if recreate && !client_in_scope(&role, &settings, &name) {
+                bot.send_message(chat, session_expired_text(lang))
+                    .reply_markup(home_menu(&role, lang))
+                    .parse_mode(ParseMode::Html)
+                    .await?;
+                dialogue.exit().await?;
+                return Ok(());
+            }
+            // Группа для привязки: при recreate — существующая привязка
+            // клиента (см. group_for_new_client); новому клиенту групповому
+            // админу — его текущая группа (если она стала недоступна за время
+            // диалога — не создаём «в никуда», отправляем на выбор группы),
+            // владельцу — без группы.
+            let group = match group_for_new_client(&role, &settings, uid, recreate, &name) {
+                Some(g) => g,
+                None => {
+                    if let Role::GroupAdmin(groups) = &role {
+                        show_group_select(&bot, chat, msg_id, lang, &settings, groups).await;
+                    }
+                    dialogue.exit().await?;
                     return Ok(());
                 }
             };
@@ -1196,11 +1931,16 @@ async fn callback_handler(
                 psk,
                 recreate,
                 uid,
+                group,
+                &role,
             )
             .await;
             dialogue.exit().await?;
         }
         Action::AddBulk => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             // Шаг 1/4 массового диалога: запрос префикса (текстовый ввод, а не
             // кнопка). Валидация префикса — на следующем шаге (gen_bulk_names с
             // count=1 как smoke-проверка), тут только приглашение к вводу.
@@ -1208,6 +1948,9 @@ async fn callback_handler(
             dialogue.update(State::AwaitingBulkPrefix).await?;
         }
         Action::AddBulkRun(count) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             // callback_data — untrusted input (craftable). Клавиатура эмитит
             // только 1/3/5/10, но защищаемся от crafted bulk:N извне.
             if count == 0 || count > crate::vpn::validate::MAX_BULK as usize {
@@ -1238,6 +1981,9 @@ async fn callback_handler(
                 .await?;
         }
         Action::BulkExpiry(kind) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             // Шаг 3/4: срок выбран. «custom» → текстовый ввод срока,
             // иначе — переход к выбору PSK с уже готовым expires.
             let (prefix, count) = match dialogue.get().await?.unwrap_or_default() {
@@ -1276,6 +2022,9 @@ async fn callback_handler(
             }
         }
         Action::AddBulkPsk(psk) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             // Шаг 4/4: PSK выбран — финальный забег (превентивные проверки +
             // add_many + альбом). После finish_bulk диалог закрывается.
             let (prefix, count, expires) = match dialogue.get().await?.unwrap_or_default() {
@@ -1308,9 +2057,15 @@ async fn callback_handler(
             dialogue.exit().await?;
         }
         Action::Settings => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             show_settings(&bot, chat, msg_id, lang, &settings).await;
         }
         Action::Modify(name) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             edit_or_send(
                 &bot,
                 chat,
@@ -1322,6 +2077,9 @@ async fn callback_handler(
             dialogue.update(State::AwaitingModifyParam { name }).await?;
         }
         Action::ModifyParam(name, param) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             bot.send_message(chat, i18n::ask_modify_param(lang, param))
                 .await?;
             dialogue
@@ -1329,6 +2087,9 @@ async fn callback_handler(
                 .await?;
         }
         Action::Restart => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             edit_or_send(
                 &bot,
                 chat,
@@ -1339,6 +2100,9 @@ async fn callback_handler(
             .await;
         }
         Action::RestartRun => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             let waiting = bot.send_message(chat, i18n::creating(lang)).await.ok();
             match vpn.restart().await {
                 Ok(out) => {
@@ -1361,6 +2125,9 @@ async fn callback_handler(
             }
         }
         Action::RepairModule => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             let waiting = bot.send_message(chat, i18n::creating(lang)).await.ok();
             match vpn.repair_module().await {
                 Ok(out) => {
@@ -1397,6 +2164,9 @@ async fn callback_handler(
             .await;
         }
         Action::SetLang(code) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             if let Some(l) = i18n::parse_lang(&code) {
                 settings.set_lang(uid, l);
             }
@@ -1404,33 +2174,77 @@ async fn callback_handler(
             show_settings(&bot, chat, msg_id, lang, &settings).await;
         }
         Action::SetPsk(on) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             settings.set_psk_default(on);
             show_settings(&bot, chat, msg_id, lang, &settings).await;
         }
         Action::SetSlug(on) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             settings.set_name_slug(on);
             show_settings(&bot, chat, msg_id, lang, &settings).await;
         }
         Action::SetConf(on) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             settings.set_deliver_conf(on);
             show_settings(&bot, chat, msg_id, lang, &settings).await;
         }
         Action::SetQr(on) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             settings.set_deliver_qr(on);
             show_settings(&bot, chat, msg_id, lang, &settings).await;
         }
         Action::SetLink(on) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             settings.set_deliver_link(on);
             show_settings(&bot, chat, msg_id, lang, &settings).await;
         }
         Action::SetListFilter(f) => {
+            // Фильтр — персональная настройка: групповой админ, переключая свой
+            // список, не меняет вид владельцу (и наоборот). Скоуп (какие
+            // клиенты вообще видны) считается отдельно через scope_for,
+            // как в List/Page.
+            settings.set_client_filter(uid, f);
+            let scope = match scope_for(&role, &settings, uid) {
+                Some(s) => s,
+                None => {
+                    if let Role::GroupAdmin(groups) = &role {
+                        show_group_select(&bot, chat, msg_id, lang, &settings, groups).await;
+                    }
+                    return Ok(());
+                }
+            };
             // Сохраняем фильтр персистентно, затем перерисовываем список с
             // НУЛЕВОЙ страницей — содержимое сменилось, старая страница могла
             // стать невалидной (напр. был на стр.2 оффлайн, переключил на онлайн).
-            settings.set_client_filter(f);
-            render_clients_list(&bot, chat, msg_id, lang, &vpn, &settings, 0).await;
+            render_clients_list(
+                &bot,
+                chat,
+                msg_id,
+                lang,
+                &vpn,
+                &settings,
+                uid,
+                0,
+                scope,
+                home_menu(&role, lang),
+                role.is_owner(),
+            )
+            .await;
         }
         Action::Backup => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             edit_or_send(
                 &bot,
                 chat,
@@ -1441,6 +2255,9 @@ async fn callback_handler(
             .await;
         }
         Action::BackupNew => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             let waiting = bot
                 .send_message(chat, i18n::backup_creating(lang))
                 .await
@@ -1463,99 +2280,122 @@ async fn callback_handler(
                 let _ = bot.delete_message(chat, m.id).await;
             }
         }
-        Action::BackupList => match vpn.list_backups() {
-            Ok(list) if list.is_empty() => {
-                edit_or_send(
-                    &bot,
-                    chat,
-                    msg_id,
-                    i18n::backups_empty(lang),
-                    menu::main_menu(lang),
-                )
-                .await;
+        Action::BackupList => {
+            if !role.is_owner() {
+                return Ok(());
             }
-            Ok(list) => {
-                edit_or_send(
-                    &bot,
-                    chat,
-                    msg_id,
-                    i18n::backups_list_title(lang),
-                    menu::backups_list(lang, &list),
-                )
-                .await;
-            }
-            Err(e) => {
-                bot.send_message(chat, i18n::error_text(lang, &e)).await?;
-            }
-        },
-        Action::BackupCard(idx) => match vpn.list_backups() {
-            Ok(list) => match list.get(idx) {
-                Some(bf) => {
-                    let text = format!("<code>{}</code>", i18n::html_escape(&bf.name));
-                    edit_or_send(&bot, chat, msg_id, text, menu::backup_card(lang, idx)).await;
-                }
-                None => {
+            match vpn.list_backups() {
+                Ok(list) if list.is_empty() => {
                     edit_or_send(
                         &bot,
                         chat,
                         msg_id,
-                        i18n::backup_not_found(lang),
+                        i18n::backups_empty(lang),
                         menu::main_menu(lang),
                     )
                     .await;
                 }
-            },
-            Err(e) => {
-                bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                Ok(list) => {
+                    edit_or_send(
+                        &bot,
+                        chat,
+                        msg_id,
+                        i18n::backups_list_title(lang),
+                        menu::backups_list(lang, &list),
+                    )
+                    .await;
+                }
+                Err(e) => {
+                    bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                }
             }
-        },
-        Action::BackupDownload(idx) => match vpn.list_backups() {
-            Ok(list) => match list.get(idx) {
-                Some(bf) => {
-                    if let Err(e) = bot.send_document(chat, InputFile::file(&bf.path)).await {
-                        tracing::error!(error = %e, "send_document провалился");
-                        let err = crate::error::Error::Telegram(e.to_string());
-                        bot.send_message(chat, i18n::error_text(lang, &err)).await?;
+        }
+        Action::BackupCard(idx) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
+            match vpn.list_backups() {
+                Ok(list) => match list.get(idx) {
+                    Some(bf) => {
+                        let text = format!("<code>{}</code>", i18n::html_escape(&bf.name));
+                        edit_or_send(&bot, chat, msg_id, text, menu::backup_card(lang, idx)).await;
                     }
+                    None => {
+                        edit_or_send(
+                            &bot,
+                            chat,
+                            msg_id,
+                            i18n::backup_not_found(lang),
+                            menu::main_menu(lang),
+                        )
+                        .await;
+                    }
+                },
+                Err(e) => {
+                    bot.send_message(chat, i18n::error_text(lang, &e)).await?;
                 }
-                None => {
-                    bot.send_message(chat, i18n::backup_not_found(lang))
-                        .reply_markup(menu::main_menu(lang))
-                        .await?;
-                }
-            },
-            Err(e) => {
-                bot.send_message(chat, i18n::error_text(lang, &e)).await?;
             }
-        },
-        Action::Restore(idx) => match vpn.list_backups() {
-            Ok(list) => match list.get(idx) {
-                Some(bf) => {
-                    edit_or_send(
-                        &bot,
-                        chat,
-                        msg_id,
-                        i18n::confirm_restore(lang, &bf.name),
-                        menu::confirm_restore(lang, idx),
-                    )
-                    .await;
-                }
-                None => {
-                    edit_or_send(
-                        &bot,
-                        chat,
-                        msg_id,
-                        i18n::backup_not_found(lang),
-                        menu::main_menu(lang),
-                    )
-                    .await;
-                }
-            },
-            Err(e) => {
-                bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+        }
+        Action::BackupDownload(idx) => {
+            if !role.is_owner() {
+                return Ok(());
             }
-        },
+            match vpn.list_backups() {
+                Ok(list) => match list.get(idx) {
+                    Some(bf) => {
+                        if let Err(e) = bot.send_document(chat, InputFile::file(&bf.path)).await {
+                            tracing::error!(error = %e, "send_document провалился");
+                            let err = crate::error::Error::Telegram(e.to_string());
+                            bot.send_message(chat, i18n::error_text(lang, &err)).await?;
+                        }
+                    }
+                    None => {
+                        bot.send_message(chat, i18n::backup_not_found(lang))
+                            .reply_markup(menu::main_menu(lang))
+                            .await?;
+                    }
+                },
+                Err(e) => {
+                    bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                }
+            }
+        }
+        Action::Restore(idx) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
+            match vpn.list_backups() {
+                Ok(list) => match list.get(idx) {
+                    Some(bf) => {
+                        edit_or_send(
+                            &bot,
+                            chat,
+                            msg_id,
+                            i18n::confirm_restore(lang, &bf.name),
+                            menu::confirm_restore(lang, idx),
+                        )
+                        .await;
+                    }
+                    None => {
+                        edit_or_send(
+                            &bot,
+                            chat,
+                            msg_id,
+                            i18n::backup_not_found(lang),
+                            menu::main_menu(lang),
+                        )
+                        .await;
+                    }
+                },
+                Err(e) => {
+                    bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                }
+            }
+        }
         Action::RestoreYes(idx) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             let waiting = bot.send_message(chat, i18n::restoring(lang)).await.ok();
             match vpn.restore(idx).await {
                 Ok(()) => {
@@ -1575,6 +2415,9 @@ async fn callback_handler(
             }
         }
         Action::Check => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             let waiting = bot.send_message(chat, i18n::check_running(lang)).await.ok();
             match vpn.check().await {
                 Ok(report) => {
@@ -1594,6 +2437,9 @@ async fn callback_handler(
             }
         }
         Action::Diagnose => {
+            if !role.is_owner() {
+                return Ok(());
+            }
             let waiting = bot
                 .send_message(chat, i18n::diagnose_running(lang))
                 .await
@@ -1615,6 +2461,376 @@ async fn callback_handler(
                 let _ = bot.delete_message(chat, m.id).await;
             }
         }
+        Action::Groups => {
+            if !role.is_owner() {
+                return Ok(());
+            }
+            let groups: Vec<(crate::store::GroupRow, i64)> = settings
+                .list_groups()
+                .into_iter()
+                .map(|g| {
+                    let n = settings.group_client_count(g.id);
+                    (g, n)
+                })
+                .collect();
+            let title = if groups.is_empty() {
+                i18n::groups_empty(lang)
+            } else {
+                i18n::groups_title(lang, groups.len())
+            };
+            edit_or_send(&bot, chat, msg_id, title, menu::groups_menu(lang, &groups)).await;
+        }
+        Action::GroupCreate => {
+            if !role.is_owner() {
+                return Ok(());
+            }
+            bot.send_message(chat, i18n::ask_group_name(lang)).await?;
+            dialogue.update(State::AwaitingGroupName).await?;
+        }
+        Action::GroupCard(id) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
+            show_group_card(&bot, chat, msg_id, lang, &settings, id).await;
+        }
+        Action::GroupRenameAsk(id) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
+            bot.send_message(chat, i18n::ask_group_name(lang)).await?;
+            dialogue.update(State::AwaitingGroupRename { id }).await?;
+        }
+        Action::GroupQuotaAsk(id) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
+            bot.send_message(chat, i18n::ask_group_quota(lang)).await?;
+            dialogue.update(State::AwaitingGroupQuota { id }).await?;
+        }
+        Action::GroupAdmins(id) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
+            let admins = settings.group_admin_ids(id);
+            let name = settings.group(id).map(|g| g.name).unwrap_or_default();
+            let title = if admins.is_empty() {
+                i18n::group_admins_empty(lang)
+            } else {
+                i18n::group_admins_title(lang, &name)
+            };
+            edit_or_send(
+                &bot,
+                chat,
+                msg_id,
+                title,
+                menu::group_admins_menu(lang, id, &admins),
+            )
+            .await;
+        }
+        Action::GroupAdminRemove(id, admin_uid) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
+            settings.remove_group_admin(id, admin_uid);
+            settings.log_event(
+                now_epoch(),
+                EventKind::AdminRemove,
+                None,
+                Some(uid),
+                Some(&format!("group={id} user={admin_uid}")),
+            );
+            bot.send_message(chat, i18n::admin_removed(lang, admin_uid))
+                .await?;
+            show_group_card(&bot, chat, msg_id, lang, &settings, id).await;
+        }
+        Action::GroupDeleteAsk(id) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
+            let name = settings.group(id).map(|g| g.name).unwrap_or_default();
+            let count = settings.group_client_count(id);
+            edit_or_send(
+                &bot,
+                chat,
+                msg_id,
+                i18n::group_delete_choice(lang, &name, count),
+                menu::group_delete_choice_menu(lang, id),
+            )
+            .await;
+        }
+        Action::GroupDeleteDetach(id) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
+            let name = settings.group(id).map(|g| g.name).unwrap_or_default();
+            settings.delete_group(id);
+            settings.log_event(
+                now_epoch(),
+                EventKind::GroupDelete,
+                None,
+                Some(uid),
+                Some(&format!("detach {name}")),
+            );
+            bot.send_message(chat, i18n::group_deleted(lang, &name))
+                .parse_mode(ParseMode::Html)
+                .reply_markup(menu::main_menu(lang))
+                .await?;
+        }
+        Action::GroupDeleteAllAsk(id) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
+            let name = settings.group(id).map(|g| g.name).unwrap_or_default();
+            let count = settings.group_client_count(id);
+            edit_or_send(
+                &bot,
+                chat,
+                msg_id,
+                i18n::confirm_delete_group_clients(lang, &name, count),
+                menu::confirm_group_delete_clients_menu(lang, id),
+            )
+            .await;
+        }
+        Action::GroupDeleteAllYes(id) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
+            let name = settings.group(id).map(|g| g.name).unwrap_or_default();
+            let clients = settings.group_client_names(id);
+            let waiting = bot
+                .send_message(chat, i18n::group_delete_running(lang))
+                .await
+                .ok();
+            let mut failed = 0usize;
+            for c in &clients {
+                match vpn.remove(c).await {
+                    Ok(()) => {
+                        settings.log_event(
+                            now_epoch(),
+                            EventKind::ClientRemove,
+                            Some(c),
+                            Some(uid),
+                            Some("group_delete"),
+                        );
+                    }
+                    Err(e) => {
+                        failed += 1;
+                        tracing::error!(error = %e, client = %c, "remove при удалении группы провалился");
+                    }
+                }
+            }
+            if let Some(m) = waiting {
+                let _ = bot.delete_message(chat, m.id).await;
+            }
+            if failed == 0 {
+                settings.delete_group(id);
+                settings.log_event(
+                    now_epoch(),
+                    EventKind::GroupDelete,
+                    None,
+                    Some(uid),
+                    Some(&format!("with_clients {name}")),
+                );
+                bot.send_message(chat, i18n::group_deleted(lang, &name))
+                    .parse_mode(ParseMode::Html)
+                    .reply_markup(menu::main_menu(lang))
+                    .await?;
+            } else {
+                // Часть клиентов не удалилась — группу не трогаем, чтобы не
+                // потерять привязку выживших. Владелец повторит после починки.
+                let err = crate::error::Error::Telegram(format!("{failed} clients not removed"));
+                bot.send_message(chat, i18n::error_text(lang, &err)).await?;
+            }
+        }
+        Action::GroupInvite(id) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
+            let first_admin_ever = !settings.has_any_group_admin();
+            let Some(token) = settings.create_invite(id, uid, now_epoch()) else {
+                // Ошибка БД: ссылки нет — честная ошибка вместо «успеха»
+                // с мёртвым токеном.
+                let err = crate::error::Error::Telegram("db".into());
+                bot.send_message(chat, i18n::error_text(lang, &err)).await?;
+                return Ok(());
+            };
+            settings.log_event(
+                now_epoch(),
+                EventKind::InviteCreate,
+                None,
+                Some(uid),
+                Some(&format!("group={id}")),
+            );
+            let me = bot.get_me().await?;
+            let username = me.username.clone().unwrap_or_default();
+            let url = format!("https://t.me/{username}?start=inv_{token}");
+            let hours = crate::store::INVITE_TTL_SECS / 3600;
+            bot.send_message(chat, i18n::invite_link_text(lang, &url, hours))
+                .parse_mode(ParseMode::Html)
+                .await?;
+            if first_admin_ever && !settings.name_slug() {
+                bot.send_message(chat, i18n::slug_recommend(lang))
+                    .reply_markup(menu::slug_recommend_menu(lang))
+                    .await?;
+            }
+            show_group_card(&bot, chat, msg_id, lang, &settings, id).await;
+        }
+        Action::GroupInviteRevoke(id) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
+            settings.revoke_invite(id);
+            settings.log_event(
+                now_epoch(),
+                EventKind::InviteRevoke,
+                None,
+                Some(uid),
+                Some(&format!("group={id}")),
+            );
+            bot.send_message(chat, i18n::invite_revoked(lang)).await?;
+            show_group_card(&bot, chat, msg_id, lang, &settings, id).await;
+        }
+        Action::GroupAdminById(id) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
+            bot.send_message(chat, i18n::ask_admin_id(lang)).await?;
+            dialogue.update(State::AwaitingGroupAdminId { id }).await?;
+        }
+        Action::MoveClientAsk(name) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
+            let groups = settings.list_groups();
+            edit_or_send(
+                &bot,
+                chat,
+                msg_id,
+                i18n::move_client_title(lang, &name),
+                menu::move_client_menu(lang, &name, &groups),
+            )
+            .await;
+        }
+        Action::MoveClientTo(target, name) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
+            // Целевая группа могла исчезнуть между показом меню (Task 13
+            // ревью, Important) и кликом (другой владелец удалил её) — без
+            // этой проверки assign_client_group молча пишет висячий
+            // group_id (FK не включены), а client_moved соврал бы, что
+            // клиент отвязан от группы.
+            let gname = if let Some(id) = target {
+                let Some(g) = settings.group(id) else {
+                    bot.send_message(chat, i18n::not_found(lang)).await?;
+                    return Ok(());
+                };
+                // Квота действует и на перенос: полная группа не принимает
+                // клиентов (владелец сначала поднимает лимит). Перенос внутри
+                // той же группы — no-op, счётчик не растёт, не блокируем.
+                if settings.client_group(&name) != Some(id)
+                    && settings.group_remaining(id).is_some_and(|r| r < 1)
+                {
+                    let quota = g.max_clients.unwrap_or(0);
+                    bot.send_message(chat, i18n::quota_reached(lang, quota))
+                        .await?;
+                    return Ok(());
+                }
+                Some(g.name)
+            } else {
+                None
+            };
+            settings.assign_client_group(&name, target, now_epoch());
+            bot.send_message(chat, i18n::client_moved(lang, &name, gname.as_deref()))
+                .parse_mode(ParseMode::Html)
+                .reply_markup(menu::main_menu(lang))
+                .await?;
+        }
+        Action::GroupRegenAsk(id) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
+            let name = settings.group(id).map(|g| g.name).unwrap_or_default();
+            let count = settings.group_client_count(id);
+            edit_or_send(
+                &bot,
+                chat,
+                msg_id,
+                i18n::confirm_group_regen(lang, &name, count),
+                menu::confirm_group_regen_menu(lang, id),
+            )
+            .await;
+        }
+        Action::GroupRegenRun(id) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
+            let clients = settings.group_client_names(id);
+            let waiting = bot
+                .send_message(chat, i18n::regen_all_running(lang))
+                .await
+                .ok();
+            let (mut ok, mut failed) = (0usize, 0usize);
+            for c in &clients {
+                match vpn.regen_client(c).await {
+                    Ok(_) => {
+                        ok += 1;
+                        settings.log_event(
+                            now_epoch(),
+                            EventKind::Regen,
+                            Some(c),
+                            Some(uid),
+                            Some("group_regen"),
+                        );
+                    }
+                    Err(e) => {
+                        failed += 1;
+                        tracing::error!(error = %e, client = %c, "regen в группе провалился");
+                    }
+                }
+            }
+            if let Some(m) = waiting {
+                let _ = bot.delete_message(chat, m.id).await;
+            }
+            bot.send_message(chat, i18n::group_regen_done(lang, ok, failed))
+                .reply_markup(menu::main_menu(lang))
+                .parse_mode(ParseMode::Html)
+                .await?;
+        }
+        Action::GroupScopeAsk => {
+            if !role.is_owner() {
+                return Ok(());
+            }
+            let groups = settings.list_groups();
+            edit_or_send(
+                &bot,
+                chat,
+                msg_id,
+                i18n::scope_title(lang),
+                menu::group_scope_menu(lang, &groups),
+            )
+            .await;
+        }
+        Action::GroupScopeSet(scope) => {
+            if !role.is_owner() {
+                return Ok(());
+            }
+            settings.set_owner_scope(uid, scope);
+            render_clients_list(
+                &bot,
+                chat,
+                msg_id,
+                lang,
+                &vpn,
+                &settings,
+                uid,
+                0,
+                scope,
+                home_menu(&role, lang),
+                role.is_owner(),
+            )
+            .await;
+        }
         Action::Unknown => {
             bot.send_message(chat, unknown_action_text(lang)).await?;
         }
@@ -1635,6 +2851,59 @@ pub fn schema() -> teloxide::dispatching::UpdateHandler<Box<dyn std::error::Erro
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn group_for_new_client_recreate_preserves_binding() {
+        // Recreate не трогает привязку: владелец не отвязывает клиента от его
+        // группы, групповой админ не переносит клиента в свою текущую группу.
+        let store = Store::open_in_memory();
+        let a = store.create_group("a", 0).unwrap();
+        let b = store.create_group("b", 0).unwrap();
+        store.assign_client_group("alice", Some(a), 10);
+        assert_eq!(
+            group_for_new_client(&Role::Owner, &store, 1, true, "alice"),
+            Some(Some(a))
+        );
+        store.add_group_admin(a, 42, 1, 0);
+        store.add_group_admin(b, 42, 1, 0);
+        store.set_current_group(42, b);
+        let ga = Role::GroupAdmin(vec![a, b]);
+        assert_eq!(
+            group_for_new_client(&ga, &store, 42, true, "alice"),
+            Some(Some(a))
+        );
+        // Клиент без группы у владельца остаётся без группы.
+        assert_eq!(
+            group_for_new_client(&Role::Owner, &store, 1, true, "nogroup"),
+            Some(None)
+        );
+    }
+
+    #[test]
+    fn group_for_new_client_new_client_by_role() {
+        // Новый клиент: групповому админу — его текущая группа (нет текущей →
+        // None: нужен экран выбора), владельцу — без группы.
+        let store = Store::open_in_memory();
+        let a = store.create_group("a", 0).unwrap();
+        let b = store.create_group("b", 0).unwrap();
+        store.set_current_group(42, b);
+        let ga = Role::GroupAdmin(vec![a, b]);
+        assert_eq!(
+            group_for_new_client(&ga, &store, 42, false, "bob"),
+            Some(Some(b))
+        );
+        assert_eq!(
+            group_for_new_client(&Role::Owner, &store, 1, false, "bob"),
+            Some(None)
+        );
+        // Сохранённая текущая группа отозвана → выбор группы.
+        let ga_only_a = Role::GroupAdmin(vec![a, b]);
+        store.set_current_group(43, 999);
+        assert_eq!(
+            group_for_new_client(&ga_only_a, &store, 43, false, "bob"),
+            None
+        );
+    }
 
     #[test]
     fn parses_all_actions() {
@@ -1823,6 +3092,71 @@ mod tests {
     }
 
     #[test]
+    fn parse_callback_group_actions() {
+        assert_eq!(parse_callback("groups"), Action::Groups);
+        assert_eq!(parse_callback("g:new"), Action::GroupCreate);
+        assert_eq!(parse_callback("g:card:5"), Action::GroupCard(5));
+        assert_eq!(parse_callback("g:ren:5"), Action::GroupRenameAsk(5));
+        assert_eq!(parse_callback("g:quota:5"), Action::GroupQuotaAsk(5));
+        assert_eq!(parse_callback("g:adm:5"), Action::GroupAdmins(5));
+        assert_eq!(
+            parse_callback("g:admdel:5:42"),
+            Action::GroupAdminRemove(5, 42)
+        );
+        assert_eq!(parse_callback("g:inv:5"), Action::GroupInvite(5));
+        assert_eq!(parse_callback("g:invrev:5"), Action::GroupInviteRevoke(5));
+        assert_eq!(parse_callback("g:admid:5"), Action::GroupAdminById(5));
+        assert_eq!(parse_callback("g:del:5"), Action::GroupDeleteAsk(5));
+        assert_eq!(
+            parse_callback("g:deldetach:5"),
+            Action::GroupDeleteDetach(5)
+        );
+        assert_eq!(parse_callback("g:delall:5"), Action::GroupDeleteAllAsk(5));
+        assert_eq!(
+            parse_callback("g:delallyes:5"),
+            Action::GroupDeleteAllYes(5)
+        );
+        assert_eq!(parse_callback("g:regen:5"), Action::GroupRegenAsk(5));
+        assert_eq!(parse_callback("g:regengo:5"), Action::GroupRegenRun(5));
+        assert_eq!(parse_callback("g:sel:5"), Action::GroupSelect(5));
+        assert_eq!(parse_callback("g:selmenu"), Action::GroupSelectMenu);
+        assert_eq!(
+            parse_callback("gmove:alice"),
+            Action::MoveClientAsk("alice".into())
+        );
+        assert_eq!(
+            parse_callback("gmoveto:none:alice"),
+            Action::MoveClientTo(None, "alice".into())
+        );
+        assert_eq!(
+            parse_callback("gmoveto:7:alice"),
+            Action::MoveClientTo(Some(7), "alice".into())
+        );
+        // мусор → Unknown
+        assert_eq!(parse_callback("g:card:x"), Action::Unknown);
+        assert_eq!(parse_callback("gmoveto:xx:alice"), Action::Unknown);
+    }
+
+    #[test]
+    fn parse_callback_group_scope() {
+        use crate::store::ListScope;
+        assert_eq!(parse_callback("gscope"), Action::GroupScopeAsk);
+        assert_eq!(
+            parse_callback("gscope:all"),
+            Action::GroupScopeSet(ListScope::All)
+        );
+        assert_eq!(
+            parse_callback("gscope:none"),
+            Action::GroupScopeSet(ListScope::NoGroup)
+        );
+        assert_eq!(
+            parse_callback("gscope:7"),
+            Action::GroupScopeSet(ListScope::Group(7))
+        );
+        assert_eq!(parse_callback("gscope:x"), Action::Unknown);
+    }
+
+    #[test]
     fn truncate_for_message_respects_char_boundary() {
         // Трёхбайтовый символ: 3500 не кратно 3 → индекс попадает внутрь
         // символа, обрезка должна откатиться к границе, а не паниковать.
@@ -1873,10 +3207,19 @@ mod tests {
             mtime: 1,
         };
 
+        fn sample_group() -> crate::store::GroupRow {
+            crate::store::GroupRow {
+                id: 1,
+                name: "family".into(),
+                max_clients: None,
+                created_at: 0,
+            }
+        }
+
         let keyboards = vec![
             menu::main_menu(Lang::Ru),
             menu::expiry_menu(Lang::Ru),
-            menu::client_card(Lang::Ru, "alice"),
+            menu::client_card(Lang::Ru, "alice", true),
             menu::confirm_delete(Lang::Ru, "bob"),
             menu::confirm_recreate(Lang::Ru, "alice"),
             menu::clients_list(
@@ -1887,6 +3230,7 @@ mod tests {
                 0,
                 8,
                 crate::vpn::model::ClientFilter::All,
+                true,
             ),
             menu::language_select(),
             menu::settings_menu(Lang::Ru, false, false, false, false, false),
@@ -1901,6 +3245,18 @@ mod tests {
             menu::confirm_restore(Lang::Ru, 0),
             menu::modify_param_menu(Lang::Ru, "alice"),
             menu::confirm_restart_menu(Lang::Ru),
+            menu::groups_menu(Lang::Ru, &[(sample_group(), 2)]),
+            menu::group_card_menu(Lang::Ru, 1, true),
+            menu::group_card_menu(Lang::Ru, 1, false),
+            menu::group_admins_menu(Lang::Ru, 1, &[42]),
+            menu::group_delete_choice_menu(Lang::Ru, 1),
+            menu::confirm_group_delete_clients_menu(Lang::Ru, 1),
+            menu::confirm_group_regen_menu(Lang::Ru, 1),
+            menu::group_select_menu(Lang::Ru, &[sample_group()]),
+            menu::ga_main_menu(Lang::Ru, true),
+            menu::move_client_menu(Lang::Ru, "alice", &[sample_group()]),
+            menu::group_scope_menu(Lang::Ru, &[sample_group()]),
+            menu::slug_recommend_menu(Lang::Ru),
         ];
 
         for kb in &keyboards {

@@ -1136,6 +1136,464 @@ pub fn check_card(lang: Lang, r: &crate::vpn::wire::CheckReport) -> String {
     lines.join("\n")
 }
 
+// --- группы (#20) ---
+pub fn btn_groups(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "🗂 Группы",
+        Lang::En => "🗂 Groups",
+    }
+    .to_string()
+}
+pub fn groups_title(lang: Lang, count: usize) -> String {
+    match lang {
+        Lang::Ru => format!("🗂 <b>Группы</b> ({count}):"),
+        Lang::En => format!("🗂 <b>Groups</b> ({count}):"),
+    }
+}
+pub fn groups_empty(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "Групп пока нет.",
+        Lang::En => "No groups yet.",
+    }
+    .to_string()
+}
+pub fn btn_group_create(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "➕ Создать группу",
+        Lang::En => "➕ New group",
+    }
+    .to_string()
+}
+pub fn ask_group_name(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "Введите имя группы:",
+        Lang::En => "Enter group name:",
+    }
+    .to_string()
+}
+pub fn bad_group_name(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "⚠️ Некорректное имя группы (1–32 символа). Введите ещё раз:",
+        Lang::En => "⚠️ Invalid group name (1–32 chars). Try again:",
+    }
+    .to_string()
+}
+pub fn group_delete_running(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "🗑 Удаляю клиентов группы…",
+        Lang::En => "🗑 Removing group clients…",
+    }
+    .to_string()
+}
+pub fn group_name_taken(lang: Lang, name: &str) -> String {
+    let n = html_escape(name);
+    match lang {
+        Lang::Ru => format!("⚠️ Группа <b>{n}</b> уже существует. Введите другое имя:"),
+        Lang::En => format!("⚠️ Group <b>{n}</b> already exists. Enter a different name:"),
+    }
+}
+pub fn group_created(lang: Lang, name: &str) -> String {
+    let name = html_escape(name);
+    match lang {
+        Lang::Ru => format!("✅ Группа <b>{name}</b> создана."),
+        Lang::En => format!("✅ Group <b>{name}</b> created."),
+    }
+}
+pub fn group_renamed(lang: Lang, name: &str) -> String {
+    let name = html_escape(name);
+    match lang {
+        Lang::Ru => format!("✅ Группа переименована в <b>{name}</b>."),
+        Lang::En => format!("✅ Group renamed to <b>{name}</b>."),
+    }
+}
+/// HTML-карточка группы: имя жирным, число клиентов, лимит (число или
+/// «безлимит»/«unlimited» при `None`) и число админов.
+pub fn group_card(
+    lang: Lang,
+    name: &str,
+    clients: i64,
+    quota: Option<i64>,
+    admins: usize,
+) -> String {
+    let name = html_escape(name);
+    match lang {
+        Lang::Ru => {
+            let limit = match quota {
+                Some(q) => q.to_string(),
+                None => "безлимит".to_string(),
+            };
+            format!(
+                "🗂 <b>{name}</b>\n👥 Клиенты: {clients}\n🔢 Лимит: {limit}\n👮 Админы: {admins}"
+            )
+        }
+        Lang::En => {
+            let limit = match quota {
+                Some(q) => q.to_string(),
+                None => "unlimited".to_string(),
+            };
+            format!(
+                "🗂 <b>{name}</b>\n👥 Clients: {clients}\n🔢 Quota: {limit}\n👮 Admins: {admins}"
+            )
+        }
+    }
+}
+pub fn btn_group_rename(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "✏️ Переименовать",
+        Lang::En => "✏️ Rename",
+    }
+    .to_string()
+}
+pub fn btn_group_quota(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "🔢 Лимит",
+        Lang::En => "🔢 Quota",
+    }
+    .to_string()
+}
+pub fn ask_group_quota(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "Введите лимит клиентов в группе (0 — безлимит):",
+        Lang::En => "Enter the client limit for the group (0 — unlimited):",
+    }
+    .to_string()
+}
+pub fn bad_group_quota(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "⚠️ Некорректное значение. Введите целое число ≥ 0:",
+        Lang::En => "⚠️ Invalid value. Enter an integer ≥ 0:",
+    }
+    .to_string()
+}
+pub fn group_quota_set(lang: Lang, quota: Option<i64>) -> String {
+    match (lang, quota) {
+        (Lang::Ru, Some(q)) => format!("✅ Лимит группы: {q}."),
+        (Lang::Ru, None) => "✅ Лимит группы снят (безлимит).".to_string(),
+        (Lang::En, Some(q)) => format!("✅ Group limit: {q}."),
+        (Lang::En, None) => "✅ Group limit removed (unlimited).".to_string(),
+    }
+}
+pub fn btn_group_admins(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "👮 Админы",
+        Lang::En => "👮 Admins",
+    }
+    .to_string()
+}
+pub fn group_admins_title(lang: Lang, group: &str) -> String {
+    let group = html_escape(group);
+    match lang {
+        Lang::Ru => format!("👮 <b>Админы группы {group}</b>:"),
+        Lang::En => format!("👮 <b>Admins of group {group}</b>:"),
+    }
+}
+pub fn group_admins_empty(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "В группе пока нет админов.",
+        Lang::En => "No admins in this group yet.",
+    }
+    .to_string()
+}
+pub fn btn_group_invite(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "🔗 Пригласить админа",
+        Lang::En => "🔗 Invite admin",
+    }
+    .to_string()
+}
+/// Текст с одноразовой ссылкой-приглашением и сроком её действия в часах.
+pub fn invite_link_text(lang: Lang, url: &str, hours: i64) -> String {
+    match lang {
+        Lang::Ru => format!(
+            "🔗 Одноразовая ссылка-приглашение (действует {hours} ч):\n<code>{url}</code>\nПерешлите её будущему админу группы."
+        ),
+        Lang::En => format!(
+            "🔗 One-time invite link (valid for {hours} h):\n<code>{url}</code>\nForward it to the future group admin."
+        ),
+    }
+}
+pub fn btn_invite_revoke(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "🚫 Отозвать ссылку",
+        Lang::En => "🚫 Revoke link",
+    }
+    .to_string()
+}
+pub fn invite_revoked(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "🚫 Ссылка отозвана.",
+        Lang::En => "🚫 Link revoked.",
+    }
+    .to_string()
+}
+pub fn btn_admin_by_id(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "🆔 Ввести user ID",
+        Lang::En => "🆔 Enter user ID",
+    }
+    .to_string()
+}
+pub fn ask_admin_id(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "Введите user ID нового админа:",
+        Lang::En => "Enter the new admin's user ID:",
+    }
+    .to_string()
+}
+pub fn bad_admin_id(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "⚠️ Некорректный ID. Введите число:",
+        Lang::En => "⚠️ Invalid ID. Enter a number:",
+    }
+    .to_string()
+}
+pub fn admin_added(lang: Lang, uid: i64, group: &str) -> String {
+    let group = html_escape(group);
+    match lang {
+        Lang::Ru => format!("✅ Пользователь {uid} добавлен админом группы <b>{group}</b>."),
+        Lang::En => format!("✅ User {uid} added as admin of group <b>{group}</b>."),
+    }
+}
+pub fn admin_already(lang: Lang, uid: i64) -> String {
+    match lang {
+        Lang::Ru => format!("⚠️ Пользователь {uid} уже админ этой группы."),
+        Lang::En => format!("⚠️ User {uid} is already an admin of this group."),
+    }
+}
+pub fn admin_removed(lang: Lang, uid: i64) -> String {
+    match lang {
+        Lang::Ru => format!("🗑 Админ {uid} удалён из группы."),
+        Lang::En => format!("🗑 Admin {uid} removed from the group."),
+    }
+}
+/// Приветствие для нового группового админа, присоединившегося по ссылке.
+pub fn joined_group(lang: Lang, group: &str) -> String {
+    let group = html_escape(group);
+    match lang {
+        Lang::Ru => format!("🎉 Добро пожаловать! Вы стали админом группы <b>{group}</b>."),
+        Lang::En => format!("🎉 Welcome! You are now an admin of group <b>{group}</b>."),
+    }
+}
+pub fn invite_invalid(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "⚠️ Ссылка недействительна или истекла.",
+        Lang::En => "⚠️ Link is invalid or expired.",
+    }
+    .to_string()
+}
+/// Уведомление владельцу о том, что новый пользователь присоединился как
+/// админ группы по ссылке-приглашению.
+pub fn owner_notified_join(lang: Lang, uid: i64, group: &str) -> String {
+    let group = html_escape(group);
+    match lang {
+        Lang::Ru => format!("ℹ️ Пользователь {uid} присоединился как админ группы <b>{group}</b>."),
+        Lang::En => format!("ℹ️ User {uid} joined as admin of group <b>{group}</b>."),
+    }
+}
+pub fn btn_group_delete(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "🗑 Удалить группу",
+        Lang::En => "🗑 Delete group",
+    }
+    .to_string()
+}
+/// Экран выбора: что сделать с клиентами группы перед её удалением.
+pub fn group_delete_choice(lang: Lang, name: &str, clients: i64) -> String {
+    let name = html_escape(name);
+    match lang {
+        Lang::Ru => format!(
+            "🗑 Удалить группу <b>{name}</b>?\nВ ней {clients} клиент(ов). Выберите, что сделать с клиентами:"
+        ),
+        Lang::En => format!(
+            "🗑 Delete group <b>{name}</b>?\nIt has {clients} client(s). Choose what to do with them:"
+        ),
+    }
+}
+pub fn btn_delete_detach(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "🔓 Отвязать клиентов",
+        Lang::En => "🔓 Detach clients",
+    }
+    .to_string()
+}
+pub fn btn_delete_with_clients(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "🗑 Удалить с клиентами",
+        Lang::En => "🗑 Delete with clients",
+    }
+    .to_string()
+}
+/// Второе (усиленное) подтверждение перед необратимым удалением группы
+/// вместе со всеми её клиентами.
+pub fn confirm_delete_group_clients(lang: Lang, name: &str, clients: i64) -> String {
+    let name = html_escape(name);
+    match lang {
+        Lang::Ru => format!(
+            "⚠️ Точно удалить группу <b>{name}</b> вместе со всеми {clients} клиентами? Это необратимо."
+        ),
+        Lang::En => format!(
+            "⚠️ Really delete group <b>{name}</b> along with all {clients} clients? This cannot be undone."
+        ),
+    }
+}
+pub fn group_deleted(lang: Lang, name: &str) -> String {
+    let name = html_escape(name);
+    match lang {
+        Lang::Ru => format!("✅ Группа <b>{name}</b> удалена."),
+        Lang::En => format!("✅ Group <b>{name}</b> deleted."),
+    }
+}
+pub fn btn_group_regen(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "♻️ Перевыпустить всех",
+        Lang::En => "♻️ Reissue all",
+    }
+    .to_string()
+}
+pub fn confirm_group_regen(lang: Lang, name: &str, clients: i64) -> String {
+    let name = html_escape(name);
+    match lang {
+        Lang::Ru => format!(
+            "♻️ <b>Перевыпустить конфиги всех клиентов группы {name}?</b>\nВсего клиентов: {clients}. Файлы и QR будут перегенерированы, ключи и IP сохранятся."
+        ),
+        Lang::En => format!(
+            "♻️ <b>Reissue configs for all clients in group {name}?</b>\nTotal clients: {clients}. Files and QR codes will be regenerated; keys and IPs are preserved."
+        ),
+    }
+}
+pub fn group_regen_done(lang: Lang, ok: usize, failed: usize) -> String {
+    match lang {
+        Lang::Ru if failed == 0 => {
+            format!("✅ Перевыпущено клиентов: {ok}.\nКонфиги — в карточках клиентов.")
+        }
+        Lang::Ru => format!(
+            "⚠️ Перевыпущено: {ok}, ошибок: {failed}. Проверьте логи сервера.\nКонфиги — в карточках клиентов."
+        ),
+        Lang::En if failed == 0 => {
+            format!("✅ Reissued {ok} clients.\nConfigs are in the client cards.")
+        }
+        Lang::En => format!(
+            "⚠️ Reissued: {ok}, failed: {failed}. Check the server logs.\nConfigs are in the client cards."
+        ),
+    }
+}
+pub fn select_group_title(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "Выберите группу:",
+        Lang::En => "Choose a group:",
+    }
+    .to_string()
+}
+pub fn btn_switch_group(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "🔀 Сменить группу",
+        Lang::En => "🔀 Switch group",
+    }
+    .to_string()
+}
+/// Заголовок главного меню для группового админа (аналог `menu_title` с
+/// указанием текущей группы).
+pub fn ga_menu_title(lang: Lang, group: &str) -> String {
+    let group = html_escape(group);
+    match lang {
+        Lang::Ru => format!("🔐 <b>AmneziaWG</b> · 🗂 {group}"),
+        Lang::En => format!("🔐 <b>AmneziaWG</b> · 🗂 {group}"),
+    }
+}
+pub fn quota_reached(lang: Lang, quota: i64) -> String {
+    match lang {
+        Lang::Ru => format!("⚠️ Достигнут лимит группы ({quota})."),
+        Lang::En => format!("⚠️ Group limit reached ({quota})."),
+    }
+}
+pub fn btn_client_move(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "🗂 Группа",
+        Lang::En => "🗂 Group",
+    }
+    .to_string()
+}
+pub fn move_client_title(lang: Lang, name: &str) -> String {
+    let name = html_escape(name);
+    match lang {
+        Lang::Ru => format!("🗂 Перенести <b>{name}</b> в группу:"),
+        Lang::En => format!("🗂 Move <b>{name}</b> to group:"),
+    }
+}
+pub fn no_group_label(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "Без группы",
+        Lang::En => "No group",
+    }
+    .to_string()
+}
+/// Заголовок экрана выбора группового фильтра списка клиентов (владелец).
+pub fn scope_title(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "Показывать клиентов:",
+        Lang::En => "Show clients:",
+    }
+    .to_string()
+}
+/// Кнопка «🗂» в ряду фильтров списка клиентов — открывает `scope_title`
+/// (только владельцу, см. `menu::clients_list`'s `can_scope`).
+pub fn btn_scope(lang: Lang) -> String {
+    let _ = lang;
+    "🗂".to_string()
+}
+pub fn btn_scope_all(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "Все группы",
+        Lang::En => "All groups",
+    }
+    .to_string()
+}
+pub fn client_moved(lang: Lang, name: &str, group: Option<&str>) -> String {
+    let name = html_escape(name);
+    match (lang, group) {
+        (Lang::Ru, Some(g)) => {
+            format!(
+                "✅ Клиент <b>{name}</b> перенесён в группу <b>{}</b>.",
+                html_escape(g)
+            )
+        }
+        (Lang::Ru, None) => format!("✅ Клиент <b>{name}</b> откреплён от группы."),
+        (Lang::En, Some(g)) => {
+            format!(
+                "✅ Client <b>{name}</b> moved to group <b>{}</b>.",
+                html_escape(g)
+            )
+        }
+        (Lang::En, None) => format!("✅ Client <b>{name}</b> detached from its group."),
+    }
+}
+/// Рекомендация включить ID-префикс имён — показывается после первого
+/// добавления группового админа, т.к. клиентов теперь создают несколько
+/// человек и возможны совпадения имён между группами.
+pub fn slug_recommend(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "💡 Теперь клиентов создают несколько людей. Рекомендуем включить префиксы имён (Настройки → Префиксы), чтобы избежать совпадений имён между группами.".to_string(),
+        Lang::En => "💡 Multiple people can now create clients. We recommend enabling name prefixes (Settings → Prefixes) to avoid name collisions between groups.".to_string(),
+    }
+}
+pub fn btn_slug_enable(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "✅ Включить префиксы",
+        Lang::En => "✅ Enable prefixes",
+    }
+    .to_string()
+}
+/// Строка «Группа: X» для карточки клиента (`client_card`). Начинается с
+/// перевода строки: карточка кончается строкой трафика без `\n`, строка
+/// группы конкатенируется к ней напрямую.
+pub fn group_label_line(lang: Lang, group: &str) -> String {
+    let group = html_escape(group);
+    match lang {
+        Lang::Ru => format!("\n🗂 Группа: {group}"),
+        Lang::En => format!("\n🗂 Group: {group}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1540,5 +1998,28 @@ mod tests {
         // Фильтр активен, но показаны все (напр. 3 из 3 онлайн) → без пометки.
         let ru = clients_title_filtered(Lang::Ru, ClientFilter::Online, 3, 3);
         assert_eq!(ru, "👥 <b>Клиенты</b>:");
+    }
+
+    #[test]
+    fn group_strings_bilingual_and_escaped() {
+        for lang in [Lang::Ru, Lang::En] {
+            assert!(!btn_groups(lang).is_empty());
+            assert!(!ask_group_name(lang).is_empty());
+            assert!(!slug_recommend(lang).is_empty());
+        }
+        // Имя с HTML-символами экранируется в карточках/сообщениях.
+        assert!(group_created(Lang::Ru, "<x>").contains("&lt;x&gt;"));
+        assert!(group_card(Lang::En, "<x>", 0, None, 0).contains("&lt;x&gt;"));
+        // Квота: None → «безлимит», Some → число.
+        assert!(group_card(Lang::Ru, "g", 1, Some(5), 1).contains('5'));
+    }
+
+    #[test]
+    fn group_label_line_starts_on_new_line() {
+        // Карточка клиента кончается строкой трафика без \n — строка группы
+        // обязана сама начинаться с перевода строки, иначе приклеится к ней.
+        for lang in [Lang::Ru, Lang::En] {
+            assert!(group_label_line(lang, "g").starts_with('\n'));
+        }
     }
 }

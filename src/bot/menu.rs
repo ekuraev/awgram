@@ -23,8 +23,151 @@ pub fn main_menu(lang: Lang) -> InlineKeyboardMarkup {
             cb(&i18n::btn_restart(lang), "restart"),
             cb(&i18n::btn_repair(lang), "repair"),
         ],
+        vec![cb(&i18n::btn_groups(lang), "groups")],
         vec![cb(&i18n::btn_settings(lang), "settings")],
     ])
+}
+
+/// Раздел «Группы» — только для владельцев (handlers не показывают его другим).
+pub fn groups_menu(lang: Lang, groups: &[(crate::store::GroupRow, i64)]) -> InlineKeyboardMarkup {
+    let mut rows: Vec<Vec<InlineKeyboardButton>> = groups
+        .iter()
+        .map(|(g, n)| {
+            vec![cb(
+                &format!("🗂 {} ({n})", g.name),
+                &format!("g:card:{}", g.id),
+            )]
+        })
+        .collect();
+    rows.push(vec![cb(&i18n::btn_group_create(lang), "g:new")]);
+    rows.push(vec![cb(&i18n::btn_back(lang), "menu")]);
+    InlineKeyboardMarkup::new(rows)
+}
+
+pub fn group_card_menu(lang: Lang, id: i64, has_invite: bool) -> InlineKeyboardMarkup {
+    let invite_btn = if has_invite {
+        cb(&i18n::btn_invite_revoke(lang), &format!("g:invrev:{id}"))
+    } else {
+        cb(&i18n::btn_group_invite(lang), &format!("g:inv:{id}"))
+    };
+    InlineKeyboardMarkup::new(vec![
+        vec![
+            cb(&i18n::btn_group_rename(lang), &format!("g:ren:{id}")),
+            cb(&i18n::btn_group_quota(lang), &format!("g:quota:{id}")),
+        ],
+        vec![cb(&i18n::btn_group_admins(lang), &format!("g:adm:{id}"))],
+        vec![
+            invite_btn,
+            cb(&i18n::btn_admin_by_id(lang), &format!("g:admid:{id}")),
+        ],
+        vec![cb(&i18n::btn_group_regen(lang), &format!("g:regen:{id}"))],
+        vec![cb(&i18n::btn_group_delete(lang), &format!("g:del:{id}"))],
+        vec![cb(&i18n::btn_back(lang), "groups")],
+    ])
+}
+
+pub fn group_admins_menu(lang: Lang, id: i64, admins: &[i64]) -> InlineKeyboardMarkup {
+    let mut rows: Vec<Vec<InlineKeyboardButton>> = admins
+        .iter()
+        .map(|uid| vec![cb(&format!("❌ {uid}"), &format!("g:admdel:{id}:{uid}"))])
+        .collect();
+    rows.push(vec![cb(&i18n::btn_back(lang), &format!("g:card:{id}"))]);
+    InlineKeyboardMarkup::new(rows)
+}
+
+pub fn group_delete_choice_menu(lang: Lang, id: i64) -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![
+        vec![cb(
+            &i18n::btn_delete_detach(lang),
+            &format!("g:deldetach:{id}"),
+        )],
+        vec![cb(
+            &i18n::btn_delete_with_clients(lang),
+            &format!("g:delall:{id}"),
+        )],
+        vec![cb(&i18n::btn_back(lang), &format!("g:card:{id}"))],
+    ])
+}
+
+pub fn confirm_group_delete_clients_menu(lang: Lang, id: i64) -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![
+        vec![cb(
+            &i18n::btn_delete_with_clients(lang),
+            &format!("g:delallyes:{id}"),
+        )],
+        vec![cb(&i18n::btn_back(lang), &format!("g:card:{id}"))],
+    ])
+}
+
+pub fn confirm_group_regen_menu(lang: Lang, id: i64) -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![
+        vec![cb(&i18n::btn_group_regen(lang), &format!("g:regengo:{id}"))],
+        vec![cb(&i18n::btn_back(lang), &format!("g:card:{id}"))],
+    ])
+}
+
+pub fn group_select_menu(lang: Lang, groups: &[crate::store::GroupRow]) -> InlineKeyboardMarkup {
+    let rows: Vec<Vec<InlineKeyboardButton>> = groups
+        .iter()
+        .map(|g| vec![cb(&format!("🗂 {}", g.name), &format!("g:sel:{}", g.id))])
+        .collect();
+    let _ = lang; // подписи — имена групп, локализация не нужна
+    InlineKeyboardMarkup::new(rows)
+}
+
+/// Меню группового админа: список/добавить/статистика группы; смена группы —
+/// только если групп несколько.
+pub fn ga_main_menu(lang: Lang, multi: bool) -> InlineKeyboardMarkup {
+    let mut rows = vec![
+        vec![cb(&i18n::btn_clients(lang), "list")],
+        vec![cb(&i18n::btn_add(lang), "add")],
+        vec![cb(&i18n::btn_stats(lang), "stats")],
+    ];
+    if multi {
+        rows.push(vec![cb(&i18n::btn_switch_group(lang), "g:selmenu")]);
+    }
+    InlineKeyboardMarkup::new(rows)
+}
+
+pub fn move_client_menu(
+    lang: Lang,
+    name: &str,
+    groups: &[crate::store::GroupRow],
+) -> InlineKeyboardMarkup {
+    let mut rows: Vec<Vec<InlineKeyboardButton>> = groups
+        .iter()
+        .map(|g| {
+            vec![cb(
+                &format!("🗂 {}", g.name),
+                &format!("gmoveto:{}:{name}", g.id),
+            )]
+        })
+        .collect();
+    rows.push(vec![cb(
+        &i18n::no_group_label(lang),
+        &format!("gmoveto:none:{name}"),
+    )]);
+    rows.push(vec![cb(&i18n::btn_back(lang), &format!("client:{name}"))]);
+    InlineKeyboardMarkup::new(rows)
+}
+
+/// Экран выбора группового фильтра списка (владелец): все / без группы / группа.
+pub fn group_scope_menu(lang: Lang, groups: &[crate::store::GroupRow]) -> InlineKeyboardMarkup {
+    let mut rows = vec![
+        vec![cb(&i18n::btn_scope_all(lang), "gscope:all")],
+        vec![cb(&i18n::no_group_label(lang), "gscope:none")],
+    ];
+    rows.extend(
+        groups
+            .iter()
+            .map(|g| vec![cb(&format!("🗂 {}", g.name), &format!("gscope:{}", g.id))]),
+    );
+    rows.push(vec![cb(&i18n::btn_back(lang), "list")]);
+    InlineKeyboardMarkup::new(rows)
+}
+
+pub fn slug_recommend_menu(lang: Lang) -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![vec![cb(&i18n::btn_slug_enable(lang), "set:slug:on")]])
 }
 
 /// Экран выбора языка при первом запуске — показывает оба варианта
@@ -253,6 +396,7 @@ fn filter_row(lang: Lang, current: ClientFilter) -> Vec<InlineKeyboardButton> {
     .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn clients_list(
     lang: Lang,
     clients: &[Client],
@@ -261,6 +405,7 @@ pub fn clients_list(
     page: usize,
     per_page: usize,
     current_filter: ClientFilter,
+    is_owner: bool,
 ) -> InlineKeyboardMarkup {
     if per_page == 0 {
         return InlineKeyboardMarkup::new(vec![vec![cb(&i18n::btn_back(lang), "menu")]]);
@@ -302,13 +447,23 @@ pub fn clients_list(
         nav.push(cb("▶️", &format!("page:{}", page + 1)));
     }
     rows.push(nav);
-    rows.push(filter_row(lang, current_filter));
-    rows.push(vec![cb(&i18n::btn_regen_all(lang), "regen_all")]);
+    let mut filter_btns = filter_row(lang, current_filter);
+    // Кнопка «🗂» — фильтр списка по группе; видна только владельцу
+    // (групповому админу скоуп и так задаёт его текущая группа).
+    if is_owner {
+        filter_btns.push(cb(&i18n::btn_scope(lang), "gscope"));
+    }
+    rows.push(filter_btns);
+    // «Перевыпустить всех» — глобальное действие, групповому админу не
+    // показываем (Action::RegenAll всё равно owner-only).
+    if is_owner {
+        rows.push(vec![cb(&i18n::btn_regen_all(lang), "regen_all")]);
+    }
     rows.push(vec![cb(&i18n::btn_back(lang), "menu")]);
     InlineKeyboardMarkup::new(rows)
 }
 
-pub fn client_card(lang: Lang, name: &str) -> InlineKeyboardMarkup {
+pub fn client_card(lang: Lang, name: &str, is_owner: bool) -> InlineKeyboardMarkup {
     let conf_txt = match lang {
         Lang::Ru => "📄 Конфиг",
         Lang::En => "📄 Config",
@@ -317,7 +472,7 @@ pub fn client_card(lang: Lang, name: &str) -> InlineKeyboardMarkup {
         Lang::Ru => "🗑 Удалить",
         Lang::En => "🗑 Delete",
     };
-    InlineKeyboardMarkup::new(vec![
+    let mut rows = vec![
         vec![
             cb(conf_txt, &format!("conf:{name}")),
             cb(&i18n::btn_card_qr(lang), &format!("qr:{name}")),
@@ -330,12 +485,23 @@ pub fn client_card(lang: Lang, name: &str) -> InlineKeyboardMarkup {
             cb(&i18n::btn_regen(lang), &format!("regen:{name}")),
             cb(del_txt, &format!("del:{name}")),
         ],
-        vec![
-            cb(&i18n::btn_modify(lang), &format!("mod:{name}")),
-            cb(&i18n::btn_history(lang), &format!("history:{name}")),
-        ],
-        vec![cb(&i18n::btn_back(lang), "menu")],
-    ])
+    ];
+    // «Изменить» и «Перенести» — owner-only (их Action'ы гейтятся ролью,
+    // групповому админу мёртвые кнопки не показываем); «История» — всем.
+    let mut util_row = Vec::new();
+    if is_owner {
+        util_row.push(cb(&i18n::btn_modify(lang), &format!("mod:{name}")));
+    }
+    util_row.push(cb(&i18n::btn_history(lang), &format!("history:{name}")));
+    rows.push(util_row);
+    if is_owner {
+        rows.push(vec![cb(
+            &i18n::btn_client_move(lang),
+            &format!("gmove:{name}"),
+        )]);
+    }
+    rows.push(vec![cb(&i18n::btn_back(lang), "menu")]);
+    InlineKeyboardMarkup::new(rows)
 }
 
 /// Клавиатура экрана «История»: одна кнопка возврата к карточке клиента
@@ -491,7 +657,7 @@ mod tests {
 
     #[test]
     fn client_card_has_modify_button() {
-        let data = all_callback_data(&client_card(Lang::Ru, "alice"));
+        let data = all_callback_data(&client_card(Lang::Ru, "alice", true));
         assert!(data.contains(&"mod:alice".to_string()));
     }
 
@@ -522,7 +688,7 @@ mod tests {
 
     #[test]
     fn client_card_encodes_name() {
-        let data = all_callback_data(&client_card(Lang::Ru, "alice"));
+        let data = all_callback_data(&client_card(Lang::Ru, "alice", false));
         assert!(data.contains(&"conf:alice".to_string()));
         assert!(data.contains(&"regen:alice".to_string()));
     }
@@ -560,6 +726,7 @@ mod tests {
             0,
             10,
             ClientFilter::All,
+            true,
         ));
         assert!(data.contains(&"regen_all".to_string()));
     }
@@ -587,6 +754,7 @@ mod tests {
             0,
             10,
             ClientFilter::All,
+            false,
         ));
         assert!(
             data.contains(&"page:0".to_string()),
@@ -609,7 +777,7 @@ mod tests {
                 last_handshake: None,
             })
             .collect();
-        let kb = clients_list(Lang::Ru, &clients, &[], 0, 0, 8, ClientFilter::All);
+        let kb = clients_list(Lang::Ru, &clients, &[], 0, 0, 8, ClientFilter::All, false);
         // nav-ряд — первый после клиентских (8 клиентов на странице → ряд с индексом 8).
         let nav_row = &kb.inline_keyboard[8];
         let data: Vec<&str> = nav_row
@@ -640,7 +808,7 @@ mod tests {
                 last_handshake: None,
             })
             .collect();
-        let kb = clients_list(Lang::Ru, &clients, &[], 0, 2, 8, ClientFilter::All);
+        let kb = clients_list(Lang::Ru, &clients, &[], 0, 2, 8, ClientFilter::All, false);
         // Страница 2: клиентские ряды 16..23 (8 шт.) → nav-ряд с индексом 8.
         let nav_row = &kb.inline_keyboard[8];
         let data: Vec<&str> = nav_row
@@ -701,6 +869,7 @@ mod tests {
             0,
             10,
             ClientFilter::All,
+            false,
         ));
         assert!(data.contains(&"client:a".to_string()));
         assert!(data.contains(&"client:b".to_string()));
@@ -710,7 +879,16 @@ mod tests {
     fn clients_list_zero_per_page_no_panic() {
         // Test with empty clients
         let empty_clients: Vec<Client> = vec![];
-        let kb_empty = clients_list(Lang::Ru, &empty_clients, &[], 0, 0, 0, ClientFilter::All);
+        let kb_empty = clients_list(
+            Lang::Ru,
+            &empty_clients,
+            &[],
+            0,
+            0,
+            0,
+            ClientFilter::All,
+            false,
+        );
         let data_empty = all_callback_data(&kb_empty);
         assert_eq!(
             data_empty,
@@ -741,7 +919,7 @@ mod tests {
                 last_handshake: None,
             },
         ];
-        let kb_filled = clients_list(Lang::Ru, &clients, &[], 0, 0, 0, ClientFilter::All);
+        let kb_filled = clients_list(Lang::Ru, &clients, &[], 0, 0, 0, ClientFilter::All, false);
         let data_filled = all_callback_data(&kb_filled);
         assert_eq!(
             data_filled,
@@ -784,6 +962,7 @@ mod tests {
             0,
             10,
             ClientFilter::All,
+            false,
         ));
         assert!(
             texts
@@ -844,6 +1023,7 @@ mod tests {
             0,
             10,
             ClientFilter::All,
+            false,
         ));
         assert!(
             texts.iter().any(|t| t.starts_with("🟢 online")),
@@ -894,6 +1074,7 @@ mod tests {
             0,
             10,
             ClientFilter::All,
+            false,
         ));
         assert!(
             texts
@@ -931,6 +1112,7 @@ mod tests {
             0,
             10,
             ClientFilter::All,
+            false,
         ));
         assert!(data.contains(&"listfilter:all".to_string()));
         assert!(data.contains(&"listfilter:online".to_string()));
@@ -959,6 +1141,7 @@ mod tests {
             0,
             10,
             ClientFilter::Online,
+            false,
         ));
         assert!(
             texts_online
@@ -974,6 +1157,109 @@ mod tests {
                 .all(|t| !t.contains("✅")),
             "неактивные фильтры не должны иметь ✅: {texts_online:?}"
         );
+    }
+
+    #[test]
+    fn clients_list_scope_button_gated_by_can_scope() {
+        // Кнопка «🗂» (gscope) — только для владельца (can_scope=true);
+        // групповому админу (can_scope=false) она не показывается.
+        let clients = vec![Client {
+            name: "a".into(),
+            ip: String::new(),
+            client_ipv6: String::new(),
+            status: String::new(),
+            status_code: "active".into(),
+            rx: 0,
+            tx: 0,
+            last_handshake: None,
+        }];
+        let with_scope = all_callback_data(&clients_list(
+            Lang::Ru,
+            &clients,
+            &[],
+            0,
+            0,
+            10,
+            ClientFilter::All,
+            true,
+        ));
+        assert!(with_scope.contains(&"gscope".to_string()));
+        let without_scope = all_callback_data(&clients_list(
+            Lang::Ru,
+            &clients,
+            &[],
+            0,
+            0,
+            10,
+            ClientFilter::All,
+            false,
+        ));
+        assert!(!without_scope.contains(&"gscope".to_string()));
+    }
+
+    #[test]
+    fn clients_list_regen_all_only_for_owner() {
+        // «♻️ Перевыпустить всех» — глобальное owner-only действие; групповому
+        // админу кнопка не показывается (тап всё равно блокирует handler).
+        let clients = vec![Client {
+            name: "a".into(),
+            ip: String::new(),
+            client_ipv6: String::new(),
+            status: String::new(),
+            status_code: "active".into(),
+            rx: 0,
+            tx: 0,
+            last_handshake: None,
+        }];
+        let owner = all_callback_data(&clients_list(
+            Lang::Ru,
+            &clients,
+            &[],
+            0,
+            0,
+            10,
+            ClientFilter::All,
+            true,
+        ));
+        assert!(owner.contains(&"regen_all".to_string()));
+        let ga = all_callback_data(&clients_list(
+            Lang::Ru,
+            &clients,
+            &[],
+            0,
+            0,
+            10,
+            ClientFilter::All,
+            false,
+        ));
+        assert!(!ga.contains(&"regen_all".to_string()));
+    }
+
+    #[test]
+    fn client_card_modify_and_move_only_for_owner() {
+        // «Изменить» и «Перенести» — owner-only: групповому админу обе кнопки
+        // не показываются (их Action'ы и так гейтятся ролью).
+        let owner = all_callback_data(&client_card(Lang::Ru, "alice", true));
+        assert!(owner.contains(&"mod:alice".to_string()));
+        assert!(owner.contains(&"gmove:alice".to_string()));
+        let ga = all_callback_data(&client_card(Lang::Ru, "alice", false));
+        assert!(!ga.contains(&"mod:alice".to_string()));
+        assert!(!ga.contains(&"gmove:alice".to_string()));
+    }
+
+    #[test]
+    fn group_scope_menu_encodes_all_none_and_groups() {
+        let g = crate::store::GroupRow {
+            id: 5,
+            name: "family".into(),
+            max_clients: None,
+            created_at: 0,
+        };
+        let data = all_callback_data(&group_scope_menu(Lang::Ru, &[g]));
+        assert!(data.contains(&"gscope:all".to_string()));
+        assert!(data.contains(&"gscope:none".to_string()));
+        assert!(data.contains(&"gscope:5".to_string()));
+        assert!(data.contains(&"list".to_string()));
     }
 
     #[test]
@@ -1005,7 +1291,7 @@ mod tests {
 
     #[test]
     fn client_card_has_four_artifact_buttons() {
-        let data = all_callback_data(&client_card(Lang::Ru, "alice"));
+        let data = all_callback_data(&client_card(Lang::Ru, "alice", false));
         assert!(data.contains(&"conf:alice".to_string()));
         assert!(data.contains(&"qr:alice".to_string()));
         assert!(data.contains(&"uri:alice".to_string()));
@@ -1098,6 +1384,57 @@ mod tests {
         let data = all_callback_data(&confirm_restore(Lang::Ru, 3));
         assert!(data.contains(&"bk:restore_yes:3".to_string()));
         assert!(data.contains(&"menu".to_string()));
+    }
+
+    fn g(id: i64, name: &str) -> crate::store::GroupRow {
+        crate::store::GroupRow {
+            id,
+            name: name.into(),
+            max_clients: None,
+            created_at: 0,
+        }
+    }
+
+    #[test]
+    fn group_keyboards_emit_expected_callbacks() {
+        let kb = groups_menu(Lang::Ru, &[(g(1, "family"), 3)]);
+        let data = all_callback_data(&kb);
+        assert!(data.contains(&"g:card:1".to_string()));
+        assert!(data.contains(&"g:new".to_string()));
+
+        let card = group_card_menu(Lang::Ru, 7, true);
+        let card_data = all_callback_data(&card);
+        for expected in [
+            "g:ren:7",
+            "g:quota:7",
+            "g:adm:7",
+            "g:invrev:7",
+            "g:del:7",
+            "g:regen:7",
+        ] {
+            assert!(card_data.contains(&expected.to_string()), "нет {expected}");
+        }
+        // has_invite=false → вместо отзыва кнопка создания
+        let card2 = group_card_menu(Lang::Ru, 7, false);
+        let d2 = format!("{card2:?}");
+        assert!(d2.contains("g:inv:7"));
+
+        let mv = move_client_menu(Lang::Ru, "alice", &[g(1, "family")]);
+        let mv_dbg = format!("{mv:?}");
+        assert!(mv_dbg.contains("gmoveto:1:alice"));
+        assert!(mv_dbg.contains("gmoveto:none:alice"));
+    }
+
+    #[test]
+    fn main_menu_has_groups_button() {
+        let dbg = format!("{:?}", main_menu(Lang::Ru));
+        assert!(dbg.contains("\"groups\""));
+    }
+
+    #[test]
+    fn ga_menu_switch_only_when_multi() {
+        assert!(format!("{:?}", ga_main_menu(Lang::Ru, true)).contains("g:selmenu"));
+        assert!(!format!("{:?}", ga_main_menu(Lang::Ru, false)).contains("g:selmenu"));
     }
 
     #[test]

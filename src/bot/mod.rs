@@ -47,6 +47,17 @@ pub enum State {
         count: usize,
         expires: Option<String>,
     },
+    // --- группы (#20): диалоги владельца ---
+    AwaitingGroupName,
+    AwaitingGroupRename {
+        id: i64,
+    },
+    AwaitingGroupQuota {
+        id: i64,
+    },
+    AwaitingGroupAdminId {
+        id: i64,
+    },
 }
 
 #[cfg(test)]

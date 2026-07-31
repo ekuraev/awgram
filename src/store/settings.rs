@@ -57,6 +57,24 @@ impl Store {
     pub fn set_lang(&self, uid: i64, lang: Lang) {
         self.set_json(&format!("lang:{uid}"), &lang);
     }
+    /// Выбранная группа для групповых админов с несколькими группами.
+    /// Валидность (не удалили ли группу, не отозвали ли права) проверяет
+    /// вызывающий по актуальной Role.
+    pub fn current_group(&self, uid: i64) -> Option<i64> {
+        self.get_json(&format!("cur_group:{uid}"))
+    }
+    pub fn set_current_group(&self, uid: i64, group_id: i64) {
+        self.set_json(&format!("cur_group:{uid}"), &group_id);
+    }
+    /// Фильтр списка клиентов по группе — для владельцев (групповым админам
+    /// скоуп диктует их текущая группа).
+    pub fn owner_scope(&self, uid: i64) -> crate::store::ListScope {
+        self.get_json(&format!("owner_scope:{uid}"))
+            .unwrap_or(crate::store::ListScope::All)
+    }
+    pub fn set_owner_scope(&self, uid: i64, s: crate::store::ListScope) {
+        self.set_json(&format!("owner_scope:{uid}"), &s);
+    }
     pub fn psk_default(&self) -> bool {
         self.get_json("psk_default").unwrap_or(false)
     }
@@ -87,11 +105,16 @@ impl Store {
     pub fn set_deliver_link(&self, v: bool) {
         self.set_json("deliver_link", &v);
     }
-    pub fn client_filter(&self) -> ClientFilter {
-        self.get_json("client_filter").unwrap_or_default()
+    /// Фильтр списка клиентов — персональный (групповой админ не меняет вид
+    /// владельцу). Фолбэк на старый глобальный ключ: туда писали версии до
+    /// per-user фильтра и миграция из legacy state.json.
+    pub fn client_filter(&self, uid: i64) -> ClientFilter {
+        self.get_json(&format!("client_filter:{uid}"))
+            .or_else(|| self.get_json("client_filter"))
+            .unwrap_or_default()
     }
-    pub fn set_client_filter(&self, f: ClientFilter) {
-        self.set_json("client_filter", &f);
+    pub fn set_client_filter(&self, uid: i64, f: ClientFilter) {
+        self.set_json(&format!("client_filter:{uid}"), &f);
     }
 
     /// Одноразовая миграция старого state.json. Вызывается при старте.
@@ -116,7 +139,12 @@ impl Store {
         self.set_deliver_conf(legacy.deliver_conf.unwrap_or(true));
         self.set_deliver_qr(legacy.deliver_qr.unwrap_or(true));
         self.set_deliver_link(legacy.deliver_link.unwrap_or(true));
-        self.set_client_filter(legacy.client_filter.unwrap_or_default());
+        // Глобальный ключ: uid в state.json не было; per-user client_filter
+        // читает его как фолбэк.
+        self.set_json(
+            "client_filter",
+            &legacy.client_filter.unwrap_or(ClientFilter::All),
+        );
         for (uid, lang) in legacy.langs {
             self.set_lang(uid, lang);
         }
@@ -226,16 +254,16 @@ mod tests {
     #[test]
     fn client_filter_default_is_all() {
         let s = store();
-        assert_eq!(s.client_filter(), ClientFilter::All);
+        assert_eq!(s.client_filter(1), ClientFilter::All);
     }
 
     #[test]
     fn client_filter_set_and_get() {
         let s = store();
-        s.set_client_filter(ClientFilter::Online);
-        assert_eq!(s.client_filter(), ClientFilter::Online);
-        s.set_client_filter(ClientFilter::Never);
-        assert_eq!(s.client_filter(), ClientFilter::Never);
+        s.set_client_filter(1, ClientFilter::Online);
+        assert_eq!(s.client_filter(1), ClientFilter::Online);
+        s.set_client_filter(1, ClientFilter::Never);
+        assert_eq!(s.client_filter(1), ClientFilter::Never);
     }
 
     #[test]
@@ -244,10 +272,10 @@ mod tests {
         let path = dir.path().join("awgram.db");
         {
             let s = Store::open(&path).unwrap();
-            s.set_client_filter(ClientFilter::Offline);
+            s.set_client_filter(1, ClientFilter::Offline);
         }
         let s2 = Store::open(&path).unwrap();
-        assert_eq!(s2.client_filter(), ClientFilter::Offline);
+        assert_eq!(s2.client_filter(1), ClientFilter::Offline);
     }
 
     // Тесты "default_..._when_missing_in_old_state" из старого хранилища
@@ -282,7 +310,7 @@ mod tests {
         .unwrap();
         let s = store();
         s.migrate_state_json(&path);
-        assert_eq!(s.client_filter(), ClientFilter::All);
+        assert_eq!(s.client_filter(1), ClientFilter::All);
     }
 
     #[test]
@@ -305,7 +333,8 @@ mod tests {
         assert_eq!(store.lang(42), Lang::En);
         assert!(!store.deliver_conf());
         assert!(!store.deliver_link());
-        assert_eq!(store.client_filter(), ClientFilter::Online);
+        // Мигрированный глобальный фильтр виден любому uid через фолбэк.
+        assert_eq!(store.client_filter(42), ClientFilter::Online);
         assert!(!state.exists());
         assert!(state.with_extension("json.migrated").exists());
     }
@@ -321,5 +350,36 @@ mod tests {
         store.migrate_state_json(&state); // настройки уже есть — не перетирать
         assert!(store.psk_default());
         assert!(state.exists()); // файл не тронут
+    }
+
+    #[test]
+    fn client_filter_is_per_user() {
+        // Фильтр — персональный: групповой админ, переключив свой список,
+        // не должен менять вид списка владельцу (и наоборот).
+        let s = Store::open_in_memory();
+        s.set_client_filter(1, ClientFilter::Online);
+        assert_eq!(s.client_filter(1), ClientFilter::Online);
+        assert_eq!(s.client_filter(2), ClientFilter::All);
+    }
+
+    #[test]
+    fn current_group_roundtrip() {
+        let s = Store::open_in_memory();
+        assert_eq!(s.current_group(42), None);
+        s.set_current_group(42, 7);
+        assert_eq!(s.current_group(42), Some(7));
+        s.set_current_group(42, 9);
+        assert_eq!(s.current_group(42), Some(9));
+    }
+
+    #[test]
+    fn owner_scope_roundtrip() {
+        use crate::store::ListScope;
+        let s = Store::open_in_memory();
+        assert_eq!(s.owner_scope(42), ListScope::All);
+        s.set_owner_scope(42, ListScope::Group(7));
+        assert_eq!(s.owner_scope(42), ListScope::Group(7));
+        s.set_owner_scope(42, ListScope::NoGroup);
+        assert_eq!(s.owner_scope(42), ListScope::NoGroup);
     }
 }

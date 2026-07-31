@@ -8,16 +8,20 @@ use std::sync::Mutex;
 use rusqlite::Connection;
 
 mod events;
+mod groups;
 mod settings;
 mod stats;
 
 pub use events::{EventKind, EventRow};
+pub use groups::{
+    gen_invite_token, GroupError, GroupRow, InviteRow, InviteUse, ListScope, INVITE_TTL_SECS,
+};
 pub use stats::{PeriodTotals, Sample, TrafficSummary};
 
 /// SQL-батчи миграций: индекс в массиве + 1 == schema_version после применения.
 /// Только добавлять в конец — существующие батчи менять нельзя (уже применены
 /// на живых установках).
-const MIGRATIONS: &[&str] = &[
+pub(crate) const MIGRATIONS: &[&str] = &[
     // v1: базовая схема. meta — IF NOT EXISTS: её создаёт migrate() ещё до
     // применения батчей (нужна, чтобы прочитать schema_version).
     r#"
@@ -68,6 +72,33 @@ const MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX idx_events_ts ON events(ts);
     CREATE INDEX idx_events_client ON events(client, ts);
+    "#,
+    // v2: группы и делегирование (issue #20). Принадлежность клиента к группе —
+    // только в БД; manage_amneziawg.sh про группы не знает.
+    r#"
+    CREATE TABLE groups(
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        max_clients INTEGER,
+        created_at INTEGER NOT NULL
+    );
+    CREATE TABLE group_admins(
+        group_id INTEGER NOT NULL REFERENCES groups(id),
+        user_id INTEGER NOT NULL,
+        added_at INTEGER NOT NULL,
+        added_by INTEGER NOT NULL,
+        PRIMARY KEY(group_id, user_id)
+    );
+    CREATE TABLE invites(
+        token TEXT PRIMARY KEY,
+        group_id INTEGER NOT NULL REFERENCES groups(id),
+        created_by INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        used_by INTEGER,
+        used_at INTEGER
+    );
+    ALTER TABLE clients ADD COLUMN group_id INTEGER REFERENCES groups(id);
     "#,
 ];
 
@@ -156,7 +187,7 @@ mod tests {
     fn open_creates_schema_and_version() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(&dir.path().join("sub/awgram.db")).unwrap();
-        assert_eq!(store.schema_version(), 1);
+        assert_eq!(store.schema_version(), 2);
     }
 
     #[test]
@@ -165,12 +196,12 @@ mod tests {
         let path = dir.path().join("awgram.db");
         drop(Store::open(&path).unwrap());
         let store = Store::open(&path).unwrap();
-        assert_eq!(store.schema_version(), 1);
+        assert_eq!(store.schema_version(), 2);
     }
 
     #[test]
     fn in_memory_store_works() {
         let store = Store::open_in_memory();
-        assert_eq!(store.schema_version(), 1);
+        assert_eq!(store.schema_version(), 2);
     }
 }
