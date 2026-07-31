@@ -203,13 +203,15 @@ impl Store {
 
     /// Привязка клиента к группе (или отвязка при None). Строка clients может
     /// ещё не существовать (её обычно создаёт collector.ingest) — upsert, не
-    /// трогающий first_seen/last_seen существующей строки.
+    /// трогающий first_seen/last_seen существующей строки. Если клиент был помечен
+    /// удалённым (removed_at IS NOT NULL), привязка «оживляет» его: снимает removed_at
+    /// так, что живой клиент сразу считается в квоте группы, не дожидаясь тика коллектора.
     pub fn assign_client_group(&self, name: &str, group_id: Option<i64>, now: i64) {
         if let Err(e) = self.with_conn(|c| {
             c.execute(
                 "INSERT INTO clients(name, ip, first_seen, last_seen, group_id)
                  VALUES(?1, '', ?2, ?2, ?3)
-                 ON CONFLICT(name) DO UPDATE SET group_id=?3",
+                 ON CONFLICT(name) DO UPDATE SET group_id=?3, removed_at=NULL",
                 rusqlite::params![name, now, group_id],
             )
         }) {
@@ -259,7 +261,7 @@ impl Store {
             c.execute(
                 "INSERT INTO clients(name, ip, first_seen, last_seen, group_id)
                  VALUES(?1, '', ?2, ?2, ?3)
-                 ON CONFLICT(name) DO UPDATE SET group_id=?3",
+                 ON CONFLICT(name) DO UPDATE SET group_id=?3, removed_at=NULL",
                 rusqlite::params![name, now, group_id],
             )?;
             Ok(true)
@@ -761,24 +763,47 @@ mod tests {
 
     #[test]
     fn try_assign_removed_client_in_group_counts_as_new() {
-        // «Воскресшее» имя: строка clients с этим именем и этим же group_id,
-        // но removed_at IS NOT NULL — это НЕ no-op, квота проверяется заново
-        // (живой клиент реально добавляется в группу).
+        // «Воскресшее» имя: строка clients с этим именем существует, но removed_at IS NOT NULL.
+        // При успешной привязке removed_at должен быть NULL, и воскрешённый клиент сразу
+        // считается в квоте (не дожидаясь тика коллектора).
         let store = Store::open_in_memory();
         let g = store.create_group("g", 0).unwrap();
-        store.set_group_quota(g, Some(1));
+        store.set_group_quota(g, Some(2));
         store.assign_client_group("dead", Some(g), 10);
         store
             .with_conn(|c| c.execute("UPDATE clients SET removed_at=99 WHERE name='dead'", []))
             .unwrap();
-        // Слот свободен (dead не считается) — займём его другим клиентом.
+
+        // Слот свободен (dead не считается, т.к. removed_at=99) — займём его alice.
         assert_eq!(
-            store.try_assign_client_group("alive", g, 100),
+            store.try_assign_client_group("alice", g, 100),
             QuotaAssign::Assigned
         );
-        // Теперь квота выбрана, и воскрешение dead в неё упирается.
+
+        // Теперь воскресим dead: try_assign возвращает Assigned и очищает removed_at.
         assert_eq!(
             store.try_assign_client_group("dead", g, 200),
+            QuotaAssign::Assigned
+        );
+
+        // После воскрешения removed_at должен быть NULL сразу (не дожидаясь коллектора).
+        let removed_at: Option<i64> = store
+            .with_conn(|c| {
+                c.query_row(
+                    "SELECT removed_at FROM clients WHERE name='dead'",
+                    [],
+                    |r| r.get(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(removed_at, None);
+
+        // Счётчик должен отражать обоих живых клиентов сразу (без тика коллектора).
+        assert_eq!(store.group_client_count(g), 2);
+
+        // Квота выбрана: следующий new клиент не влезает (даже без коллектора).
+        assert_eq!(
+            store.try_assign_client_group("charlie", g, 300),
             QuotaAssign::Full
         );
     }
@@ -817,5 +842,60 @@ mod tests {
             .count();
         assert_eq!(assigned, 3);
         assert_eq!(store.group_client_count(g), 3);
+    }
+
+    #[test]
+    fn try_assign_move_live_client_between_groups() {
+        // Перенос живого клиента между группами: попытка положить в полную группу
+        // должна вернуть Full и оставить клиента в исходной группе; перенос в
+        // группу со свободным слотом должен удаться и изменить счётчики обеих групп.
+        let store = Store::open_in_memory();
+        let g1 = store.create_group("g1", 0).unwrap();
+        let g2 = store.create_group("g2", 0).unwrap();
+
+        store.set_group_quota(g1, Some(1));
+        store.set_group_quota(g2, Some(1));
+
+        // Привяжем клиента alice к g1
+        assert_eq!(
+            store.try_assign_client_group("alice", g1, 10),
+            QuotaAssign::Assigned
+        );
+        assert_eq!(store.group_client_count(g1), 1);
+        assert_eq!(store.group_client_count(g2), 0);
+
+        // Заполним g2
+        assert_eq!(
+            store.try_assign_client_group("bob", g2, 20),
+            QuotaAssign::Assigned
+        );
+        assert_eq!(store.group_client_count(g2), 1);
+
+        // Попытка перенести alice в полную g2 должна вернуть Full и оставить alice в g1
+        assert_eq!(
+            store.try_assign_client_group("alice", g2, 30),
+            QuotaAssign::Full
+        );
+        assert_eq!(store.client_group("alice"), Some(g1));
+        assert_eq!(store.group_client_count(g1), 1);
+        assert_eq!(store.group_client_count(g2), 1);
+
+        // Освободим g2 перемещением bob
+        let g3 = store.create_group("g3", 0).unwrap();
+        assert_eq!(
+            store.try_assign_client_group("bob", g3, 40),
+            QuotaAssign::Assigned
+        );
+        assert_eq!(store.group_client_count(g2), 0);
+
+        // Теперь перенос alice в g2 должен успешно выполниться
+        assert_eq!(
+            store.try_assign_client_group("alice", g2, 50),
+            QuotaAssign::Assigned
+        );
+        assert_eq!(store.client_group("alice"), Some(g2));
+        assert_eq!(store.group_client_count(g1), 0);
+        assert_eq!(store.group_client_count(g2), 1);
+        assert_eq!(store.group_client_count(g3), 1);
     }
 }
