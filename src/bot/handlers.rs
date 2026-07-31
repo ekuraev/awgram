@@ -3237,6 +3237,165 @@ mod tests {
         }
     }
 
+    /// По одному образцу каждого варианта Action — база для проверки полноты
+    /// таблицы `authorize_table` ниже. Vec (в отличие от match в `authorize`)
+    /// сам по себе не заставит компилятор напомнить про новый вариант,
+    /// поэтому здесь есть отдельная компайл-страховка (см. ниже).
+    fn coverage_samples() -> Vec<Action> {
+        use Action::*;
+        let samples = vec![
+            Menu,
+            List,
+            Add,
+            Stats,
+            Page(0),
+            ShowClient("s".into()),
+            ClientHistory("s".into()),
+            SendConf("s".into()),
+            AskDelete("s".into()),
+            ConfirmDelete("s".into()),
+            Recreate("s".into()),
+            Regen("s".into()),
+            RegenAll,
+            RegenAllRun(false),
+            Expiry("none".into()),
+            Lang("ru".into()),
+            Settings,
+            SetLang("ru".into()),
+            SetPsk(false),
+            SetSlug(false),
+            AddPsk(false),
+            Backup,
+            BackupNew,
+            BackupList,
+            BackupCard(0),
+            BackupDownload(0),
+            Restore(0),
+            RestoreYes(0),
+            Check,
+            Diagnose,
+            Modify("s".into()),
+            ModifyParam("s".into(), crate::vpn::validate::ModifyParam::Dns),
+            Restart,
+            RestartRun,
+            RepairModule,
+            AddBulk,
+            AddBulkRun(1),
+            BulkExpiry("none".into()),
+            AddBulkPsk(false),
+            SendQr("s".into()),
+            SendLink("s".into()),
+            SendAll("s".into()),
+            SetConf(false),
+            SetQr(false),
+            SetLink(false),
+            SetListFilter(crate::vpn::model::ClientFilter::All),
+            Groups,
+            GroupCreate,
+            GroupCard(0),
+            GroupRenameAsk(0),
+            GroupQuotaAsk(0),
+            GroupAdmins(0),
+            GroupAdminRemove(0, 0),
+            GroupInvite(0),
+            GroupInviteRevoke(0),
+            GroupAdminById(0),
+            GroupDeleteAsk(0),
+            GroupDeleteDetach(0),
+            GroupDeleteAllAsk(0),
+            GroupDeleteAllYes(0),
+            GroupRegenAsk(0),
+            GroupRegenRun(0),
+            GroupSelect(0),
+            GroupSelectMenu,
+            MoveClientAsk("s".into()),
+            MoveClientTo(None, "s".into()),
+            GroupScopeAsk,
+            GroupScopeSet(crate::store::ListScope::All),
+            Unknown,
+        ];
+
+        // Компайл-страховка: исчерпывающий match без wildcard по каждому
+        // образцу. Добавили вариант в Action — этот match перестал
+        // собираться, пока сюда не добавлен образец нового варианта (а
+        // значит, и напоминание дописать для него строку в authorize_table).
+        for sample in &samples {
+            match sample {
+                Menu => {}
+                List => {}
+                Add => {}
+                Stats => {}
+                Page(_) => {}
+                ShowClient(_) => {}
+                ClientHistory(_) => {}
+                SendConf(_) => {}
+                AskDelete(_) => {}
+                ConfirmDelete(_) => {}
+                Recreate(_) => {}
+                Regen(_) => {}
+                RegenAll => {}
+                RegenAllRun(_) => {}
+                Expiry(_) => {}
+                Lang(_) => {}
+                Settings => {}
+                SetLang(_) => {}
+                SetPsk(_) => {}
+                SetSlug(_) => {}
+                AddPsk(_) => {}
+                Backup => {}
+                BackupNew => {}
+                BackupList => {}
+                BackupCard(_) => {}
+                BackupDownload(_) => {}
+                Restore(_) => {}
+                RestoreYes(_) => {}
+                Check => {}
+                Diagnose => {}
+                Modify(_) => {}
+                ModifyParam(_, _) => {}
+                Restart => {}
+                RestartRun => {}
+                RepairModule => {}
+                AddBulk => {}
+                AddBulkRun(_) => {}
+                BulkExpiry(_) => {}
+                AddBulkPsk(_) => {}
+                SendQr(_) => {}
+                SendLink(_) => {}
+                SendAll(_) => {}
+                SetConf(_) => {}
+                SetQr(_) => {}
+                SetLink(_) => {}
+                SetListFilter(_) => {}
+                Groups => {}
+                GroupCreate => {}
+                GroupCard(_) => {}
+                GroupRenameAsk(_) => {}
+                GroupQuotaAsk(_) => {}
+                GroupAdmins(_) => {}
+                GroupAdminRemove(_, _) => {}
+                GroupInvite(_) => {}
+                GroupInviteRevoke(_) => {}
+                GroupAdminById(_) => {}
+                GroupDeleteAsk(_) => {}
+                GroupDeleteDetach(_) => {}
+                GroupDeleteAllAsk(_) => {}
+                GroupDeleteAllYes(_) => {}
+                GroupRegenAsk(_) => {}
+                GroupRegenRun(_) => {}
+                GroupSelect(_) => {}
+                GroupSelectMenu => {}
+                MoveClientAsk(_) => {}
+                MoveClientTo(_, _) => {}
+                GroupScopeAsk => {}
+                GroupScopeSet(_) => {}
+                Unknown => {}
+            }
+        }
+
+        samples
+    }
+
     /// Табличный тест гейта авторизации: каждая строка — один Action и
     /// ожидаемый доступ для owner/GA (снято с текущего поведения диспатча).
     /// Denied проверяется отдельно на каждой строке — защита в глубину.
@@ -3354,6 +3513,22 @@ mod tests {
             (Action::GroupScopeAsk, true, false),
             (Action::GroupScopeSet(ListScope::All), true, false),
         ];
+
+        // Ассерт полноты: на каждый вариант Action (образцы из
+        // coverage_samples) в таблице выше должна найтись хотя бы одна
+        // строка — иначе новый вариант получит проверку доступа в
+        // authorize(), но проскочит мимо теста молча.
+        let table_discriminants: std::collections::HashSet<_> = table
+            .iter()
+            .map(|(action, _, _)| std::mem::discriminant(action))
+            .collect();
+        for sample in coverage_samples() {
+            assert!(
+                table_discriminants.contains(&std::mem::discriminant(&sample)),
+                "authorize_table не содержит строки для варианта {sample:?} — допишите строку в table"
+            );
+        }
+
         for (action, owner_ok, ga_ok) in &table {
             assert_eq!(
                 authorize(action, &owner, &store),
