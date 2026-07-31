@@ -43,7 +43,29 @@ fn build_cmd(spec: &RunSpec<'_>, args: &[&str]) -> Command {
 /// недостижимыми в проде. Timeout по-прежнему → Error::Timeout.
 pub async fn run(spec: &RunSpec<'_>, args: &[&str]) -> Result<(String, i32)> {
     let mut cmd = build_cmd(spec, args);
-    let child = cmd.spawn()?;
+    // ETXTBSY при execve: скрипт в этот момент открыт кем-то на запись.
+    // Два легитимных источника: `awgram-setup update` переписывает
+    // manage-скрипт под работающим ботом, и fork-окно параллельного spawn
+    // (другой поток процесса успел сделать fork, пока чей-то fd записи ещё
+    // открыт, — проявлялось флейком тестов в Linux CI). Окно — микросекунды
+    // и миллисекунды, поэтому короткий ретрай надёжно его пережидает, не
+    // маскируя настоящие ошибки запуска.
+    const BUSY_RETRIES: u32 = 10;
+    const BUSY_PAUSE: Duration = Duration::from_millis(20);
+    let mut busy_attempts = 0;
+    let child = loop {
+        match cmd.spawn() {
+            Ok(c) => break c,
+            Err(e)
+                if e.kind() == std::io::ErrorKind::ExecutableFileBusy
+                    && busy_attempts < BUSY_RETRIES =>
+            {
+                busy_attempts += 1;
+                tokio::time::sleep(BUSY_PAUSE).await;
+            }
+            Err(e) => return Err(e.into()),
+        }
+    };
     let dur = Duration::from_secs(spec.timeout_secs);
     let output = match timeout(dur, child.wait_with_output()).await {
         Ok(res) => res?,
@@ -105,5 +127,33 @@ mod tests {
         };
         let (out, _) = run(&spec, &[]).await.unwrap();
         assert_eq!(out, "unset");
+    }
+
+    #[tokio::test]
+    async fn run_retries_while_script_briefly_busy() {
+        // Детерминированная эмуляция ETXTBSY-гонки (см. комментарий в run):
+        // держим fd записи скрипта открытым 50 мс параллельно с запуском.
+        // На Linux execve в этом окне даёт «Text file busy» — без ретрая
+        // тест падает; macOS ETXTBSY для скриптов не выдаёт, там тест
+        // проверяет только успешный запуск.
+        let dir = tempfile::tempdir().unwrap();
+        let script = write_script(&dir, "#!/bin/sh\nprintf 'ok'\n");
+        let held = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&script)
+            .unwrap();
+        let holder = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            drop(held);
+        });
+        let spec = RunSpec {
+            script: &script,
+            sudo_prefix: "",
+            timeout_secs: 5,
+            extra_env: &[],
+        };
+        let (out, code) = run(&spec, &[]).await.unwrap();
+        assert_eq!((out.as_str(), code), ("ok", 0));
+        holder.join().unwrap();
     }
 }
