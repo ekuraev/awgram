@@ -7,11 +7,33 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
 
 ### 🇷🇺 Русский
 
-_Пусто — изменений после v0.8.0 пока нет._
+#### 🐛 Исправлено
+
+- **Гонка квоты группы**: при двух одновременных созданиях/переносах
+  клиентов в одну группу квота могла быть превышена — проверка и привязка
+  теперь атомарны; создание, проигравшее гонку, откатывается с сообщением
+  «квота исчерпана» ([#20](https://github.com/ekuraev/awgram/issues/20)).
+
+#### ♻️ Изменено
+
+- **Централизованная авторизация кнопок**: все callback-действия проходят
+  через единую таблицу доступа (владелец / групповой админ) — забытая
+  проверка в новом действии теперь невозможна by construction.
 
 ### 🇬🇧 English
 
-_Empty — no changes since v0.8.0 yet._
+#### 🐛 Fixed
+
+- **Group quota race**: two concurrent client creations/moves into the
+  same group could exceed the quota — the check and the binding are now
+  atomic; a creation that loses the race is rolled back with a
+  "quota reached" message ([#20](https://github.com/ekuraev/awgram/issues/20)).
+
+#### ♻️ Changed
+
+- **Centralized button authorization**: every callback action now passes
+  through a single access table (owner / group admin) — a forgotten check
+  in a new action is impossible by construction.
 
 ## [0.8.0] — 2026-07-31
 
