@@ -24,6 +24,17 @@ pub enum GroupError {
     Db,
 }
 
+/// Итог атомарной привязки с проверкой квоты.
+#[derive(Debug, PartialEq)]
+pub enum QuotaAssign {
+    /// Привязан (или уже был живым клиентом этой группы — no-op).
+    Assigned,
+    /// Квота исчерпана либо группы уже нет: привязка не выполнена.
+    Full,
+    /// Ошибка БД (залогирована): привязка не выполнена.
+    Db,
+}
+
 pub struct InviteRow {
     pub token: String,
     pub group_id: i64,
@@ -192,17 +203,76 @@ impl Store {
 
     /// Привязка клиента к группе (или отвязка при None). Строка clients может
     /// ещё не существовать (её обычно создаёт collector.ingest) — upsert, не
-    /// трогающий first_seen/last_seen существующей строки.
+    /// трогающий first_seen/last_seen существующей строки. Если клиент был помечен
+    /// удалённым (removed_at IS NOT NULL), привязка «оживляет» его: снимает removed_at
+    /// так, что живой клиент сразу считается в квоте группы, не дожидаясь тика коллектора.
     pub fn assign_client_group(&self, name: &str, group_id: Option<i64>, now: i64) {
         if let Err(e) = self.with_conn(|c| {
             c.execute(
                 "INSERT INTO clients(name, ip, first_seen, last_seen, group_id)
                  VALUES(?1, '', ?2, ?2, ?3)
-                 ON CONFLICT(name) DO UPDATE SET group_id=?3",
+                 ON CONFLICT(name) DO UPDATE SET group_id=?3, removed_at=NULL",
                 rusqlite::params![name, now, group_id],
             )
         }) {
             tracing::error!(error = %e, client = name, "не удалось привязать клиента к группе");
+        }
+    }
+
+    /// Атомарный вариант assign_client_group для путей, где действует квота:
+    /// проверка лимита и upsert выполняются в одном замыкании with_conn, то
+    /// есть под одним захватом мьютекса соединения — конкурирующий вызов
+    /// увидит уже обновлённый счётчик (фикс TOCTOU-гонки квоты).
+    pub fn try_assign_client_group(&self, name: &str, group_id: i64, now: i64) -> QuotaAssign {
+        use rusqlite::OptionalExtension;
+        let res = self.with_conn(|c| {
+            // Живой клиент уже в этой группе → no-op: перенос в свою группу
+            // и гонки recreate не блокируются полнотой группы.
+            let already: Option<Option<i64>> = c
+                .query_row(
+                    "SELECT group_id FROM clients WHERE name=?1 AND removed_at IS NULL",
+                    [name],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            if already.flatten() == Some(group_id) {
+                return Ok(true);
+            }
+            // Нет строки группы → отказ (Full-класс): группу удалили за время
+            // диалога, привязывать не к чему.
+            let max: Option<Option<i64>> = c
+                .query_row(
+                    "SELECT max_clients FROM groups WHERE id=?1",
+                    [group_id],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let Some(max) = max else { return Ok(false) };
+            if let Some(max) = max {
+                let count: i64 = c.query_row(
+                    "SELECT COUNT(*) FROM clients WHERE group_id=?1 AND removed_at IS NULL",
+                    [group_id],
+                    |r| r.get(0),
+                )?;
+                if count >= max {
+                    return Ok(false);
+                }
+            }
+            c.execute(
+                "INSERT INTO clients(name, ip, first_seen, last_seen, group_id)
+                 VALUES(?1, '', ?2, ?2, ?3)
+                 ON CONFLICT(name) DO UPDATE SET group_id=?3, removed_at=NULL",
+                rusqlite::params![name, now, group_id],
+            )?;
+            Ok(true)
+        });
+        match res {
+            Ok(true) => QuotaAssign::Assigned,
+            Ok(false) => QuotaAssign::Full,
+            Err(e) => {
+                tracing::error!(error = %e, client = name, group_id, "не удалось атомарно привязать клиента к группе");
+                QuotaAssign::Db
+            }
         }
     }
 
@@ -626,5 +696,206 @@ mod tests {
         assert!(t
             .chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()));
+    }
+
+    #[test]
+    fn try_assign_respects_quota() {
+        let store = Store::open_in_memory();
+        let g = store.create_group("g", 0).unwrap();
+        store.set_group_quota(g, Some(2));
+        assert_eq!(
+            store.try_assign_client_group("a", g, 10),
+            QuotaAssign::Assigned
+        );
+        assert_eq!(
+            store.try_assign_client_group("b", g, 10),
+            QuotaAssign::Assigned
+        );
+        // Третий не влезает; привязка не выполнена.
+        assert_eq!(store.try_assign_client_group("c", g, 10), QuotaAssign::Full);
+        assert_eq!(store.group_client_count(g), 2);
+        assert_eq!(store.client_group("c"), None);
+    }
+
+    #[test]
+    fn try_assign_already_in_group_is_noop_even_when_full() {
+        // Перенос в свою же группу / гонка recreate: клиент уже внутри —
+        // полная группа не должна его «выталкивать».
+        let store = Store::open_in_memory();
+        let g = store.create_group("g", 0).unwrap();
+        store.set_group_quota(g, Some(1));
+        assert_eq!(
+            store.try_assign_client_group("a", g, 10),
+            QuotaAssign::Assigned
+        );
+        assert_eq!(
+            store.try_assign_client_group("a", g, 20),
+            QuotaAssign::Assigned
+        );
+        assert_eq!(store.group_client_count(g), 1);
+    }
+
+    #[test]
+    fn try_assign_unlimited_group() {
+        let store = Store::open_in_memory();
+        let g = store.create_group("g", 0).unwrap(); // max_clients = NULL
+        for i in 0..5 {
+            let name = format!("c{i}");
+            assert_eq!(
+                store.try_assign_client_group(&name, g, 10),
+                QuotaAssign::Assigned
+            );
+        }
+        assert_eq!(store.group_client_count(g), 5);
+    }
+
+    #[test]
+    fn try_assign_missing_group_is_full() {
+        // Группу удалили за время гонки: привязка не выполняется, клиент
+        // остаётся как был (Full-класс отказа — см. спеку).
+        let store = Store::open_in_memory();
+        assert_eq!(
+            store.try_assign_client_group("a", 999, 10),
+            QuotaAssign::Full
+        );
+        assert_eq!(store.client_group("a"), None);
+    }
+
+    #[test]
+    fn try_assign_removed_client_in_group_counts_as_new() {
+        // «Воскресшее» имя: строка clients с этим именем существует, но removed_at IS NOT NULL.
+        // При успешной привязке removed_at должен быть NULL, и воскрешённый клиент сразу
+        // считается в квоте (не дожидаясь тика коллектора).
+        let store = Store::open_in_memory();
+        let g = store.create_group("g", 0).unwrap();
+        store.set_group_quota(g, Some(2));
+        store.assign_client_group("dead", Some(g), 10);
+        store
+            .with_conn(|c| c.execute("UPDATE clients SET removed_at=99 WHERE name='dead'", []))
+            .unwrap();
+
+        // Слот свободен (dead не считается, т.к. removed_at=99) — займём его alice.
+        assert_eq!(
+            store.try_assign_client_group("alice", g, 100),
+            QuotaAssign::Assigned
+        );
+
+        // Теперь воскресим dead: try_assign возвращает Assigned и очищает removed_at.
+        assert_eq!(
+            store.try_assign_client_group("dead", g, 200),
+            QuotaAssign::Assigned
+        );
+
+        // После воскрешения removed_at должен быть NULL сразу (не дожидаясь коллектора).
+        let removed_at: Option<i64> = store
+            .with_conn(|c| {
+                c.query_row(
+                    "SELECT removed_at FROM clients WHERE name='dead'",
+                    [],
+                    |r| r.get(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(removed_at, None);
+
+        // Счётчик должен отражать обоих живых клиентов сразу (без тика коллектора).
+        assert_eq!(store.group_client_count(g), 2);
+
+        // Квота выбрана: следующий new клиент не влезает (даже без коллектора).
+        assert_eq!(
+            store.try_assign_client_group("charlie", g, 300),
+            QuotaAssign::Full
+        );
+    }
+
+    #[test]
+    fn try_assign_db_error_is_db() {
+        let store = Store::open_in_memory();
+        let g = store.create_group("g", 0).unwrap();
+        store
+            .with_conn(|c| c.execute("DROP TABLE clients", []))
+            .unwrap();
+        assert_eq!(store.try_assign_client_group("a", g, 10), QuotaAssign::Db);
+    }
+
+    #[test]
+    fn try_assign_concurrent_never_overshoots() {
+        // Гонка N потоков за M слотов: ровно M привязок. Провал этого теста до
+        // фикса — сам смысл задачи (старый check-then-act перелетал квоту).
+        use std::sync::Arc;
+        let store = Arc::new(Store::open_in_memory());
+        let g = store.create_group("g", 0).unwrap();
+        store.set_group_quota(g, Some(3));
+        let handles: Vec<_> = (0..10)
+            .map(|i| {
+                let store = Arc::clone(&store);
+                std::thread::spawn(move || {
+                    let name = format!("c{i}");
+                    store.try_assign_client_group(&name, g, 10)
+                })
+            })
+            .collect();
+        let results: Vec<QuotaAssign> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        let assigned = results
+            .iter()
+            .filter(|r| **r == QuotaAssign::Assigned)
+            .count();
+        assert_eq!(assigned, 3);
+        assert_eq!(store.group_client_count(g), 3);
+    }
+
+    #[test]
+    fn try_assign_move_live_client_between_groups() {
+        // Перенос живого клиента между группами: попытка положить в полную группу
+        // должна вернуть Full и оставить клиента в исходной группе; перенос в
+        // группу со свободным слотом должен удаться и изменить счётчики обеих групп.
+        let store = Store::open_in_memory();
+        let g1 = store.create_group("g1", 0).unwrap();
+        let g2 = store.create_group("g2", 0).unwrap();
+
+        store.set_group_quota(g1, Some(1));
+        store.set_group_quota(g2, Some(1));
+
+        // Привяжем клиента alice к g1
+        assert_eq!(
+            store.try_assign_client_group("alice", g1, 10),
+            QuotaAssign::Assigned
+        );
+        assert_eq!(store.group_client_count(g1), 1);
+        assert_eq!(store.group_client_count(g2), 0);
+
+        // Заполним g2
+        assert_eq!(
+            store.try_assign_client_group("bob", g2, 20),
+            QuotaAssign::Assigned
+        );
+        assert_eq!(store.group_client_count(g2), 1);
+
+        // Попытка перенести alice в полную g2 должна вернуть Full и оставить alice в g1
+        assert_eq!(
+            store.try_assign_client_group("alice", g2, 30),
+            QuotaAssign::Full
+        );
+        assert_eq!(store.client_group("alice"), Some(g1));
+        assert_eq!(store.group_client_count(g1), 1);
+        assert_eq!(store.group_client_count(g2), 1);
+
+        // Освободим g2 перемещением bob
+        let g3 = store.create_group("g3", 0).unwrap();
+        assert_eq!(
+            store.try_assign_client_group("bob", g3, 40),
+            QuotaAssign::Assigned
+        );
+        assert_eq!(store.group_client_count(g2), 0);
+
+        // Теперь перенос alice в g2 должен успешно выполниться
+        assert_eq!(
+            store.try_assign_client_group("alice", g2, 50),
+            QuotaAssign::Assigned
+        );
+        assert_eq!(store.client_group("alice"), Some(g2));
+        assert_eq!(store.group_client_count(g1), 0);
+        assert_eq!(store.group_client_count(g2), 1);
+        assert_eq!(store.group_client_count(g3), 1);
     }
 }
