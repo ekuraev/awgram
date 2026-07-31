@@ -14,7 +14,8 @@ mod stats;
 
 pub use events::{EventKind, EventRow};
 pub use groups::{
-    gen_invite_token, GroupError, GroupRow, InviteRow, InviteUse, ListScope, INVITE_TTL_SECS,
+    gen_invite_token, GroupError, GroupRow, InviteRow, InviteUse, ListScope, QuotaAssign,
+    INVITE_TTL_SECS,
 };
 pub use stats::{PeriodTotals, Sample, TrafficSummary};
 
