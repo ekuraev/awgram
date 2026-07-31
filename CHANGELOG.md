@@ -16,6 +16,10 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
 - **«Готово» после ошибки создания**: провал добавления клиента больше не
   завершается сообщением «Готово» — после ошибки бот возвращает главное
   меню ([#40](https://github.com/ekuraev/awgram/issues/40)).
+- **Устойчивость к «Text file busy»**: запуск manage-скрипта теперь
+  переживает короткое окно, когда файл открыт на запись (например,
+  `awgram-setup update` переписывает скрипт под работающим ботом) —
+  spawn ретраится до 200 мс вместо немедленной ошибки.
 
 #### ♻️ Изменено
 
@@ -34,6 +38,10 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
 - **"Done" after a failed add**: a failed client creation no longer ends
   with a "Done" message — on error the bot now returns the main menu
   ([#40](https://github.com/ekuraev/awgram/issues/40)).
+- **Resilience to "Text file busy"**: launching the manage script now
+  survives a brief window when the file is open for writing (e.g.
+  `awgram-setup update` rewriting the script under a running bot) — the
+  spawn retries for up to 200 ms instead of failing immediately.
 
 #### ♻️ Changed
 
