@@ -2725,22 +2725,28 @@ async fn callback_handler(
                     bot.send_message(chat, i18n::not_found(lang)).await?;
                     return Ok(());
                 };
-                // Квота действует и на перенос: полная группа не принимает
-                // клиентов (владелец сначала поднимает лимит). Перенос внутри
-                // той же группы — no-op, счётчик не растёт, не блокируем.
-                if settings.client_group(&name) != Some(id)
-                    && settings.group_remaining(id).is_some_and(|r| r < 1)
-                {
-                    let quota = g.max_clients.unwrap_or(0);
-                    bot.send_message(chat, i18n::quota_reached(lang, quota))
-                        .await?;
-                    return Ok(());
+                // Квота действует и на перенос: полная группа не принимает клиентов
+                // (владелец сначала поднимает лимит). Проверка и привязка — атомарно
+                // в store (TOCTOU-фикс); no-op переноса в свою же группу разрешён там же.
+                match settings.try_assign_client_group(&name, id, now_epoch()) {
+                    crate::store::QuotaAssign::Assigned => {}
+                    crate::store::QuotaAssign::Full => {
+                        let quota = g.max_clients.unwrap_or(0);
+                        bot.send_message(chat, i18n::quota_reached(lang, quota))
+                            .await?;
+                        return Ok(());
+                    }
+                    crate::store::QuotaAssign::Db => {
+                        let err = crate::error::Error::Telegram("db".into());
+                        bot.send_message(chat, i18n::error_text(lang, &err)).await?;
+                        return Ok(());
+                    }
                 }
                 Some(g.name)
             } else {
+                settings.assign_client_group(&name, None, now_epoch());
                 None
             };
-            settings.assign_client_group(&name, target, now_epoch());
             bot.send_message(chat, i18n::client_moved(lang, &name, gname.as_deref()))
                 .parse_mode(ParseMode::Html)
                 .reply_markup(menu::main_menu(lang))
