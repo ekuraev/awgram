@@ -458,6 +458,12 @@ fn group_for_new_client(
     }
 }
 
+/// Нужен ли откат создания: не-recreate клиент не влез в квоту группы
+/// (проиграна гонка — ранняя проверка прошла, атомарная привязка нет).
+fn add_needs_quota_rollback(recreate: bool, outcome: &crate::store::QuotaAssign) -> bool {
+    !recreate && *outcome == crate::store::QuotaAssign::Full
+}
+
 /// Скоуп по роли: владельцу — сохранённый фильтр группы; групповому админу —
 /// текущая группа или None (нужен экран выбора группы).
 fn scope_for(role: &Role, settings: &Store, uid: i64) -> Option<ListScope> {
@@ -1095,7 +1101,55 @@ async fn finish_add(
             // создаёт заново, а перезатирает). Без безусловного вызова при
             // group=None «воскресшая» строка сохранила бы старую привязку —
             // группа-владелец получил бы доступ к новому чужому клиенту.
-            settings.assign_client_group(name, group, now_epoch());
+            //
+            // Привязка к группе. Для нового клиента с группой — атомарно с
+            // квотой: ранняя проверка выше могла пройти у двух конкурентов
+            // одновременно (vpn.add занимает секунды), решает только этот
+            // вызов. Recreate и клиент без группы — как раньше (квота не
+            // растёт / не применима); безусловность вызова при group=None
+            // сохраняется — см. комментарий про «воскресшую» строку выше.
+            let outcome = match group {
+                Some(gid) if !recreate => settings.try_assign_client_group(name, gid, now_epoch()),
+                _ => {
+                    settings.assign_client_group(name, group, now_epoch());
+                    crate::store::QuotaAssign::Assigned
+                }
+            };
+            if add_needs_quota_rollback(recreate, &outcome) {
+                // Компенсация: клиент создан, но в группу не влез — удаляем
+                // его и показываем «квота исчерпана». Артефакты не выдаём:
+                // клиент через мгновение перестанет существовать. В историю
+                // попадают ОБА события (add выше уже залогирован) — она
+                // отражает то, что реально произошло.
+                let gid = group.expect("rollback только при Some(group)");
+                if let Err(e) = vpn.remove(name).await {
+                    // Откат не удался: клиент существует, но без группы —
+                    // виден только владельцу, чинится вручную. Пользователю —
+                    // честная ошибка.
+                    tracing::error!(error = %e, client = name, "не удалось откатить клиента после гонки квоты");
+                    if let Some(m) = waiting {
+                        let _ = bot.delete_message(chat, m.id).await;
+                    }
+                    let _ = bot.send_message(chat, i18n::error_text(lang, &e)).await;
+                    return;
+                }
+                settings.log_event(
+                    now_epoch(),
+                    EventKind::ClientRemove,
+                    Some(name),
+                    Some(uid),
+                    Some("quota race rollback"),
+                );
+                if let Some(m) = waiting {
+                    let _ = bot.delete_message(chat, m.id).await;
+                }
+                let quota = settings.group(gid).and_then(|g| g.max_clients).unwrap_or(0);
+                let _ = bot
+                    .send_message(chat, i18n::quota_reached(lang, quota))
+                    .reply_markup(home)
+                    .await;
+                return;
+            }
             // Фильтр выдачи по тумблерам настроек (deliver_conf/qr/link): после
             // создания шлём только включённые артефакты. Ручная повторная выдача
             // через карточку клиента (SendConf/SendQr/SendLink/SendAll) фильтр
@@ -2909,6 +2963,18 @@ mod tests {
             group_for_new_client(&ga_only_a, &store, 43, false, "bob"),
             None
         );
+    }
+
+    #[test]
+    fn add_rollback_only_for_new_client_full() {
+        use crate::store::QuotaAssign;
+        // Откат (удалить созданного клиента) — только когда НОВЫЙ клиент
+        // проиграл гонку квоты. Recreate квоту не проверяет, Db — деградация
+        // без отката (клиент остаётся без группы, как раньше).
+        assert!(add_needs_quota_rollback(false, &QuotaAssign::Full));
+        assert!(!add_needs_quota_rollback(true, &QuotaAssign::Full));
+        assert!(!add_needs_quota_rollback(false, &QuotaAssign::Assigned));
+        assert!(!add_needs_quota_rollback(false, &QuotaAssign::Db));
     }
 
     #[test]
