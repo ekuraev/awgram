@@ -1263,8 +1263,18 @@ async fn finish_add(
             return;
         }
         Err(e) => {
+            // Клиент не создан — ранний return, чтобы общий хвост не слал
+            // «Готово» следом за ошибкой (#40). Клавиатуру возвращаем: без
+            // неё пользователь оставался бы без меню после сбоя.
             tracing::error!(error = %e, "add провалился");
-            let _ = bot.send_message(chat, i18n::error_text(lang, &e)).await;
+            if let Some(m) = waiting {
+                let _ = bot.delete_message(chat, m.id).await;
+            }
+            let _ = bot
+                .send_message(chat, i18n::error_text(lang, &e))
+                .reply_markup(home)
+                .await;
+            return;
         }
     }
     if let Some(m) = waiting {
