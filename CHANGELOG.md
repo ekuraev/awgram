@@ -13,6 +13,9 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
   клиентов в одну группу квота могла быть превышена — проверка и привязка
   теперь атомарны; создание, проигравшее гонку, откатывается с сообщением
   «квота исчерпана» ([#20](https://github.com/ekuraev/awgram/issues/20)).
+- **«Готово» после ошибки создания**: провал добавления клиента больше не
+  завершается сообщением «Готово» — после ошибки бот возвращает главное
+  меню ([#40](https://github.com/ekuraev/awgram/issues/40)).
 
 #### ♻️ Изменено
 
@@ -28,6 +31,9 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
   same group could exceed the quota — the check and the binding are now
   atomic; a creation that loses the race is rolled back with a
   "quota reached" message ([#20](https://github.com/ekuraev/awgram/issues/20)).
+- **"Done" after a failed add**: a failed client creation no longer ends
+  with a "Done" message — on error the bot now returns the main menu
+  ([#40](https://github.com/ekuraev/awgram/issues/40)).
 
 #### ♻️ Changed
 
