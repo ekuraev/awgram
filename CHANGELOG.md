@@ -7,11 +7,63 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
 
 ### 🇷🇺 Русский
 
-_Пусто — изменений после v0.8.1 пока нет._
+_Пусто — изменений после v0.8.2 пока нет._
 
 ### 🇬🇧 English
 
-_Empty — no changes since v0.8.1 yet._
+_Empty — no changes since v0.8.2 yet._
+
+## [0.8.2] — 2026-08-03
+
+### 🇷🇺 Русский
+
+#### ✨ Добавлено
+
+- **Кнопка «Клиенты группы»** в карточке группы: открывает список клиентов
+  с фильтром по этой группе
+  ([#20](https://github.com/ekuraev/awgram/issues/20)).
+
+#### 🐛 Исправлено
+
+- **Тупик фильтра «Без группы»**: когда все клиенты распределены по группам
+  (или под липкий статус-фильтр никто не попал), раздел «Клиенты» больше не
+  запирается на «клиентов нет» — экран пустой выборки сохраняет кнопки смены
+  статус-фильтра и группового фильтра, а текст различает «клиентов нет
+  вообще» и «под фильтр никто не попал»
+  ([#20](https://github.com/ekuraev/awgram/issues/20)).
+
+#### ♻️ Изменено
+
+- **Совместимость с инсталлером**: поддерживаемая версия —
+  [v5.23.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.23.0)
+  (сверен `--json`-контракт: v5.22.0 добавил предупреждение о рассинхроне
+  `awgsetup_cfg.init` только в stderr, v5.23.0 меняет только установщики);
+  минимальная — по-прежнему v5.21.0.
+
+### 🇬🇧 English
+
+#### ✨ Added
+
+- **"Group clients" button** on the group card: opens the client list
+  filtered to that group
+  ([#20](https://github.com/ekuraev/awgram/issues/20)).
+
+#### 🐛 Fixed
+
+- **"No group" filter dead end**: when every client is assigned to a group
+  (or the sticky status filter matches nobody), the "Clients" section no
+  longer locks up on "no clients" — the empty-selection screen keeps the
+  status-filter and group-filter buttons, and the text distinguishes
+  "no clients at all" from "nothing matches the filter"
+  ([#20](https://github.com/ekuraev/awgram/issues/20)).
+
+#### ♻️ Changed
+
+- **Installer compatibility**: the supported version is now
+  [v5.23.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.23.0)
+  (`--json` contract verified: v5.22.0 adds an `awgsetup_cfg.init` drift
+  warning to stderr only, v5.23.0 only changes the installers); the minimum
+  stays v5.21.0.
 
 ## [0.8.1] — 2026-07-31
 
