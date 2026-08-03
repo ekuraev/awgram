@@ -1441,11 +1441,32 @@ async fn finish_bulk(
     }
 }
 
+/// Экран пустого списка клиентов. Клиентов нет вообще (`total == 0`) —
+/// «Пока нет клиентов» + домашняя клавиатура. Пусто из-за фильтра/скоупа —
+/// текст про фильтр + клавиатура с кнопками смены фильтра и скоупа: липкие
+/// настройки иначе делают раздел недоступным (#20 — «Без группы» при
+/// полностью распределённых клиентах).
+fn empty_list_screen(
+    lang: Lang,
+    total: usize,
+    filter: crate::vpn::model::ClientFilter,
+    is_owner: bool,
+    home: InlineKeyboardMarkup,
+) -> (String, InlineKeyboardMarkup) {
+    if total == 0 {
+        (i18n::clients_empty(lang), home)
+    } else {
+        (
+            i18n::clients_empty_filtered(lang),
+            menu::clients_empty_menu(lang, filter, is_owner),
+        )
+    }
+}
+
 /// Рендерит экран списка клиентов: list_enriched → filter+sort → expiries →
 /// title → clients_list. Общая логика для Action::List / Action::Page /
 /// Action::SetListFilter (различаются только страницей и тем, кто читает/
-/// устанавливает фильтр из настроек). Пустой список (до или после фильтра) →
-/// friendly-сообщение + главное меню.
+/// устанавливает фильтр из настроек). Пустой список — empty_list_screen.
 #[allow(clippy::too_many_arguments)]
 async fn render_clients_list(
     bot: &Bot,
@@ -1478,7 +1499,8 @@ async fn render_clients_list(
                 .filter(|c| scope.admits(settings.client_group(&c.name)))
                 .collect();
             if clients.is_empty() {
-                edit_or_send(bot, chat, msg_id, i18n::clients_empty(lang), home).await;
+                let (text, kb) = empty_list_screen(lang, all_clients.len(), filter, is_owner, home);
+                edit_or_send(bot, chat, msg_id, text, kb).await;
                 return;
             }
             // Полный вектор (не страница): clients_list индексирует expiries[i]
@@ -3134,6 +3156,38 @@ mod tests {
     }
 
     #[test]
+    fn empty_list_screen_no_clients_keeps_home_menu() {
+        // Клиентов нет вообще — фильтровать нечего, остаётся домашнее меню.
+        let home = menu::main_menu(Lang::Ru);
+        let (text, kb) = empty_list_screen(
+            Lang::Ru,
+            0,
+            crate::vpn::model::ClientFilter::All,
+            true,
+            home.clone(),
+        );
+        assert_eq!(text, i18n::clients_empty(Lang::Ru));
+        assert_eq!(kb, home);
+    }
+
+    #[test]
+    fn empty_list_screen_filtered_keeps_filter_controls() {
+        // Тупик #20: клиенты есть, но липкий фильтр/скоуп дал пустую
+        // выборку — экран обязан оставить кнопки смены фильтра и скоупа.
+        let (text, kb) = empty_list_screen(
+            Lang::Ru,
+            3,
+            crate::vpn::model::ClientFilter::All,
+            true,
+            menu::main_menu(Lang::Ru),
+        );
+        assert_eq!(text, i18n::clients_empty_filtered(Lang::Ru));
+        let dbg = format!("{kb:?}");
+        assert!(dbg.contains("\"gscope\""));
+        assert!(dbg.contains("listfilter:all"));
+    }
+
+    #[test]
     fn truncate_for_message_respects_char_boundary() {
         // Трёхбайтовый символ: 3500 не кратно 3 → индекс попадает внутрь
         // символа, обрезка должна откатиться к границе, а не паниковать.
@@ -3233,6 +3287,7 @@ mod tests {
             menu::ga_main_menu(Lang::Ru, true),
             menu::move_client_menu(Lang::Ru, "alice", &[sample_group()]),
             menu::group_scope_menu(Lang::Ru, &[sample_group()]),
+            menu::clients_empty_menu(Lang::Ru, crate::vpn::model::ClientFilter::All, true),
             menu::slug_recommend_menu(Lang::Ru),
         ];
 

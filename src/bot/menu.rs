@@ -51,6 +51,10 @@ pub fn group_card_menu(lang: Lang, id: i64, has_invite: bool) -> InlineKeyboardM
         cb(&i18n::btn_group_invite(lang), &format!("g:inv:{id}"))
     };
     InlineKeyboardMarkup::new(vec![
+        // «Клиенты группы» (#20) — существующий скоуп-фильтр списка: тот же
+        // callback, что и на экране выбора группового фильтра (gscope:{id}),
+        // устанавливает липкий фильтр владельца и рендерит список группы.
+        vec![cb(&i18n::btn_group_clients(lang), &format!("gscope:{id}"))],
         vec![
             cb(&i18n::btn_group_rename(lang), &format!("g:ren:{id}")),
             cb(&i18n::btn_group_quota(lang), &format!("g:quota:{id}")),
@@ -461,6 +465,22 @@ pub fn clients_list(
     }
     rows.push(vec![cb(&i18n::btn_back(lang), "menu")]);
     InlineKeyboardMarkup::new(rows)
+}
+
+/// Клавиатура пустой выборки списка: клиенты на сервере есть, но липкий
+/// статус-фильтр/групповой скоуп ничего не пропустил. Обязана оставлять
+/// кнопки смены фильтра и (владельцу) скоупа — иначе «Без группы» при
+/// полностью распределённых клиентах запирает раздел клиентов (#20).
+pub fn clients_empty_menu(
+    lang: Lang,
+    current_filter: ClientFilter,
+    is_owner: bool,
+) -> InlineKeyboardMarkup {
+    let mut filter_btns = filter_row(lang, current_filter);
+    if is_owner {
+        filter_btns.push(cb(&i18n::btn_scope(lang), "gscope"));
+    }
+    InlineKeyboardMarkup::new(vec![filter_btns, vec![cb(&i18n::btn_back(lang), "menu")]])
 }
 
 pub fn client_card(lang: Lang, name: &str, is_owner: bool) -> InlineKeyboardMarkup {
@@ -1456,5 +1476,30 @@ mod tests {
             }
             _ => panic!("expected callback data"),
         }
+    }
+
+    #[test]
+    fn clients_empty_menu_keeps_filter_and_scope_controls() {
+        // Тупик #20: пустая выборка при липком фильтре/скоупе обязана
+        // оставлять кнопки смены статус-фильтра и группового фильтра —
+        // иначе «Без группы» без клиентов запирает раздел клиентов.
+        let data = all_callback_data(&clients_empty_menu(Lang::Ru, ClientFilter::All, true));
+        assert!(data.contains(&"gscope".to_string()));
+        assert!(data.contains(&"listfilter:all".to_string()));
+        assert!(data.contains(&"menu".to_string()));
+    }
+
+    #[test]
+    fn clients_empty_menu_hides_scope_for_group_admin() {
+        let data = all_callback_data(&clients_empty_menu(Lang::Ru, ClientFilter::All, false));
+        assert!(!data.contains(&"gscope".to_string()));
+        assert!(data.contains(&"listfilter:all".to_string()));
+    }
+
+    #[test]
+    fn group_card_menu_has_group_clients_button() {
+        // «Клиенты группы» (#20): открывает список клиентов с фильтром группы.
+        let data = all_callback_data(&group_card_menu(Lang::Ru, 7, false));
+        assert!(data.contains(&"gscope:7".to_string()));
     }
 }
