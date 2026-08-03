@@ -126,13 +126,15 @@ webhook), который живёт на том же VPS, что и VPN. Кон�
 и напрямую зависит от его интерфейса.
 
 - **Поддерживаемая версия инсталлера:
-  [v5.21.2](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.21.2)**
-  (проверено с ней). Минимальная —
+  [v5.23.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.23.0)**
+  (сверен `--json`-контракт). Минимальная —
   [v5.21.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.21.0);
   более старые v5.20.x не поддерживаются — бот использует расширенный
   `--json`-интерфейс команд управления, появившийся в v5.21.0.
-  v5.21.1/v5.21.2 — багфиксы валидации (нормализация порта в `check`,
-  числовые счётчики в `stats --json`); JSON-контракт не изменился.
+  v5.21.1–v5.23.0 JSON-контракт не меняли: v5.21.1/v5.21.2 — багфиксы
+  валидации, v5.22.0 добавил в `regen`/`check` предупреждение о рассинхроне
+  `awgsetup_cfg.init` (уходит в stderr, stdout-JSON не затронут),
+  v5.23.0 — изменения только в установщике (модуль ядра на старых ядрах).
 - Используемые подкоманды: `add`, `remove`, `list`, `stats`, `regen`,
   `modify`, `backup`, `restore`, `check`, `restart`, `repair-module` —
   все с `--json`.
