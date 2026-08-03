@@ -508,6 +508,16 @@ pub fn clients_empty(lang: Lang) -> String {
     }
     .to_string()
 }
+/// Клиенты на сервере есть, но текущий фильтр/групповой скоуп ничего не
+/// пропустил — текст обязан отличаться от clients_empty, чтобы не врать
+/// «клиентов нет» при непустом сервере (#20).
+pub fn clients_empty_filtered(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "Под текущий фильтр не попал ни один клиент.",
+        Lang::En => "No clients match the current filter.",
+    }
+    .to_string()
+}
 pub fn clients_title(lang: Lang) -> String {
     match lang {
         Lang::Ru => "👥 <b>Клиенты</b>:",
@@ -1236,6 +1246,13 @@ pub fn group_card(
             )
         }
     }
+}
+pub fn btn_group_clients(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "👥 Клиенты группы",
+        Lang::En => "👥 Group clients",
+    }
+    .to_string()
 }
 pub fn btn_group_rename(lang: Lang) -> String {
     match lang {
