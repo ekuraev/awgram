@@ -143,7 +143,8 @@ webhook), который живёт на том же VPS, что и VPN. Кон�
 
 ## Сборка из исходников
 
-Нужен стабильный Rust и `cargo`; TLS — на rustls, системный `libssl` не нужен.
+Нужен стабильный Rust не ниже 1.95 и `cargo`; TLS — на rustls, системный
+`libssl` не нужен.
 
 ```bash
 cargo build --release                 # target/release/awgram

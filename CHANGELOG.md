@@ -7,11 +7,19 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
 
 ### 🇷🇺 Русский
 
-_Пусто — изменений после v0.8.2 пока нет._
+#### 🔧 Изменено
+
+- **rusqlite 0.32 → 0.40** (bundled SQLite 3.53); для сборки из исходников
+  теперь нужен Rust не ниже 1.95 — MSRV зафиксирован в `Cargo.toml`
+  ([#44](https://github.com/ekuraev/awgram/pull/44)).
 
 ### 🇬🇧 English
 
-_Empty — no changes since v0.8.2 yet._
+#### 🔧 Changed
+
+- **rusqlite 0.32 → 0.40** (bundled SQLite 3.53); building from source now
+  requires Rust 1.95 or newer — the MSRV is pinned in `Cargo.toml`
+  ([#44](https://github.com/ekuraev/awgram/pull/44)).
 
 ## [0.8.2] — 2026-08-03
 

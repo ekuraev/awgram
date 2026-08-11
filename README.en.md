@@ -143,8 +143,8 @@ and depends directly on its interface.
 
 ## Building from source
 
-You need a stable Rust toolchain and `cargo`; TLS is rustls-based, no system
-`libssl` required.
+You need a stable Rust toolchain (1.95 or newer) and `cargo`; TLS is
+rustls-based, no system `libssl` required.
 
 ```bash
 cargo build --release                 # target/release/awgram
