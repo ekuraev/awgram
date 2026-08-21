@@ -10,6 +10,7 @@ pub struct Config {
     pub op_timeout_secs: u64,
     pub state_file: PathBuf,
     pub db_path: PathBuf,
+    pub telegram_proxies: Vec<String>,
 }
 
 impl std::fmt::Debug for Config {
@@ -23,6 +24,14 @@ impl std::fmt::Debug for Config {
             .field("op_timeout_secs", &self.op_timeout_secs)
             .field("state_file", &self.state_file)
             .field("db_path", &self.db_path)
+            .field(
+                "telegram_proxies",
+                &self
+                    .telegram_proxies
+                    .iter()
+                    .map(|p| crate::net::redact_proxy_url(p))
+                    .collect::<Vec<_>>(),
+            )
             .finish()
     }
 }
@@ -39,6 +48,8 @@ pub enum ConfigError {
     NoAdmins,
     #[error("manage_script не найден: {0}")]
     ScriptNotFound(PathBuf),
+    #[error("telegram_proxies: {0}")]
+    BadProxy(String),
 }
 
 #[derive(serde::Deserialize)]
@@ -55,6 +66,8 @@ struct Raw {
     state_file: PathBuf,
     #[serde(default = "default_db_path")]
     db_path: PathBuf,
+    #[serde(default)]
+    telegram_proxies: Vec<String>,
 }
 
 fn default_timeout() -> u64 {
@@ -86,6 +99,25 @@ impl Config {
         if !raw.manage_script.exists() {
             return Err(ConfigError::ScriptNotFound(raw.manage_script));
         }
+        // В сообщениях об ошибке нет самого URL — в нём могут быть креды.
+        for (i, p) in raw.telegram_proxies.iter().enumerate() {
+            let u = url::Url::parse(p)
+                .map_err(|e| ConfigError::BadProxy(format!("элемент #{}: {e}", i + 1)))?;
+            let scheme = u.scheme();
+            if !matches!(scheme, "socks5" | "socks5h" | "http" | "https") {
+                let msg = format!(
+                    "элемент #{}: схема {scheme}:// не поддерживается (socks5, socks5h, http, https)",
+                    i + 1
+                );
+                return Err(ConfigError::BadProxy(msg));
+            }
+            if u.host_str().is_none() {
+                return Err(ConfigError::BadProxy(format!(
+                    "элемент #{}: не указан хост",
+                    i + 1
+                )));
+            }
+        }
 
         Ok(Config {
             bot_token,
@@ -96,6 +128,7 @@ impl Config {
             op_timeout_secs: raw.op_timeout_secs,
             state_file: raw.state_file,
             db_path: raw.db_path,
+            telegram_proxies: raw.telegram_proxies,
         })
     }
 }
@@ -266,6 +299,103 @@ mod tests {
 
     #[test]
     #[serial_test::serial]
+    fn telegram_proxies_default_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = write(&dir, "manage.sh", "#!/bin/sh\n");
+        let cfg_path = write(
+            &dir,
+            "config.toml",
+            &format!(
+                "bot_token = \"t\"\nadmin_ids = [1]\nmanage_script = \"{}\"\nclients_dir = \"{}\"\n",
+                script.display(),
+                dir.path().display()
+            ),
+        );
+        let cfg = Config::load(&cfg_path).unwrap();
+        assert!(cfg.telegram_proxies.is_empty());
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn rejects_unsupported_proxy_scheme() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = write(&dir, "manage.sh", "#!/bin/sh\n");
+        let cfg_path = write(
+            &dir,
+            "config.toml",
+            &format!(
+                "bot_token = \"t\"\nadmin_ids = [1]\nmanage_script = \"{}\"\nclients_dir = \"{}\"\ntelegram_proxies = [\"ftp://proxy.example:21\"]\n",
+                script.display(),
+                dir.path().display()
+            ),
+        );
+        assert!(matches!(
+            Config::load(&cfg_path),
+            Err(ConfigError::BadProxy(_))
+        ));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn rejects_unparsable_proxy_url() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = write(&dir, "manage.sh", "#!/bin/sh\n");
+        let cfg_path = write(
+            &dir,
+            "config.toml",
+            &format!(
+                "bot_token = \"t\"\nadmin_ids = [1]\nmanage_script = \"{}\"\nclients_dir = \"{}\"\ntelegram_proxies = [\"not a url\"]\n",
+                script.display(),
+                dir.path().display()
+            ),
+        );
+        assert!(matches!(
+            Config::load(&cfg_path),
+            Err(ConfigError::BadProxy(_))
+        ));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn rejects_proxy_without_host() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = write(&dir, "manage.sh", "#!/bin/sh\n");
+        let cfg_path = write(
+            &dir,
+            "config.toml",
+            &format!(
+                "bot_token = \"t\"\nadmin_ids = [1]\nmanage_script = \"{}\"\nclients_dir = \"{}\"\ntelegram_proxies = [\"socks5:host:1080\"]\n",
+                script.display(),
+                dir.path().display()
+            ),
+        );
+        assert!(matches!(
+            Config::load(&cfg_path),
+            Err(ConfigError::BadProxy(_))
+        ));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn accepts_supported_proxy_schemes() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = write(&dir, "manage.sh", "#!/bin/sh\n");
+        let cfg_path = write(
+            &dir,
+            "config.toml",
+            &format!(
+                "bot_token = \"t\"\nadmin_ids = [1]\nmanage_script = \"{}\"\nclients_dir = \"{}\"\ntelegram_proxies = [\"socks5://10.0.0.1:1080\", \"socks5h://u:p@10.0.0.2:1080\", \"http://proxy.example:3128\", \"https://proxy.example:3129\"]\n",
+                script.display(),
+                dir.path().display()
+            ),
+        );
+        let cfg = Config::load(&cfg_path).unwrap();
+        assert_eq!(cfg.telegram_proxies.len(), 4);
+        assert_eq!(cfg.telegram_proxies[1], "socks5h://u:p@10.0.0.2:1080");
+    }
+
+    #[test]
+    #[serial_test::serial]
     fn debug_redacts_token() {
         let dir = tempfile::tempdir().unwrap();
         let script = write(&dir, "manage.sh", "#!/bin/sh\n");
@@ -282,5 +412,25 @@ mod tests {
         let debug_output = format!("{cfg:?}");
         assert!(!debug_output.contains("super-secret-token"));
         assert!(debug_output.contains("<redacted>"));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn debug_redacts_proxy_credentials() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = write(&dir, "manage.sh", "#!/bin/sh\n");
+        let cfg_path = write(
+            &dir,
+            "config.toml",
+            &format!(
+                "bot_token = \"t\"\nadmin_ids = [1]\nmanage_script = \"{}\"\nclients_dir = \"{}\"\ntelegram_proxies = [\"socks5h://user:secretpass@10.0.0.1:1080\"]\n",
+                script.display(),
+                dir.path().display()
+            ),
+        );
+        let cfg = Config::load(&cfg_path).unwrap();
+        let debug_output = format!("{cfg:?}");
+        assert!(!debug_output.contains("secretpass"));
+        assert!(debug_output.contains("socks5h://***@10.0.0.1:1080"));
     }
 }

@@ -61,6 +61,7 @@ version = "0.8.2"
 dependencies = [
  "rand 0.10.2",
  "regex",
+ "reqwest",
  "rusqlite",
  "serde",
  "serde_json",
@@ -72,6 +73,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "url",
 ]
 
 [[package]]

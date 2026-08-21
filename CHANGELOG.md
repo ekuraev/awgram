@@ -7,6 +7,16 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
 
 ### 🇷🇺 Русский
 
+#### ✨ Добавлено
+
+- **Прокси до Telegram Bot API**: приоритетный список `telegram_proxies`
+  в конфиге (`socks5`/`socks5h`/`http`/`https`, авторизация в URL).
+  При старте бот выбирает первый живой прокси probe-запросом `getMe`;
+  умерший в рантайме прокси лечится автоперезапуском через systemd с
+  повторным выбором. Креды прокси не попадают в логи. Настройка и
+  альтернатива через маршрутизацию — в [docs/proxy.md](docs/proxy.md)
+  ([#48](https://github.com/ekuraev/awgram/issues/48)).
+
 #### 🔧 Изменено
 
 - **rusqlite 0.32 → 0.40** (bundled SQLite 3.53); для сборки из исходников
@@ -14,6 +24,17 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
   ([#44](https://github.com/ekuraev/awgram/pull/44)).
 
 ### 🇬🇧 English
+
+#### ✨ Added
+
+- **Proxy to the Telegram Bot API**: a `telegram_proxies` priority list in
+  the config (`socks5`/`socks5h`/`http`/`https`, credentials in the URL).
+  At startup the bot picks the first live proxy via a `getMe` probe; a
+  proxy dying at runtime is handled by an automatic systemd restart with
+  re-selection. Proxy credentials never reach the logs. Setup and the
+  routing-based alternative are covered in
+  [docs/proxy.en.md](docs/proxy.en.md)
+  ([#48](https://github.com/ekuraev/awgram/issues/48)).
 
 #### 🔧 Changed
 

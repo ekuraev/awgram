@@ -70,6 +70,10 @@ tangible on budget VPS hosts.
 - 🔒 **Security**: access restricted to owners from `admin_ids` and the
   group admins they appoint, shell-free manage-script invocation, secrets
   never reach the logs, hardened mode (dedicated user + sudoers).
+- 🧦 **Proxy to Telegram**: a priority list of `socks5`/`socks5h`/`http`/
+  `https` proxies in `telegram_proxies` with automatic failover — for
+  servers where the Bot API is unreachable directly; details and the
+  routing-based alternative in [docs/proxy.en.md](docs/proxy.en.md).
 
 ## Quick start
 
