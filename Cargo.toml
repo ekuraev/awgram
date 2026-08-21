@@ -21,10 +21,14 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 regex = "1"
 rand = "0.10"
 rusqlite = { version = "0.40", features = ["bundled"] }
+url = "2"
+# Версия и TLS-фичи едут за teloxide; socks нужен для socks5(h)-прокси.
+reqwest = { version = "0.12", default-features = false, features = ["socks"] }
 
 [dev-dependencies]
 tempfile = "3"
 serial_test = "4"
+tokio = { version = "1.39", features = ["test-util"] }
 
 [profile.release]
 # Символы срезает rustc при линковке — работает и при кросс-сборке,
