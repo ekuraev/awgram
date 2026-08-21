@@ -357,6 +357,26 @@ mod tests {
 
     #[test]
     #[serial_test::serial]
+    fn rejects_proxy_without_host() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = write(&dir, "manage.sh", "#!/bin/sh\n");
+        let cfg_path = write(
+            &dir,
+            "config.toml",
+            &format!(
+                "bot_token = \"t\"\nadmin_ids = [1]\nmanage_script = \"{}\"\nclients_dir = \"{}\"\ntelegram_proxies = [\"socks5:host:1080\"]\n",
+                script.display(),
+                dir.path().display()
+            ),
+        );
+        assert!(matches!(
+            Config::load(&cfg_path),
+            Err(ConfigError::BadProxy(_))
+        ));
+    }
+
+    #[test]
+    #[serial_test::serial]
     fn accepts_supported_proxy_schemes() {
         let dir = tempfile::tempdir().unwrap();
         let script = write(&dir, "manage.sh", "#!/bin/sh\n");

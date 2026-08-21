@@ -17,9 +17,34 @@ pub fn proxied_bot(token: &str, proxy_url: &str) -> Result<Bot, reqwest::Error> 
     Ok(Bot::with_client(token, client))
 }
 
-/// true, если бот ответил на getMe в отведённый таймаут.
+/// Ошибка уровня транспорта, а не API: до Telegram не достучались.
+fn is_network_error(e: &teloxide::RequestError) -> bool {
+    matches!(
+        e,
+        teloxide::RequestError::Network(_) | teloxide::RequestError::Io(_)
+    )
+}
+
+/// true, если сетевой путь до Telegram живой. Ошибка уровня API
+/// (например, неверный токен) — тоже «живой»: ответ ведь пришёл,
+/// и смена прокси тут ничего не исправит.
 pub async fn bot_alive(bot: &Bot, timeout: Duration) -> bool {
-    matches!(tokio::time::timeout(timeout, bot.get_me()).await, Ok(Ok(_)))
+    match tokio::time::timeout(timeout, bot.get_me()).await {
+        Ok(Ok(_)) => true,
+        // teloxide прячет токен в Display ошибок, логировать безопасно.
+        Ok(Err(e)) if is_network_error(&e) => {
+            tracing::warn!(error = %e, "getMe не прошёл по сети");
+            false
+        }
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "getMe вернул ошибку API — сеть работает");
+            true
+        }
+        Err(_) => {
+            tracing::warn!(timeout_secs = timeout.as_secs(), "getMe: таймаут");
+            false
+        }
+    }
 }
 
 /// Готовый к работе Bot: без прокси — прямое соединение, со списком —
@@ -38,7 +63,17 @@ pub async fn connect(token: &str, proxies: &[String]) -> Option<Bot> {
         }
     })
     .await?;
-    proxied_bot(token, &proxies[idx]).ok()
+    match proxied_bot(token, &proxies[idx]) {
+        Ok(bot) => Some(bot),
+        Err(e) => {
+            tracing::error!(
+                proxy = %redact_proxy_url(&proxies[idx]),
+                error = %e,
+                "не удалось собрать клиент для выбранного прокси"
+            );
+            None
+        }
+    }
 }
 
 /// URL прокси без кредов — только такой вид допустим в логах и Debug-выводе.
@@ -130,6 +165,28 @@ mod tests {
     #[test]
     fn redact_never_echoes_unparsable_input() {
         assert_eq!(redact_proxy_url("not a url"), "<invalid>");
+    }
+
+    #[test]
+    fn redact_keeps_ipv6_host_brackets() {
+        assert_eq!(
+            redact_proxy_url("socks5h://u:p@[2001:db8::1]:1080"),
+            "socks5h://***@[2001:db8::1]:1080"
+        );
+    }
+
+    #[test]
+    fn api_error_is_not_network_error() {
+        let e = teloxide::RequestError::Api(teloxide::ApiError::Unknown("401".into()));
+        assert!(!is_network_error(&e));
+    }
+
+    #[test]
+    fn io_error_is_network_error() {
+        let e = teloxide::RequestError::Io(std::sync::Arc::new(std::io::Error::other(
+            "connection refused",
+        )));
+        assert!(is_network_error(&e));
     }
 
     fn proxies(list: &[&str]) -> Vec<String> {

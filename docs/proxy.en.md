@@ -18,9 +18,10 @@ telegram_proxies = [
 ```
 
 - **Schemes**: `socks5://`, `socks5h://`, `http://`, `https://`.
-  Credentials go directly in the URL. Other schemes (including MTProto
-  proxies) are not supported: the Bot API is plain HTTPS, MTProto does not
-  apply to it.
+  Credentials go directly in the URL; special characters in them must be
+  percent-encoded (e.g. `p@ss` → `p%40ss`). Other schemes (including
+  MTProto proxies) are not supported: the Bot API is plain HTTPS, MTProto
+  does not apply to it.
 - **Prefer `socks5h://`**: the `api.telegram.org` hostname is resolved on
   the proxy side. With `socks5://` DNS resolution happens locally — a weak
   spot when DNS responses are tampered with.
@@ -31,8 +32,10 @@ telegram_proxies = [
   over.
 - **Runtime failover**: every 60 s the bot checks the connection; after
   three consecutive failures the process exits, systemd brings it back up —
-  and selection starts again from the first proxy in the list. While the
-  proxy is dead the bot stays silent; the VPN itself keeps working as usual.
+  and selection starts again from the first proxy in the list. Worst case,
+  a dead proxy takes ≈3×(60 + 10) ≈ 3.5 minutes to trigger a restart.
+  While the proxy is dead the bot stays silent; the VPN itself keeps
+  working as usual.
 - **Logs**: proxy credentials never reach the logs or Debug output — only
   `scheme://***@host:port` is printed.
 
