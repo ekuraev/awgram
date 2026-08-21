@@ -1,6 +1,6 @@
 [package]
 name = "awgram"
-version = "0.8.2"
+version = "0.9.0"
 edition = "2021"
 # libsqlite3-sys (rusqlite bundled) использует cfg_select! из Rust 1.95,
 # но сам MSRV не объявляет — без этой строки старый тулчейн падает с E0658.
