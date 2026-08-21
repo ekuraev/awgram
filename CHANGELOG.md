@@ -22,6 +22,12 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
 - **rusqlite 0.32 → 0.40** (bundled SQLite 3.53); для сборки из исходников
   теперь нужен Rust не ниже 1.95 — MSRV зафиксирован в `Cargo.toml`
   ([#44](https://github.com/ekuraev/awgram/pull/44)).
+- **Совместимость с инсталлером**: поддерживаемая версия —
+  [v5.27.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.27.0)
+  (сверен `--json`-контракт: `manage_amneziawg.sh` в v5.26.0/v5.27.0 не
+  менялся — v5.26.0 трогает только каскадный скрипт маршрутизации и
+  диагностический отчёт, v5.27.0 — только установщик); минимальная —
+  по-прежнему v5.21.0.
 
 ### 🇬🇧 English
 
@@ -41,6 +47,12 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
 - **rusqlite 0.32 → 0.40** (bundled SQLite 3.53); building from source now
   requires Rust 1.95 or newer — the MSRV is pinned in `Cargo.toml`
   ([#44](https://github.com/ekuraev/awgram/pull/44)).
+- **Installer compatibility**: the supported version is now
+  [v5.27.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.27.0)
+  (`--json` contract verified: `manage_amneziawg.sh` is unchanged in
+  v5.26.0/v5.27.0 — v5.26.0 only touches the cascade routing script and
+  the diagnostic report, v5.27.0 only the installer); the minimum is
+  still v5.21.0.
 
 ## [0.8.2] — 2026-08-03
 

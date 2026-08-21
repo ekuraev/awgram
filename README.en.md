@@ -131,17 +131,21 @@ The bot is a layer on top of `manage_amneziawg.sh` from
 and depends directly on its interface.
 
 - **Supported installer version:
-  [v5.25.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.25.0)**
+  [v5.27.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.27.0)**
   (`--json` contract verified). Minimum is
   [v5.21.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.21.0);
   older v5.20.x releases are not supported — the bot uses the extended
   `--json` interface for management commands introduced in v5.21.0.
-  v5.21.1–v5.25.0 keep the JSON contract intact: v5.21.1/v5.21.2 are
+  v5.21.1–v5.27.0 keep the JSON contract intact: v5.21.1/v5.21.2 are
   validation bugfixes, v5.22.0 added an `awgsetup_cfg.init` drift warning
   to `regen`/`check` (goes to stderr, stdout JSON untouched), v5.23.0
   only changes the installers (kernel module handling on older kernels),
   v5.24.0 added an additive `module.version` field to `check --json`,
-  and v5.25.0 adds only new warnings, all of which go to stderr.
+  v5.25.0 adds only new warnings, all of which go to stderr, v5.26.0 only
+  touches the cascade routing script and the diagnostic report, and
+  v5.27.0 only changes the installer (package-removal consent);
+  `manage_amneziawg.sh` is unchanged in v5.26.0/v5.27.0 (version header
+  aside).
 - Subcommands used: `add`, `remove`, `list`, `stats`, `regen`, `modify`,
   `backup`, `restore`, `check`, `restart`, `repair-module` — all with `--json`.
 
