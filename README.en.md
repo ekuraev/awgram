@@ -131,21 +131,24 @@ The bot is a layer on top of `manage_amneziawg.sh` from
 and depends directly on its interface.
 
 - **Supported installer version:
-  [v5.27.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.27.0)**
+  [v5.27.1](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.27.1)**
   (`--json` contract verified). Minimum is
   [v5.21.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.21.0);
   older v5.20.x releases are not supported — the bot uses the extended
   `--json` interface for management commands introduced in v5.21.0.
-  v5.21.1–v5.27.0 keep the JSON contract intact: v5.21.1/v5.21.2 are
+  v5.21.1–v5.27.1 keep the JSON contract intact: v5.21.1/v5.21.2 are
   validation bugfixes, v5.22.0 added an `awgsetup_cfg.init` drift warning
   to `regen`/`check` (goes to stderr, stdout JSON untouched), v5.23.0
   only changes the installers (kernel module handling on older kernels),
   v5.24.0 added an additive `module.version` field to `check --json`,
   v5.25.0 adds only new warnings, all of which go to stderr, v5.26.0 only
-  touches the cascade routing script and the diagnostic report, and
-  v5.27.0 only changes the installer (package-removal consent);
-  `manage_amneziawg.sh` is unchanged in v5.26.0/v5.27.0 (version header
-  aside).
+  touches the cascade routing script and the diagnostic report,
+  v5.27.0 only changes the installer (package-removal consent), and
+  v5.27.1 changes `manage_amneziawg.sh`: `modify`/`regen` normalize the
+  `AllowedIPs`/`DNS` lists to the canonical "a, b, c" form and `regen`
+  no longer collapses them; the envelopes are untouched — the `modify`
+  reply still echoes `value` as sent, new messages go to stderr, and the
+  bot already sends lists in the canonical form.
 - Subcommands used: `add`, `remove`, `list`, `stats`, `regen`, `modify`,
   `backup`, `restore`, `check`, `restart`, `repair-module` — all with `--json`.
 

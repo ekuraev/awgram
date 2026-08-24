@@ -3,6 +3,33 @@
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версионирование — [SemVer](https://semver.org/lang/ru/).
 Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning — [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### 🇷🇺 Русский
+
+#### 🔧 Изменено
+
+- **Совместимость с инсталлером**: поддерживаемая версия —
+  [v5.27.1](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.27.1)
+  (сверен `--json`-контракт: v5.27.1 нормализует списки `AllowedIPs`/`DNS`
+  в `modify`/`regen` к виду «a, b, c» и чинит `regen`, схлопывавший эти
+  списки; конверты не изменились — `value` в ответе `modify` остаётся
+  присланным значением, новые сообщения уходят в stderr, а бот и так
+  шлёт списки в каноническом виде); минимальная — по-прежнему v5.21.0.
+
+### 🇬🇧 English
+
+#### 🔧 Changed
+
+- **Installer compatibility**: the supported version is now
+  [v5.27.1](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.27.1)
+  (`--json` contract verified: v5.27.1 normalizes the `AllowedIPs`/`DNS`
+  lists in `modify`/`regen` to the canonical "a, b, c" form and fixes
+  `regen` collapsing those lists; the envelopes are unchanged — the
+  `modify` reply still echoes `value` as sent, new messages go to stderr,
+  and the bot already sends lists in the canonical form); the minimum is
+  still v5.21.0.
+
 ## [0.9.0] — 2026-08-21
 
 ### 🇷🇺 Русский
