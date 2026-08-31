@@ -10,25 +10,28 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
 #### 🔧 Изменено
 
 - **Совместимость с инсталлером**: поддерживаемая версия —
-  [v5.27.1](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.27.1)
+  [v5.29.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.29.0)
   (сверен `--json`-контракт: v5.27.1 нормализует списки `AllowedIPs`/`DNS`
   в `modify`/`regen` к виду «a, b, c» и чинит `regen`, схлопывавший эти
   списки; конверты не изменились — `value` в ответе `modify` остаётся
   присланным значением, новые сообщения уходят в stderr, а бот и так
-  шлёт списки в каноническом виде); минимальная — по-прежнему v5.21.0.
+  шлёт списки в каноническом виде; v5.28.0–v5.29.0 меняют только
+  установщик, подписи релизов и документацию — в `manage_amneziawg.sh`
+  сменился лишь номер версии); минимальная — по-прежнему v5.21.0.
 
 ### 🇬🇧 English
 
 #### 🔧 Changed
 
 - **Installer compatibility**: the supported version is now
-  [v5.27.1](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.27.1)
+  [v5.29.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.29.0)
   (`--json` contract verified: v5.27.1 normalizes the `AllowedIPs`/`DNS`
   lists in `modify`/`regen` to the canonical "a, b, c" form and fixes
   `regen` collapsing those lists; the envelopes are unchanged — the
   `modify` reply still echoes `value` as sent, new messages go to stderr,
-  and the bot already sends lists in the canonical form); the minimum is
-  still v5.21.0.
+  and the bot already sends lists in the canonical form; v5.28.0–v5.29.0
+  only touch the installer, release signing and docs — `manage_amneziawg.sh`
+  changed nothing but its version number); the minimum is still v5.21.0.
 
 ## [0.9.0] — 2026-08-21
 
