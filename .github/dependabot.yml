@@ -4,6 +4,11 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
+    ignore:
+      # Версия reqwest едет за teloxide (teloxide-core 0.13 -> reqwest 0.12):
+      # major-бамп не соберётся, пока teloxide сам не перейдёт на новый reqwest.
+      - dependency-name: reqwest
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
