@@ -7,11 +7,13 @@ use std::sync::Mutex;
 
 use rusqlite::Connection;
 
+mod backups;
 mod events;
 mod groups;
 mod settings;
 mod stats;
 
+pub use backups::{BackupKind, BackupRow};
 pub use events::{EventKind, EventRow};
 pub use groups::{
     gen_invite_token, GroupError, GroupRow, InviteRow, InviteUse, ListScope, QuotaAssign,
@@ -101,6 +103,23 @@ pub(crate) const MIGRATIONS: &[&str] = &[
     );
     ALTER TABLE clients ADD COLUMN group_id INTEGER REFERENCES groups(id);
     "#,
+    // v3: метаданные бэкапов бота (#35, #53). Файлы лежат в
+    // clients_dir/backups/awgram/, строки — кэш и носитель комментария/пина.
+    r#"
+    CREATE TABLE backups(
+        name       TEXT PRIMARY KEY,
+        created_at INTEGER NOT NULL,
+        kind       TEXT NOT NULL,
+        actor      INTEGER,
+        comment    TEXT,
+        pinned     INTEGER NOT NULL DEFAULT 0,
+        size       INTEGER NOT NULL,
+        sha256     TEXT,
+        has_db     INTEGER NOT NULL,
+        clients    INTEGER,
+        groups     INTEGER
+    );
+    "#,
 ];
 
 pub struct Store {
@@ -188,7 +207,7 @@ mod tests {
     fn open_creates_schema_and_version() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(&dir.path().join("sub/awgram.db")).unwrap();
-        assert_eq!(store.schema_version(), 2);
+        assert_eq!(store.schema_version(), 3);
     }
 
     #[test]
@@ -197,12 +216,12 @@ mod tests {
         let path = dir.path().join("awgram.db");
         drop(Store::open(&path).unwrap());
         let store = Store::open(&path).unwrap();
-        assert_eq!(store.schema_version(), 2);
+        assert_eq!(store.schema_version(), 3);
     }
 
     #[test]
     fn in_memory_store_works() {
         let store = Store::open_in_memory();
-        assert_eq!(store.schema_version(), 2);
+        assert_eq!(store.schema_version(), 3);
     }
 }
