@@ -29,8 +29,11 @@ tangible on budget VPS hosts.
 - 👥 **List**: three-color status (🟢 online / 🟡 no handshake / 🔴 offline)
   with last-handshake time right in the button, ↓/↑ traffic, ⏳ expiry badge;
   status filter and "online-first" sorting; client card, deletion with
-  confirmation; menu/page navigation and the 🔄 "Refresh" button edit the
-  message in place — no duplicate copies.
+  confirmation; menus, lists, prompts and operation results all live in one
+  message — the chat never piles up duplicates.
+- 🔗 **AllowedIPs from presets** — at creation and when editing a client:
+  RFC 1918 local networks, the VPN subnet, a full tunnel or your own CIDR list;
+  you can also keep the server's routing mode.
 - ⚙️ **Modify client parameters**: Keepalive, DNS, AllowedIPs, Endpoint.
 - 🔄 **Config re-issue**: one client or all at once (optionally with route
   reset).

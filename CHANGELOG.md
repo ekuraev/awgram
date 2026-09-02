@@ -7,7 +7,31 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
 
 ### 🇷🇺 Русский
 
+#### ✨ Добавлено
+
+- **AllowedIPs при создании и правке клиента**: новый шаг диалога с готовыми
+  пресетами — три диапазона RFC 1918 по отдельности или разом, подсеть VPN
+  (берётся из `check`), полный туннель `0.0.0.0/0, ::/0` и ручной ввод CIDR.
+  Кнопка «⏭ Как на сервере» оставляет глобальный режим маршрутизации
+  инсталлера, как было раньше. «Изменить → AllowedIPs» открывает тот же экран
+  с тумблерами, предзаполненными текущим значением клиента. Инсталлер не
+  принимает AllowedIPs у `add`, поэтому значение ставится отдельным `modify`
+  сразу после создания и до выдачи файлов — `.conf`, QR и ссылка приходят уже
+  с нужными маршрутами. При пересоздании клиента тумблеры предзаполняются его
+  текущими маршрутами: раньше `remove` + `add` молча сбрасывал их к серверным.
+
 #### 🔧 Изменено
+
+- **Чат больше не копит сообщения**: ответы на нажатия кнопок редактируют
+  сообщение-источник, а не добавляют новое. Это касается подтверждений
+  (удаление, перевыпуск, рестарт, восстановление), результатов проверок
+  `check`/`diagnose`, операций с группами и бэкапами. Индикаторы «⏳» больше
+  не отдельные сообщения: они рисуются на месте нажатой кнопки. Итог операций
+  с файлами уходит вниз, под выданные `.conf`/QR, взамен удалённого
+  индикатора — клавиатура остаётся под файлами, а число сообщений не растёт.
+  Вопросы с текстовым вводом (имя клиента, свой срок, имя/лимит группы, ID
+  админа, свой CIDR) тоже занимают место меню и получают кнопку «◀️ Назад»;
+  ответ бота перерисовывает сам вопрос.
 
 - **Совместимость с инсталлером**: поддерживаемая версия —
   [v5.29.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.29.0)
@@ -21,7 +45,31 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
 
 ### 🇬🇧 English
 
+#### ✨ Added
+
+- **AllowedIPs at client creation and edit**: a new dialog step with ready-made
+  presets — the three RFC 1918 ranges separately or all at once, the VPN subnet
+  (taken from `check`), the full tunnel `0.0.0.0/0, ::/0`, and manual CIDR
+  entry. The "⏭ Server default" button keeps the installer's global routing
+  mode, exactly as before. "Modify → AllowedIPs" opens the same screen with the
+  toggles prefilled from the client's current value. The installer accepts no
+  AllowedIPs flag on `add`, so the value is applied by a separate `modify` right
+  after creation and before delivery — the `.conf`, QR and link already carry
+  the chosen routes. Recreating a client prefills the toggles from its current
+  routes: `remove` + `add` used to reset them to the server defaults silently.
+
 #### 🔧 Changed
+
+- **The chat no longer piles up messages**: replies to button presses edit the
+  source message instead of adding a new one. This covers confirmations
+  (delete, re-issue, restart, restore), `check`/`diagnose` reports, and group
+  and backup operations. "⏳" indicators are no longer separate messages: they
+  are drawn in place of the pressed button. The result of file-producing
+  operations goes below the delivered `.conf`/QR files, replacing the removed
+  indicator — the keyboard stays under the files and the message count does not
+  grow. Text prompts (client name, custom expiry, group name/quota, admin ID,
+  custom CIDR) also take over the menu message and carry a "◀️ Back" button;
+  the bot's reply redraws the prompt itself.
 
 - **Installer compatibility**: the supported version is now
   [v5.29.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.29.0)

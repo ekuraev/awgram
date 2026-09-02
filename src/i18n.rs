@@ -952,6 +952,119 @@ pub fn modify_param_select_title(lang: Lang) -> String {
     .to_string()
 }
 
+// --- экран маршрутов (AllowedIPs) ---
+
+/// Заголовок экрана выбора AllowedIPs. `current` — значение, уже прописанное
+/// в конфиге клиента (при редактировании), `pending` — что даст текущий набор
+/// тумблеров. Пустой набор объясняем прямо в заголовке, чтобы «Применить» не
+/// выглядела сломанной.
+pub fn routes_title(
+    lang: Lang,
+    name: &str,
+    current: Option<&str>,
+    pending: Option<&str>,
+) -> String {
+    let n = html_escape(name);
+    let mut out = match lang {
+        Lang::Ru => format!("🔗 <b>AllowedIPs</b> · {n}\nКуда клиент направляет трафик."),
+        Lang::En => format!("🔗 <b>AllowedIPs</b> · {n}\nWhere the client routes traffic."),
+    };
+    if let Some(cur) = current {
+        let c = html_escape(&truncate_routes(cur));
+        out.push_str(&match lang {
+            Lang::Ru => format!("\n\nСейчас: <code>{c}</code>"),
+            Lang::En => format!("\n\nNow: <code>{c}</code>"),
+        });
+    }
+    match pending {
+        Some(v) => {
+            let v = html_escape(v);
+            out.push_str(&match lang {
+                Lang::Ru => format!("\nБудет: <code>{v}</code>"),
+                Lang::En => format!("\nWill be: <code>{v}</code>"),
+            });
+        }
+        None => out.push_str(&match lang {
+            Lang::Ru => {
+                "\n\nНичего не выбрано — отметьте сети или оставьте режим сервера.".to_string()
+            }
+            Lang::En => "\n\nNothing selected — pick networks or keep the server mode.".to_string(),
+        }),
+    }
+    out
+}
+
+/// Режим сервера «Amnezia List» — это сотня CIDR в одной строке. Показываем
+/// её началом: заголовок экрана обязан оставаться в пределах лимита
+/// Telegram-сообщения, а точное значение всё равно не редактируется вручную.
+fn truncate_routes(v: &str) -> String {
+    const LIMIT: usize = 200;
+    if v.chars().count() <= LIMIT {
+        return v.to_string();
+    }
+    let head: String = v.chars().take(LIMIT).collect();
+    format!("{head}…")
+}
+
+pub fn btn_route_all(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "🌐 Весь трафик",
+        Lang::En => "🌐 All traffic",
+    }
+    .to_string()
+}
+pub fn btn_route_local(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "🏠 Все локальные",
+        Lang::En => "🏠 All local",
+    }
+    .to_string()
+}
+pub fn btn_route_vpn(lang: Lang, subnet: &str) -> String {
+    match lang {
+        Lang::Ru => format!("🔒 Сеть VPN {subnet}"),
+        Lang::En => format!("🔒 VPN net {subnet}"),
+    }
+}
+pub fn btn_route_custom(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "✏️ Свой",
+        Lang::En => "✏️ Custom",
+    }
+    .to_string()
+}
+/// Пропуск шага при создании: клиент получает глобальный режим маршрутизации
+/// сервера — ровно то, что делал бот до появления экрана.
+pub fn btn_route_skip(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "⏭ Как на сервере",
+        Lang::En => "⏭ Server default",
+    }
+    .to_string()
+}
+pub fn btn_route_apply(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "▶️ Применить",
+        Lang::En => "▶️ Apply",
+    }
+    .to_string()
+}
+
+/// Клиент создан, но индивидуальные маршруты применить не удалось: `add` их не
+/// принимает, они ставятся отдельным `modify` — и именно он упал. Клиент рабочий,
+/// но с маршрутами сервера, поэтому это предупреждение, а не ошибка.
+pub fn routes_apply_failed(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => {
+            "⚠️ Клиент создан, но AllowedIPs остались серверными — задайте их через «Изменить»."
+        }
+        Lang::En => {
+            "⚠️ Client created, but AllowedIPs stayed at server defaults — set them via “Modify”."
+        }
+    }
+    .to_string()
+}
+
 // --- restart / repair ---
 pub fn btn_restart(lang: Lang) -> String {
     match lang {
@@ -2038,5 +2151,37 @@ mod tests {
         for lang in [Lang::Ru, Lang::En] {
             assert!(group_label_line(lang, "g").starts_with('\n'));
         }
+    }
+
+    #[test]
+    fn routes_title_truncates_long_current_value() {
+        // Режим «Amnezia List» — сотня CIDR: заголовок обязан остаться коротким.
+        let long = std::iter::repeat_n("10.0.0.0/8", 60)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let t = routes_title(Lang::Ru, "alice", Some(&long), Some("10.0.0.0/8"));
+        assert!(
+            t.chars().count() < 500,
+            "заголовок слишком длинный: {}",
+            t.chars().count()
+        );
+        assert!(t.contains('…'));
+    }
+
+    #[test]
+    fn routes_title_escapes_name_and_reports_empty_selection() {
+        let t = routes_title(Lang::Ru, "<x>", None, None);
+        assert!(t.contains("&lt;x&gt;"));
+        assert!(t.contains("Ничего не выбрано"));
+        let en = routes_title(Lang::En, "a", None, None);
+        assert!(en.contains("Nothing selected"));
+    }
+
+    #[test]
+    fn routes_title_shows_current_and_pending() {
+        let t = routes_title(Lang::Ru, "a", Some("0.0.0.0/0"), Some("10.0.0.0/8"));
+        assert!(t.contains("Сейчас"));
+        assert!(t.contains("Будет"));
+        assert!(t.contains("10.0.0.0/8"));
     }
 }

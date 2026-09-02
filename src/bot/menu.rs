@@ -2,6 +2,7 @@ use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 
 use crate::i18n::{self, Lang};
 use crate::vpn::model::{format_handshake_compact, Client, ClientFilter};
+use crate::vpn::validate::{RouteKey, RouteSelection};
 use crate::vpn::BackupFile;
 
 fn cb(text: &str, data: &str) -> InlineKeyboardButton {
@@ -481,6 +482,70 @@ pub fn clients_empty_menu(
         filter_btns.push(cb(&i18n::btn_scope(lang), "gscope"));
     }
     InlineKeyboardMarkup::new(vec![filter_btns, vec![cb(&i18n::btn_back(lang), "menu")]])
+}
+
+/// Единственная кнопка «◀️ Назад» под запросом текстового ввода. Ведёт на
+/// `menu` — тот сбрасывает диалог в Idle, поэтому отменённый ввод не съедает
+/// следующее сообщение пользователя как ответ на вопрос.
+pub fn cancel_menu(lang: Lang) -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![vec![cb(&i18n::btn_back(lang), "menu")]])
+}
+
+fn route_toggle(
+    lang: Lang,
+    sel: RouteSelection,
+    key: RouteKey,
+    label: &str,
+) -> InlineKeyboardButton {
+    let mark = if sel.get(key) { "✅" } else { "⬜" };
+    let _ = lang;
+    cb(
+        &format!("{mark} {label}"),
+        &format!("aip:t:{}", key.as_str()),
+    )
+}
+
+/// Экран выбора AllowedIPs: тумблеры пресетов + ручной ввод. Один и тот же для
+/// создания и правки, различия — две кнопки: «⏭ Как на сервере» есть только при
+/// создании (пропустить шаг), «▶️ Применить» — только когда что-то выбрано
+/// (иначе применять нечего, и мёртвая кнопка вводила бы в заблуждение).
+/// Кнопка подсети VPN появляется, только если `check` её отдал.
+pub fn allowed_ips_menu(
+    lang: Lang,
+    sel: RouteSelection,
+    vpn_subnet: Option<&str>,
+    creating: bool,
+) -> InlineKeyboardMarkup {
+    use crate::vpn::validate::{NET_10, NET_172, NET_192};
+    let mut rows = vec![
+        vec![
+            route_toggle(lang, sel, RouteKey::Net10, NET_10),
+            route_toggle(lang, sel, RouteKey::Net172, NET_172),
+        ],
+        vec![route_toggle(lang, sel, RouteKey::Net192, NET_192)],
+    ];
+    if let Some(subnet) = vpn_subnet {
+        rows[1].push(route_toggle(
+            lang,
+            sel,
+            RouteKey::Vpn,
+            &i18n::btn_route_vpn(lang, subnet),
+        ));
+    }
+    rows.push(vec![
+        route_toggle(lang, sel, RouteKey::Local, &i18n::btn_route_local(lang)),
+        route_toggle(lang, sel, RouteKey::All, &i18n::btn_route_all(lang)),
+    ]);
+    let mut manual = vec![cb(&i18n::btn_route_custom(lang), "aip:custom")];
+    if creating {
+        manual.push(cb(&i18n::btn_route_skip(lang), "aip:skip"));
+    }
+    rows.push(manual);
+    if !sel.is_empty() {
+        rows.push(vec![cb(&i18n::btn_route_apply(lang), "aip:apply")]);
+    }
+    rows.push(vec![cb(&i18n::btn_back(lang), "menu")]);
+    InlineKeyboardMarkup::new(rows)
 }
 
 pub fn client_card(lang: Lang, name: &str, is_owner: bool) -> InlineKeyboardMarkup {
@@ -1501,5 +1566,74 @@ mod tests {
         // «Клиенты группы» (#20): открывает список клиентов с фильтром группы.
         let data = all_callback_data(&group_card_menu(Lang::Ru, 7, false));
         assert!(data.contains(&"gscope:7".to_string()));
+    }
+
+    #[test]
+    fn allowed_ips_menu_has_all_toggles_and_apply_when_selected() {
+        let sel = RouteSelection {
+            net10: true,
+            ..RouteSelection::default()
+        };
+        let kb = allowed_ips_menu(Lang::Ru, sel, Some("10.9.9.0/24"), true);
+        let data = all_callback_data(&kb);
+        for k in ["10", "172", "192", "vpn", "local", "all"] {
+            assert!(data.contains(&format!("aip:t:{k}")), "нет тумблера {k}");
+        }
+        assert!(data.contains(&"aip:custom".to_string()));
+        assert!(data.contains(&"aip:skip".to_string()));
+        assert!(data.contains(&"aip:apply".to_string()));
+        assert!(data.contains(&"menu".to_string()));
+    }
+
+    #[test]
+    fn allowed_ips_menu_hides_apply_when_nothing_selected() {
+        let kb = allowed_ips_menu(Lang::Ru, RouteSelection::default(), None, true);
+        assert!(!all_callback_data(&kb).contains(&"aip:apply".to_string()));
+    }
+
+    #[test]
+    fn allowed_ips_menu_hides_skip_when_editing_and_vpn_without_subnet() {
+        let kb = allowed_ips_menu(Lang::Ru, RouteSelection::default(), None, false);
+        let data = all_callback_data(&kb);
+        assert!(!data.contains(&"aip:skip".to_string()));
+        assert!(!data.contains(&"aip:t:vpn".to_string()));
+    }
+
+    #[test]
+    fn allowed_ips_menu_marks_selected_toggles() {
+        let sel = RouteSelection {
+            all: true,
+            ..RouteSelection::default()
+        };
+        let kb = allowed_ips_menu(Lang::Ru, sel, None, false);
+        let on = kb
+            .inline_keyboard
+            .iter()
+            .flatten()
+            .find(|b| {
+                matches!(&b.kind,
+                teloxide::types::InlineKeyboardButtonKind::CallbackData(d) if d == "aip:t:all")
+            })
+            .unwrap();
+        assert!(
+            on.text.starts_with("✅"),
+            "активный тумблер без метки: {}",
+            on.text
+        );
+        let off = kb
+            .inline_keyboard
+            .iter()
+            .flatten()
+            .find(|b| {
+                matches!(&b.kind,
+                teloxide::types::InlineKeyboardButtonKind::CallbackData(d) if d == "aip:t:10")
+            })
+            .unwrap();
+        assert!(off.text.starts_with("⬜"));
+    }
+
+    #[test]
+    fn cancel_menu_returns_to_main_menu() {
+        assert_eq!(all_callback_data(&cancel_menu(Lang::Ru)), vec!["menu"]);
     }
 }
