@@ -20,6 +20,14 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("ошибка Telegram: {0}")]
     Telegram(String),
+    #[error("бэкап не прошёл проверку: {0}")]
+    BackupInvalid(#[from] crate::backup::format::FormatError),
+    #[error("архив бэкапа недоступен для чтения: {0}")]
+    BackupUnreadable(String),
+    #[error("бэкап не найден")]
+    BackupNotFound,
+    #[error("недостаточно места: нужно {need} байт, свободно {free}")]
+    BackupNoSpace { need: u64, free: u64 },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -38,6 +46,10 @@ impl Error {
             }
             Error::Io(_) => "❌ Ошибка выполнения операции.",
             Error::Telegram(_) => "❌ Ошибка отправки сообщения.",
+            Error::BackupInvalid(_) => "⚠️ Файл бэкапа не прошёл проверку.",
+            Error::BackupUnreadable(_) => "❌ Архив бэкапа недоступен для чтения.",
+            Error::BackupNotFound => "⚠️ Бэкап не найден.",
+            Error::BackupNoSpace { .. } => "❌ Недостаточно места на диске для бэкапа.",
         }
     }
 }

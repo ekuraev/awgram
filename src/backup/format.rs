@@ -305,6 +305,31 @@ pub fn build_bundle(
     Ok(())
 }
 
+/// Фикстуры для тестов соседних модулей (service, handlers).
+#[cfg(test)]
+pub mod tests_support {
+    use std::path::Path;
+
+    /// Минимальный валидный архив инсталлера: server/awg0.conf + 2 клиента.
+    pub fn installer_archive_to(path: &Path) {
+        let f = std::fs::File::create(path).unwrap();
+        let enc = flate2::write::GzEncoder::new(f, flate2::Compression::default());
+        let mut ar = tar::Builder::new(enc);
+        for (name, body) in [
+            ("./server/awg0.conf", &b"[Interface]\n"[..]),
+            ("./clients/a.conf", b"x"),
+            ("./clients/b.conf", b"y"),
+        ] {
+            let mut h = tar::Header::new_gnu();
+            h.set_size(body.len() as u64);
+            h.set_mode(0o600);
+            h.set_cksum();
+            ar.append_data(&mut h, name, body).unwrap();
+        }
+        ar.into_inner().unwrap().finish().unwrap();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
