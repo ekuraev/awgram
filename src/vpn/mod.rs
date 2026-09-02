@@ -260,6 +260,11 @@ impl Vpn {
                 tracing::debug!(error = %env.error, "manage отверг аргументы add");
                 return Ok(None);
             }
+            // Конверт с command="add" — настоящий отказ создания, например
+            // «awg_common.sh устарела» на полуобновлённом сервере. Ниже он
+            // станет ошибкой разбора (пользователю секреты не показываем),
+            // поэтому причину пишем в лог: иначе она пропадёт совсем.
+            tracing::error!(error = %env.error, rc = env.rc, "add завершился ошибкой");
         }
         let parsed =
             wire::parse_add(&out).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
@@ -386,6 +391,7 @@ impl Vpn {
                 tracing::debug!(error = %env.error, "manage отверг аргументы add (пачка)");
                 return Ok(None);
             }
+            tracing::error!(error = %env.error, rc = env.rc, "add (пачка) завершился ошибкой");
         }
         let parsed =
             wire::parse_add(&out).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
