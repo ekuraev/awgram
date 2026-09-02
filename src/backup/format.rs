@@ -99,11 +99,26 @@ fn open_targz(
 }
 
 /// Имя записи без ведущего `./`. Отклоняет ссылки, устройства, абсолютные
-/// пути и `..` — ровно то, что режет `restore` инсталлера.
-fn checked_entry_name<R: Read>(e: &tar::Entry<'_, R>) -> Result<String, FormatError> {
+/// пути и `..` — ровно то, что режет `restore` инсталлера. Также проверяет
+/// заявленный в заголовке размер записи: поодиночке и нарастающим итогом по
+/// архиву (`total_bytes`) он не должен превышать `MAX_FILE_BYTES` — иначе
+/// компактный по весу (сжатому) архив может заявить гигабайты содержимого
+/// и уронить бота по памяти при чтении записи в `Vec`.
+fn checked_entry_name<R: Read>(
+    e: &tar::Entry<'_, R>,
+    total_bytes: &mut u64,
+) -> Result<String, FormatError> {
     let et = e.header().entry_type();
     if !(et.is_file() || et.is_dir()) {
         return Err(FormatError::BadEntry(format!("{et:?}")));
+    }
+    let size = e.size();
+    if size > MAX_FILE_BYTES {
+        return Err(FormatError::TooLarge(size));
+    }
+    *total_bytes += size;
+    if *total_bytes > MAX_FILE_BYTES {
+        return Err(FormatError::TooLarge(*total_bytes));
     }
     let p = e.path().map_err(|e| FormatError::BadEntry(e.to_string()))?;
     let mut out = Vec::new();
@@ -120,12 +135,20 @@ fn checked_entry_name<R: Read>(e: &tar::Entry<'_, R>) -> Result<String, FormatEr
 }
 
 /// Список записей архива после проверки каждой. gzip-мусор даёт `Io`.
+/// Отклоняет повторяющиеся имена записей: GNU tar при распаковке берёт
+/// последнюю запись с таким именем, а наше чтение — первую, так что дубликат
+/// не должен молча пройти.
 fn list_entries(path: &Path) -> Result<Vec<String>, FormatError> {
     let mut ar = open_targz(path)?;
     let mut names = Vec::new();
+    let mut total_bytes: u64 = 0;
     for e in ar.entries()? {
         let e = e?;
-        names.push(checked_entry_name(&e)?);
+        let name = checked_entry_name(&e, &mut total_bytes)?;
+        if names.contains(&name) {
+            return Err(FormatError::BadEntry(format!("дубликат записи {name}")));
+        }
+        names.push(name);
     }
     Ok(names)
 }
@@ -167,9 +190,10 @@ pub fn detect(path: &Path) -> Result<FileKind, FormatError> {
 /// Читает одну запись бандла в память (meta.json, ≤ MAX_FILE_BYTES по построению).
 fn read_entry(path: &Path, name: &str) -> Result<Vec<u8>, FormatError> {
     let mut ar = open_targz(path)?;
+    let mut total_bytes: u64 = 0;
     for e in ar.entries()? {
         let mut e = e?;
-        if checked_entry_name(&e)? == name {
+        if checked_entry_name(&e, &mut total_bytes)? == name {
             let mut buf = Vec::new();
             e.read_to_end(&mut buf)?;
             return Ok(buf);
@@ -232,7 +256,10 @@ pub fn inspect_bundle(path: &Path, current_schema: i64) -> Result<Inspection, Fo
     if meta.format != FORMAT_VERSION {
         return Err(FormatError::NotBundle(format!("format {}", meta.format)));
     }
-    let inner_name = inner[0].trim_start_matches("awg/").to_string();
+    let inner_name = inner[0]
+        .strip_prefix("awg/")
+        .unwrap_or(inner[0].as_str())
+        .to_string();
     let tmp = tempfile::tempdir()?;
     let inner_path = tmp.path().join("inner.tar.gz");
     extract_entry(path, inner[0], &inner_path)?;
@@ -520,6 +547,44 @@ mod tests {
         assert!(matches!(
             inspect_bundle(&p3, 3),
             Err(FormatError::DbInvalid(_))
+        ));
+
+        // дубликат записи (два meta.json) — GNU tar при распаковке взял бы
+        // последнюю, наше чтение — первую; отклоняем как BadEntry
+        let p4 = d.path().join("dup.tar.gz");
+        make_targz(&p4, &[(META_NAME, &mj), (META_NAME, &mj)]);
+        assert!(matches!(
+            inspect_bundle(&p4, 3),
+            Err(FormatError::BadEntry(_))
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_oversized_declared_entry() {
+        // Заголовок заявляет размер записи больше лимита, но сама запись —
+        // поток нулей, который gzip сжимает до пары килобайт: сжатый файл
+        // проходит проверку размера в `open_targz`, а вот заявленный размер
+        // записи — нет.
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("bomb.tar.gz");
+        let f = std::fs::File::create(&p).unwrap();
+        let enc = flate2::write::GzEncoder::new(f, flate2::Compression::default());
+        let mut ar = tar::Builder::new(enc);
+        let mut h = tar::Header::new_gnu();
+        h.set_size(MAX_FILE_BYTES + 1);
+        h.set_mode(0o600);
+        h.set_cksum();
+        ar.append_data(
+            &mut h,
+            "server/awg0.conf",
+            std::io::repeat(0).take(MAX_FILE_BYTES + 1),
+        )
+        .unwrap();
+        ar.into_inner().unwrap().finish().unwrap();
+
+        assert!(matches!(
+            validate_installer_archive(&p),
+            Err(FormatError::TooLarge(_))
         ));
     }
 
