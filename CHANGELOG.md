@@ -3,7 +3,7 @@
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версионирование — [SemVer](https://semver.org/lang/ru/).
 Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning — [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [0.10.0] — 2026-09-02
 
 ### 🇷🇺 Русский
 
