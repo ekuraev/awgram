@@ -20,17 +20,30 @@ pub enum RouteCtx {
     Edit {
         name: String,
     },
+    /// Массовая генерация: маршруты ставятся одним `--allowed-ips` на весь
+    /// вызов, поэтому пачка обслуживается тем же экраном, что и одиночное
+    /// создание.
+    Bulk {
+        prefix: String,
+        count: usize,
+        expires: Option<String>,
+        psk: bool,
+    },
 }
 
 impl RouteCtx {
+    /// Что показать в заголовке экрана: имя клиента, а для пачки — её префикс.
     pub fn name(&self) -> &str {
         match self {
             RouteCtx::Create { name, .. } | RouteCtx::Edit { name } => name,
+            RouteCtx::Bulk { prefix, .. } => prefix,
         }
     }
 
-    pub fn is_create(&self) -> bool {
-        matches!(self, RouteCtx::Create { .. })
+    /// Идёт создание, а не правка: только тогда есть что «оставить как на
+    /// сервере», и только тогда экран показывает кнопку пропуска.
+    pub fn is_creating(&self) -> bool {
+        !matches!(self, RouteCtx::Edit { .. })
     }
 }
 
@@ -155,9 +168,20 @@ mod tests {
             psk: true,
         };
         assert_eq!(create.name(), "alice");
-        assert!(create.is_create());
+        assert!(create.is_creating());
         let edit = RouteCtx::Edit { name: "bob".into() };
         assert_eq!(edit.name(), "bob");
-        assert!(!edit.is_create());
+        assert!(!edit.is_creating());
+        let bulk = RouteCtx::Bulk {
+            prefix: "user".into(),
+            count: 5,
+            expires: None,
+            psk: false,
+        };
+        assert_eq!(bulk.name(), "user");
+        assert!(
+            bulk.is_creating(),
+            "пачка тоже создаётся — пропуск доступен"
+        );
     }
 }

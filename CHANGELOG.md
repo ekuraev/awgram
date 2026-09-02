@@ -3,7 +3,7 @@
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версионирование — [SemVer](https://semver.org/lang/ru/).
 Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning — [SemVer](https://semver.org/).
 
-## [0.10.0] — 2026-09-02
+## [0.10.0] — 2026-09-03
 
 ### 🇷🇺 Русский
 
@@ -14,11 +14,20 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
   (берётся из `check`), полный туннель `0.0.0.0/0, ::/0` и ручной ввод CIDR.
   Кнопка «⏭ Как на сервере» оставляет глобальный режим маршрутизации
   инсталлера, как было раньше. «Изменить → AllowedIPs» открывает тот же экран
-  с тумблерами, предзаполненными текущим значением клиента. Инсталлер не
-  принимает AllowedIPs у `add`, поэтому значение ставится отдельным `modify`
-  сразу после создания и до выдачи файлов — `.conf`, QR и ссылка приходят уже
-  с нужными маршрутами. При пересоздании клиента тумблеры предзаполняются его
-  текущими маршрутами: раньше `remove` + `add` молча сбрасывал их к серверным.
+  с тумблерами, предзаполненными текущим значением клиента. При пересоздании
+  тумблеры тоже предзаполняются: раньше `remove` + `add` молча сбрасывал
+  индивидуальные маршруты к серверным.
+- **Маршруты у массовой генерации**: тот же экран после выбора PSK, значение
+  применяется ко всей пачке.
+- **Одна команда вместо двух, если инсталлер это умеет.** Бот спрашивает у
+  скрипта его справку и, увидев `add --allowed-ips`, создаёт клиента сразу с
+  нужными маршрутами. Тогда не бывает промежуточного состояния «клиент есть,
+  маршруты ещё нет», а `.conf`, QR и ссылка сразу верные. Инсталлер без флага
+  обслуживается прежним путём: `add`, затем `modify` до выдачи файлов.
+  Развилка идёт по ответу скрипта, а не по номеру версии: неизвестную опцию
+  он отвергает, ничего не создавая, поэтому откат безопасен. У массовой
+  генерации отката нет — там `modify` пришлось бы звать на каждого клиента,
+  поэтому на старом инсталлере шага маршрутов просто нет.
 
 #### 🔧 Изменено
 
@@ -57,11 +66,21 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
   (taken from `check`), the full tunnel `0.0.0.0/0, ::/0`, and manual CIDR
   entry. The "⏭ Server default" button keeps the installer's global routing
   mode, exactly as before. "Modify → AllowedIPs" opens the same screen with the
-  toggles prefilled from the client's current value. The installer accepts no
-  AllowedIPs flag on `add`, so the value is applied by a separate `modify` right
-  after creation and before delivery — the `.conf`, QR and link already carry
-  the chosen routes. Recreating a client prefills the toggles from its current
-  routes: `remove` + `add` used to reset them to the server defaults silently.
+  toggles prefilled from the client's current value. Recreating a client
+  prefills them too: `remove` + `add` used to reset individual routes to the
+  server defaults silently.
+- **Routes for bulk creation**: the same screen after the PSK step, applied to
+  the whole batch.
+- **One command instead of two where the installer supports it.** The bot reads
+  the script's own help and, seeing `add --allowed-ips`, creates the client
+  with the right routes in a single call. There is then no in-between state
+  where the client exists but its routes do not, and the `.conf`, QR and link
+  are correct from the start. An installer without the flag is served the old
+  way: `add`, then `modify` before delivery. The fork follows the script's
+  answer rather than a version number: an unknown option is rejected without
+  creating anything, which makes the fallback safe. Bulk creation has no
+  fallback, because `modify` would have to run once per client, so on an older
+  installer the routes step is simply not offered.
 
 #### 🔧 Changed
 

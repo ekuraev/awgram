@@ -1050,6 +1050,17 @@ pub fn btn_route_apply(lang: Lang) -> String {
     .to_string()
 }
 
+/// Инсталлер на этом сервере не принимает AllowedIPs при создании, а ставить
+/// их пачке по одному через `modify` — это вызов скрипта на каждого клиента.
+/// Поэтому клиенты созданы с маршрутами сервера, и об этом надо сказать.
+pub fn routes_not_supported(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "⚠️ Маршруты не применены: инсталлер на сервере не принимает AllowedIPs при создании. Обновите его или задайте маршруты через «Изменить».",
+        Lang::En => "⚠️ Routes not applied: the installer on this server does not accept AllowedIPs at creation. Update it, or set the routes via “Modify”.",
+    }
+    .to_string()
+}
+
 /// Клиент создан, но индивидуальные маршруты применить не удалось: `add` их не
 /// принимает, они ставятся отдельным `modify` — и именно он упал. Клиент рабочий,
 /// но с маршрутами сервера, поэтому это предупреждение, а не ошибка.

@@ -4,17 +4,45 @@ pub mod validate;
 pub mod wire;
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use crate::config::Config;
 use crate::error::Result;
 use model::{AddResult, Client};
 use runner::{run, RunSpec};
 
+/// Кэш ответа на вопрос «умеет ли установленный скрипт `add --allowed-ips`».
+const CAP_UNKNOWN: u8 = 0;
+const CAP_YES: u8 = 1;
+const CAP_NO: u8 = 2;
+
+/// Итог создания клиента: файлы плюс признак, применились ли индивидуальные
+/// маршруты самим `add`. `false` — либо их не задавали, либо установленный
+/// инсталлер флага не знает, и доставить их должен отдельный `modify`.
+#[derive(Debug)]
+pub struct AddOutcome {
+    pub res: AddResult,
+    pub routes_applied: bool,
+}
+
+/// То же для массового создания. Отката на `modify` тут нет: он означал бы
+/// вызов скрипта на каждого клиента пачки, с применением конфигурации сервера
+/// каждый раз. Не применились — говорим об этом в итоге.
+#[derive(Debug)]
+pub struct BulkOutcome {
+    pub res: model::BulkResult,
+    pub routes_applied: bool,
+}
+
 pub struct Vpn {
     script: PathBuf,
     sudo_prefix: String,
     timeout_secs: u64,
     clients_dir: PathBuf,
+    /// Умеет ли скрипт `add --allowed-ips`: CAP_UNKNOWN до первого вопроса.
+    /// Меняется только вместе с обновлением инсталлера, то есть с
+    /// перезапуском бота, поэтому кэш живёт всё время процесса.
+    add_allowed_ips: AtomicU8,
 }
 
 impl Vpn {
@@ -24,6 +52,7 @@ impl Vpn {
             sudo_prefix: cfg.sudo_prefix.clone(),
             timeout_secs: cfg.op_timeout_secs,
             clients_dir: cfg.clients_dir.clone(),
+            add_allowed_ips: AtomicU8::new(CAP_UNKNOWN),
         }
     }
 
@@ -104,7 +133,102 @@ impl Vpn {
         Ok(clients.iter().any(|c| c.name == name))
     }
 
+    /// Умеет ли установленный `manage_amneziawg.sh` принимать `--allowed-ips`
+    /// у `add`. Спрашиваем у самого скрипта: `--help` печатает перечень флагов
+    /// и номер версии, ничего не меняет и не требует root. Сверять номер
+    /// версии нельзя — флаг приезжает в релизе, который мы заранее не знаем,
+    /// а на полуобновлённом сервере номер и реальность расходятся.
+    ///
+    /// Ответ кэшируется: он меняется только вместе с обновлением инсталлера,
+    /// то есть с перезапуском бота. Сбой запуска НЕ кэшируем — временная
+    /// ошибка не должна навсегда выключить флаг.
+    pub async fn supports_add_allowed_ips(&self) -> bool {
+        match self.add_allowed_ips.load(Ordering::Relaxed) {
+            CAP_YES => return true,
+            CAP_NO => return false,
+            _ => {}
+        }
+        // Ответу верим только если справка действительно напечаталась: явный
+        // `--help` выходит с нулём и непустым stdout. Пустой вывод или
+        // ненулевой код — мы ничего не узнали, а не «флага нет».
+        match run(&self.spec(), &["--help"]).await {
+            Ok((out, 0)) if !out.trim().is_empty() => {
+                let supported = out.contains("--allowed-ips");
+                self.add_allowed_ips
+                    .store(if supported { CAP_YES } else { CAP_NO }, Ordering::Relaxed);
+                supported
+            }
+            Ok((_, code)) => {
+                tracing::warn!(code, "справка manage не прочиталась — не кэширую ответ");
+                false
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "справка manage недоступна — не кэширую ответ");
+                false
+            }
+        }
+    }
+
+    /// Создаёт клиента, по возможности сразу с индивидуальными маршрутами.
+    /// `routes_applied=false` в ответе означает, что маршруты придётся
+    /// доставлять отдельным `modify`: либо их не задавали, либо скрипт флага
+    /// не знает. Отказ разбора аргументов клиента НЕ создаёт, поэтому откат
+    /// безопасен — повторный `add` не наткнётся на уже существующее имя.
+    pub async fn add_client(
+        &self,
+        name: &str,
+        expires: Option<&str>,
+        psk: bool,
+        allowed_ips: Option<&str>,
+    ) -> Result<AddOutcome> {
+        if let Some(value) = allowed_ips {
+            if self.supports_add_allowed_ips().await {
+                match self.add_raw(name, expires, psk, Some(value)).await? {
+                    Some(res) => {
+                        return Ok(AddOutcome {
+                            res,
+                            routes_applied: true,
+                        })
+                    }
+                    None => {
+                        // Справка обещала флаг, а скрипт его не принял. Такое
+                        // бывает на сервере, где половины инсталлера разной
+                        // версии. Запоминаем и дальше идём старым путём.
+                        tracing::warn!(
+                            "manage не принял --allowed-ips вопреки справке — перехожу на add+modify"
+                        );
+                        self.add_allowed_ips.store(CAP_NO, Ordering::Relaxed);
+                    }
+                }
+            }
+        }
+        Ok(AddOutcome {
+            res: self.add(name, expires, psk).await?,
+            routes_applied: false,
+        })
+    }
+
     pub async fn add(&self, name: &str, expires: Option<&str>, psk: bool) -> Result<AddResult> {
+        self.add_raw(name, expires, psk, None)
+            .await?
+            .ok_or_else(|| {
+                // Без `--allowed-ips` отвергать нечего: все прочие аргументы
+                // скрипт знает с v5.21.0.
+                crate::error::Error::Parse("add: скрипт не принял аргументы".into())
+            })
+    }
+
+    /// Общая реализация `add`. `Ok(None)` — скрипт отверг аргументы целиком:
+    /// на неизвестную опцию он печатает справку и НИЧЕГО не создаёт, а
+    /// аварийный конверт приходит с `command:"help"` вместо `"add"`. Это
+    /// единственный достоверный признак того, что флага на сервере нет.
+    async fn add_raw(
+        &self,
+        name: &str,
+        expires: Option<&str>,
+        psk: bool,
+        allowed_ips: Option<&str>,
+    ) -> Result<Option<AddResult>> {
         let name =
             validate::validate_name(name).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
         let mut args: Vec<String> = vec!["add".into(), name.clone(), "--json".into()];
@@ -116,6 +240,11 @@ impl Vpn {
         if psk {
             args.push("--psk".into());
         }
+        if let Some(aip) = allowed_ips {
+            let aip = validate::parse_allowed_ips(aip)
+                .map_err(|e| crate::error::Error::Parse(e.to_string()))?;
+            args.push(format!("--allowed-ips={aip}"));
+        }
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         let (out, code) = run(&self.spec(), &arg_refs).await?;
         // add печатает JSON-конверт ДАЖЕ при exit 1 (status:"exists" и т.п.) —
@@ -126,6 +255,17 @@ impl Vpn {
                 stderr: format!("add: пустой stdout (exit {code})"),
             });
         }
+        if let Some(env) = wire::try_error_envelope(&out) {
+            if env.command != "add" {
+                tracing::debug!(error = %env.error, "manage отверг аргументы add");
+                return Ok(None);
+            }
+            // Конверт с command="add" — настоящий отказ создания, например
+            // «awg_common.sh устарела» на полуобновлённом сервере. Ниже он
+            // станет ошибкой разбора (пользователю секреты не показываем),
+            // поэтому причину пишем в лог: иначе она пропадёт совсем.
+            tracing::error!(error = %env.error, rc = env.rc, "add завершился ошибкой");
+        }
         let parsed =
             wire::parse_add(&out).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
         let entry = parsed
@@ -134,12 +274,12 @@ impl Vpn {
             .next()
             .ok_or_else(|| crate::error::Error::Parse("add: пустой results[]".into()))?;
         match entry.status {
-            wire::AddStatus::Created => Ok(AddResult {
+            wire::AddStatus::Created => Ok(Some(AddResult {
                 name: entry.name,
                 conf_path: entry.conf.unwrap_or_default(),
                 qr_path: entry.qr.unwrap_or_default(),
                 uri: read_vpnuri_content(&entry.vpnuri.unwrap_or_default()),
-            }),
+            })),
             wire::AddStatus::Exists => Err(crate::error::Error::ClientExists(name)),
             wire::AddStatus::InvalidName => {
                 Err(crate::error::Error::Parse("add: невалидное имя".into()))
@@ -155,12 +295,64 @@ impl Vpn {
     /// Итерирует ВСЕ `results[]` (в отличие от `add`, берущего только первый):
     /// `created` → `AddResult` с путями, прочие статусы → `Skip`. Стандартный
     /// таймаут `op_timeout_secs` (N≤10 укладывается с запасом).
+    /// Массовое создание, по возможности сразу с индивидуальными маршрутами:
+    /// `--allowed-ips` применяется ко всей пачке одним вызовом, как
+    /// `--expires`. Отката на `modify` тут нет — он означал бы вызов скрипта
+    /// на каждого клиента; не приняли флаг, значит создаём с маршрутами
+    /// сервера и говорим об этом (`routes_applied=false`).
+    pub async fn add_many_clients(
+        &self,
+        names: &[String],
+        expires: Option<&str>,
+        psk: bool,
+        allowed_ips: Option<&str>,
+    ) -> Result<BulkOutcome> {
+        if let Some(value) = allowed_ips {
+            if self.supports_add_allowed_ips().await {
+                match self.add_many_raw(names, expires, psk, Some(value)).await? {
+                    Some(res) => {
+                        return Ok(BulkOutcome {
+                            res,
+                            routes_applied: true,
+                        })
+                    }
+                    None => {
+                        tracing::warn!(
+                            "manage не принял --allowed-ips вопреки справке — создаю пачку без индивидуальных маршрутов"
+                        );
+                        self.add_allowed_ips.store(CAP_NO, Ordering::Relaxed);
+                    }
+                }
+            }
+        }
+        Ok(BulkOutcome {
+            res: self.add_many(names, expires, psk).await?,
+            routes_applied: false,
+        })
+    }
+
     pub async fn add_many(
         &self,
         names: &[String],
         expires: Option<&str>,
         psk: bool,
     ) -> Result<crate::vpn::model::BulkResult> {
+        self.add_many_raw(names, expires, psk, None)
+            .await?
+            .ok_or_else(|| {
+                crate::error::Error::Parse("add_many: скрипт не принял аргументы".into())
+            })
+    }
+
+    /// Общая реализация. `Ok(None)` — аргументы отвергнуты целиком, см.
+    /// `add_raw`: клиенты при этом не создаются.
+    async fn add_many_raw(
+        &self,
+        names: &[String],
+        expires: Option<&str>,
+        psk: bool,
+        allowed_ips: Option<&str>,
+    ) -> Result<Option<crate::vpn::model::BulkResult>> {
         use crate::vpn::model::{BulkResult, Skip, SkipReason};
         // Валидируем каждое имя до запуска скрипта (argument-injection guard).
         // `Result` алиас тут = crate::error::Result, поэтому турбофиш ограничиваем
@@ -181,6 +373,11 @@ impl Vpn {
         if psk {
             args.push("--psk".into());
         }
+        if let Some(aip) = allowed_ips {
+            let aip = validate::parse_allowed_ips(aip)
+                .map_err(|e| crate::error::Error::Parse(e.to_string()))?;
+            args.push(format!("--allowed-ips={aip}"));
+        }
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         let (out, code) = run(&self.spec(), &arg_refs).await?;
         if out.trim().is_empty() {
@@ -188,6 +385,13 @@ impl Vpn {
                 code: Some(code),
                 stderr: format!("add_many: пустой stdout (exit {code})"),
             });
+        }
+        if let Some(env) = wire::try_error_envelope(&out) {
+            if env.command != "add" {
+                tracing::debug!(error = %env.error, "manage отверг аргументы add (пачка)");
+                return Ok(None);
+            }
+            tracing::error!(error = %env.error, rc = env.rc, "add (пачка) завершился ошибкой");
         }
         let parsed =
             wire::parse_add(&out).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
@@ -220,7 +424,7 @@ impl Vpn {
                 }),
             }
         }
-        Ok(BulkResult { created, skipped })
+        Ok(Some(BulkResult { created, skipped }))
     }
 
     pub async fn remove(&self, name: &str) -> Result<()> {
@@ -695,6 +899,7 @@ impl Vpn {
             sudo_prefix: String::new(),
             timeout_secs: 5,
             clients_dir,
+            add_allowed_ips: AtomicU8::new(CAP_UNKNOWN),
         }
     }
 }
@@ -719,6 +924,7 @@ mod tests {
             sudo_prefix: String::new(),
             timeout_secs: 5,
             clients_dir: dir.path().to_path_buf(),
+            add_allowed_ips: AtomicU8::new(CAP_UNKNOWN),
         };
         (dir, vpn)
     }
@@ -884,6 +1090,7 @@ echo '{{"command":"add","ok":true,"added":1,"failed":0,"applied":true,"results":
             sudo_prefix: String::new(),
             timeout_secs: 5,
             clients_dir: dir.path().to_path_buf(),
+            add_allowed_ips: AtomicU8::new(CAP_UNKNOWN),
         };
         let res = vpn.add("alice", None, false).await.unwrap();
         assert_eq!(res.conf_path, "/tmp/zz/alice.conf");
@@ -912,6 +1119,7 @@ echo '{"command":"add","ok":true,"added":1,"failed":0,"applied":true,"results":[
             sudo_prefix: String::new(),
             timeout_secs: 5,
             clients_dir: dir.path().to_path_buf(),
+            add_allowed_ips: AtomicU8::new(CAP_UNKNOWN),
         };
         let res = vpn.add("alice", None, false).await.unwrap();
         assert_eq!(res.uri, "");
@@ -1485,6 +1693,7 @@ echo '{{"command":"add","ok":true,"added":2,"failed":1,"applied":true,"results":
             sudo_prefix: String::new(),
             timeout_secs: 5,
             clients_dir: dir.path().to_path_buf(),
+            add_allowed_ips: AtomicU8::new(CAP_UNKNOWN),
         };
         let res = vpn
             .add_many(
@@ -1602,5 +1811,159 @@ echo '{"command":"check","ok":true,"service":{"unit":"awg-quick@awg0","active":t
     async fn vpn_subnet_none_when_check_fails() {
         let (_d, vpn) = vpn_with_script("#!/bin/sh\nexit 1\n");
         assert!(vpn.vpn_subnet().await.is_none());
+    }
+
+    // --- add --allowed-ips (Issue #253 апстрима) и откат на старый путь ---
+
+    /// Скрипт «нового» инсталлера: справка перечисляет --allowed-ips, add
+    /// подтверждает получение флага в имени созданного клиента.
+    fn new_installer_stub() -> String {
+        r#"#!/bin/sh
+case "$1" in
+  --help) echo "  --psk                 сгенерировать PresharedKey"; echo "  --allowed-ips=СПИСОК  индивидуальные AllowedIPs клиента"; exit 0 ;;
+esac
+aip=""
+for a in "$@"; do
+  case "$a" in --allowed-ips=*) aip="${a#--allowed-ips=}" ;; esac
+done
+echo "{\"command\":\"add\",\"ok\":true,\"added\":1,\"failed\":0,\"applied\":true,\"results\":[{\"name\":\"alice\",\"status\":\"created\",\"conf\":\"/tmp/alice.conf\",\"qr\":null,\"vpnuri\":null,\"aip\":\"$aip\"}]}"
+"#
+        .to_string()
+    }
+
+    /// Скрипт «старого» инсталлера: справки без флага, а на неизвестную опцию
+    /// печатает аварийный конверт с command:"help" и НИЧЕГО не создаёт.
+    fn old_installer_stub() -> String {
+        r#"#!/bin/sh
+case "$1" in
+  --help) echo "  --psk                 сгенерировать PresharedKey"; exit 0 ;;
+esac
+for a in "$@"; do
+  case "$a" in
+    --allowed-ips=*) echo '{"command":"help","ok":false,"error":"invalid usage (unknown option or command)","rc":1}'; exit 1 ;;
+  esac
+done
+echo '{"command":"add","ok":true,"added":1,"failed":0,"applied":true,"results":[{"name":"alice","status":"created","conf":"/tmp/alice.conf","qr":null,"vpnuri":null}]}'
+"#
+        .to_string()
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn supports_add_allowed_ips_reads_script_help() {
+        let (_d, vpn) = vpn_with_script(&new_installer_stub());
+        assert!(vpn.supports_add_allowed_ips().await);
+        let (_d2, old) = vpn_with_script(&old_installer_stub());
+        assert!(!old.supports_add_allowed_ips().await);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn add_client_passes_allowed_ips_when_supported() {
+        let (_d, vpn) = vpn_with_script(&new_installer_stub());
+        let out = vpn
+            .add_client("alice", None, false, Some("10.0.0.0/8, 192.168.0.0/16"))
+            .await
+            .unwrap();
+        assert!(
+            out.routes_applied,
+            "флаг поддержан — маршруты ставит сам add"
+        );
+        assert_eq!(out.res.name, "alice");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn add_client_falls_back_on_old_installer() {
+        // Старый скрипт отвергает аргументы, клиента не создаёт — бот обязан
+        // повторить обычным add и сказать, что маршруты ещё не применены.
+        let (_d, vpn) = vpn_with_script(&old_installer_stub());
+        let out = vpn
+            .add_client("alice", None, false, Some("10.0.0.0/8"))
+            .await
+            .unwrap();
+        assert!(!out.routes_applied);
+        assert_eq!(out.res.name, "alice");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn add_client_without_routes_never_probes_flag() {
+        // Маршруты не заданы — справку спрашивать незачем, лишний запуск
+        // скрипта на каждое создание не нужен.
+        let (_d, vpn) = vpn_with_script(
+            r#"#!/bin/sh
+case "$1" in
+  --help) echo "справку спрашивать не должны" >&2; exit 1 ;;
+esac
+echo '{"command":"add","ok":true,"added":1,"failed":0,"applied":true,"results":[{"name":"alice","status":"created","conf":"/tmp/alice.conf"}]}'
+"#,
+        );
+        let out = vpn.add_client("alice", None, false, None).await.unwrap();
+        assert!(!out.routes_applied);
+        assert_eq!(
+            vpn.add_allowed_ips.load(Ordering::Relaxed),
+            CAP_UNKNOWN,
+            "кэш возможности не должен трогаться"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn add_client_rejects_bad_allowed_ips_before_running() {
+        let (_d, vpn) = vpn_with_script(&new_installer_stub());
+        let err = vpn
+            .add_client("alice", None, false, Some("10.0.0.0/8; rm -rf /"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, crate::error::Error::Parse(_)), "{err:?}");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn add_many_clients_passes_flag_and_falls_back() {
+        let names = vec!["a".to_string(), "b".to_string()];
+        let (_d, vpn) = vpn_with_script(
+            r#"#!/bin/sh
+case "$1" in
+  --help) echo "  --allowed-ips=СПИСОК  индивидуальные AllowedIPs"; exit 0 ;;
+esac
+echo '{"command":"add","ok":true,"added":2,"failed":0,"applied":true,"results":[{"name":"a","status":"created","conf":"/tmp/a.conf"},{"name":"b","status":"created","conf":"/tmp/b.conf"}]}'
+"#,
+        );
+        let out = vpn
+            .add_many_clients(&names, None, false, Some("10.0.0.0/8"))
+            .await
+            .unwrap();
+        assert!(out.routes_applied);
+        assert_eq!(out.res.created.len(), 2);
+
+        let (_d2, old) = vpn_with_script(
+            r#"#!/bin/sh
+case "$1" in
+  --help) echo "  --psk  PresharedKey"; exit 0 ;;
+esac
+echo '{"command":"add","ok":true,"added":2,"failed":0,"applied":true,"results":[{"name":"a","status":"created","conf":"/tmp/a.conf"},{"name":"b","status":"created","conf":"/tmp/b.conf"}]}'
+"#,
+        );
+        let out = old
+            .add_many_clients(&names, None, false, Some("10.0.0.0/8"))
+            .await
+            .unwrap();
+        assert!(!out.routes_applied, "старый скрипт — маршруты не применены");
+        assert_eq!(out.res.created.len(), 2);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn capability_probe_failure_is_not_cached() {
+        // Справка не запустилась — это временный сбой, а не приговор флагу.
+        let (_d, vpn) = vpn_with_script("#!/bin/sh\nexit 127\n");
+        assert!(!vpn.supports_add_allowed_ips().await);
+        assert_eq!(
+            vpn.add_allowed_ips.load(Ordering::Relaxed),
+            CAP_UNKNOWN,
+            "сбой запуска не должен попадать в кэш"
+        );
     }
 }
