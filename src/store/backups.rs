@@ -113,34 +113,46 @@ impl Store {
     }
 
     pub fn set_backup_comment(&self, name: &str, comment: Option<&str>) {
-        let _ = self.with_conn(|c| {
+        let res = self.with_conn(|c| {
             c.execute(
                 "UPDATE backups SET comment=?2 WHERE name=?1",
                 rusqlite::params![name, comment],
             )
         });
+        if let Err(e) = res {
+            tracing::error!(error = %e, name, "не удалось сохранить комментарий бэкапа");
+        }
     }
 
     pub fn set_backup_pinned(&self, name: &str, pinned: bool) {
-        let _ = self.with_conn(|c| {
+        let res = self.with_conn(|c| {
             c.execute(
                 "UPDATE backups SET pinned=?2 WHERE name=?1",
                 rusqlite::params![name, pinned as i64],
             )
         });
+        if let Err(e) = res {
+            tracing::error!(error = %e, name, "не удалось сохранить пин бэкапа");
+        }
     }
 
     pub fn set_backup_sha256(&self, name: &str, sha: &str) {
-        let _ = self.with_conn(|c| {
+        let res = self.with_conn(|c| {
             c.execute(
                 "UPDATE backups SET sha256=?2 WHERE name=?1",
                 rusqlite::params![name, sha],
             )
         });
+        if let Err(e) = res {
+            tracing::error!(error = %e, name, "не удалось сохранить sha256 бэкапа");
+        }
     }
 
     pub fn delete_backup_row(&self, name: &str) {
-        let _ = self.with_conn(|c| c.execute("DELETE FROM backups WHERE name=?1", [name]));
+        let res = self.with_conn(|c| c.execute("DELETE FROM backups WHERE name=?1", [name]));
+        if let Err(e) = res {
+            tracing::error!(error = %e, name, "не удалось удалить строку бэкапа");
+        }
     }
 }
 
