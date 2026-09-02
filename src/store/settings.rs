@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::i18n::Lang;
 use crate::store::Store;
@@ -22,6 +22,71 @@ struct LegacyState {
     deliver_qr: Option<bool>,
     deliver_link: Option<bool>,
     client_filter: Option<ClientFilter>,
+}
+
+/// Период автобэкапа. Порядок вариантов = порядок цикла кнопки на экране.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Period {
+    #[default]
+    Off,
+    Daily,
+    Weekly,
+    Monthly,
+}
+
+impl Period {
+    pub fn next(self) -> Period {
+        match self {
+            Period::Off => Period::Daily,
+            Period::Daily => Period::Weekly,
+            Period::Weekly => Period::Monthly,
+            Period::Monthly => Period::Off,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Period::Off => "off",
+            Period::Daily => "daily",
+            Period::Weekly => "weekly",
+            Period::Monthly => "monthly",
+        }
+    }
+}
+
+/// Расписание автобэкапа. `include_db` действует и на ручные бэкапы из меню.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BackupSchedule {
+    pub period: Period,
+    pub hour: u8,
+    pub minute: u8,
+    pub keep: u32,
+    pub notify_ok: bool,
+    pub include_db: bool,
+}
+
+impl Default for BackupSchedule {
+    fn default() -> Self {
+        BackupSchedule {
+            period: Period::Off,
+            hour: 3,
+            minute: 0,
+            keep: 7,
+            notify_ok: true,
+            include_db: true,
+        }
+    }
+}
+
+/// Серия сбоев автобэкапа: с какого момента, сколько попыток, когда была
+/// последняя и когда владельцев уведомляли в последний раз.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackupFailure {
+    pub since: i64,
+    pub attempts: u32,
+    pub last_attempt: i64,
+    pub last_notified: i64,
 }
 
 impl Store {
@@ -117,6 +182,33 @@ impl Store {
         self.set_json(&format!("client_filter:{uid}"), &f);
     }
 
+    pub fn backup_schedule(&self) -> BackupSchedule {
+        self.get_json("backup_schedule").unwrap_or_default()
+    }
+    pub fn set_backup_schedule(&self, s: &BackupSchedule) {
+        self.set_json("backup_schedule", s)
+    }
+    pub fn backup_last_auto(&self) -> Option<i64> {
+        self.get_json("backup_last_auto")
+    }
+    pub fn set_backup_last_auto(&self, ts: i64) {
+        self.set_json("backup_last_auto", &ts)
+    }
+    pub fn backup_failure(&self) -> Option<BackupFailure> {
+        self.get_json("backup_failure")
+    }
+    /// `None` — серия сбоев закрыта: ключ удаляется, а не пишется null.
+    pub fn set_backup_failure(&self, f: Option<&BackupFailure>) {
+        match f {
+            Some(f) => self.set_json("backup_failure", f),
+            None => {
+                let _ = self.with_conn(|c| {
+                    c.execute("DELETE FROM settings WHERE key='backup_failure'", [])
+                });
+            }
+        }
+    }
+
     /// Одноразовая миграция старого state.json. Вызывается при старте.
     /// No-op, если файла нет или в БД уже есть настройки (повторный старт).
     pub fn migrate_state_json(&self, path: &Path) {
@@ -157,6 +249,7 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
+    use super::{BackupFailure, BackupSchedule, Period};
     use crate::i18n::Lang;
     use crate::store::Store;
     use crate::vpn::model::ClientFilter;
@@ -381,5 +474,53 @@ mod tests {
         assert_eq!(s.owner_scope(42), ListScope::Group(7));
         s.set_owner_scope(42, ListScope::NoGroup);
         assert_eq!(s.owner_scope(42), ListScope::NoGroup);
+    }
+
+    #[test]
+    fn backup_schedule_defaults_and_roundtrip() {
+        let s = store();
+        let d = s.backup_schedule();
+        assert_eq!(d, BackupSchedule::default());
+        assert_eq!(d.period, Period::Off);
+        assert_eq!((d.hour, d.minute, d.keep), (3, 0, 7));
+        assert!(d.notify_ok && d.include_db);
+        let custom = BackupSchedule {
+            period: Period::Weekly,
+            hour: 21,
+            minute: 0,
+            keep: 30,
+            notify_ok: false,
+            include_db: false,
+        };
+        s.set_backup_schedule(&custom);
+        assert_eq!(s.backup_schedule(), custom);
+    }
+
+    #[test]
+    fn period_cycles_and_names() {
+        assert_eq!(Period::Off.next(), Period::Daily);
+        assert_eq!(Period::Daily.next(), Period::Weekly);
+        assert_eq!(Period::Weekly.next(), Period::Monthly);
+        assert_eq!(Period::Monthly.next(), Period::Off);
+        assert_eq!(Period::Weekly.as_str(), "weekly");
+    }
+
+    #[test]
+    fn backup_last_auto_and_failure_roundtrip() {
+        let s = store();
+        assert_eq!(s.backup_last_auto(), None);
+        s.set_backup_last_auto(1_700_000_000);
+        assert_eq!(s.backup_last_auto(), Some(1_700_000_000));
+        assert_eq!(s.backup_failure(), None);
+        let f = BackupFailure {
+            since: 10,
+            attempts: 2,
+            last_attempt: 20,
+            last_notified: 10,
+        };
+        s.set_backup_failure(Some(&f));
+        assert_eq!(s.backup_failure(), Some(f));
+        s.set_backup_failure(None);
+        assert_eq!(s.backup_failure(), None);
     }
 }

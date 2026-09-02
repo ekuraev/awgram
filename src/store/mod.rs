@@ -19,6 +19,7 @@ pub use groups::{
     gen_invite_token, GroupError, GroupRow, InviteRow, InviteUse, ListScope, QuotaAssign,
     INVITE_TTL_SECS,
 };
+pub use settings::{BackupFailure, BackupSchedule, Period};
 pub use stats::{PeriodTotals, Sample, TrafficSummary};
 
 /// SQL-батчи миграций: индекс в массиве + 1 == schema_version после применения.
