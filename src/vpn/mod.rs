@@ -363,6 +363,30 @@ impl Vpn {
         raw.trim().parse::<i64>().ok()
     }
 
+    /// Текущие AllowedIPs клиента из его `.conf` (`clients_dir/<name>.conf`).
+    /// Нужны экрану выбора маршрутов, чтобы показать уже заданное значение и
+    /// предзаполнить тумблеры. `list --json` этого поля не отдаёт, поэтому
+    /// читаем файл — тот же источник, что и у `existing_files`/`client_expiry`.
+    /// None: файла нет, ключа нет или значение пустое.
+    pub fn client_allowed_ips(&self, name: &str) -> Option<String> {
+        let name = validate::validate_name(name).ok()?;
+        let raw = std::fs::read_to_string(self.clients_dir.join(format!("{name}.conf"))).ok()?;
+        raw.lines()
+            .filter_map(|l| l.split_once('='))
+            .find(|(k, _)| k.trim().eq_ignore_ascii_case("AllowedIPs"))
+            .map(|(_, v)| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    }
+
+    /// Подсеть VPN (`10.9.9.0/24`) для одноимённого пресета маршрутов. Берётся
+    /// из `check` — единственного источника адресов интерфейса. Ошибка check
+    /// или отсутствие IPv4 — не повод ломать экран: возвращаем None, кнопки
+    /// пресета просто не будет.
+    pub async fn vpn_subnet(&self) -> Option<String> {
+        let report = self.check().await.ok()?;
+        validate::vpn_subnet_from_addresses(&report.interface.addresses)
+    }
+
     /// Свободные адреса в подсети сервера для превентивной проверки массовой
     /// генерации. `total` = usable-хостов v4-подсети (минус network+broadcast),
     /// `free` = total − 1 (сервер) − existing. Берёт первый IPv4 из
@@ -1533,5 +1557,50 @@ echo '{"ok":true,"added":0,"failed":0,"applied":false,"results":[]}'
 "#;
         let (_d, vpn) = vpn_with_script(stub);
         assert!(vpn.add_many(&["a".to_string()], None, false).await.is_err());
+    }
+
+    #[test]
+    fn client_allowed_ips_reads_value_from_conf() {
+        let (dir, vpn) = vpn_with_script("#!/bin/sh\n");
+        std::fs::write(
+            dir.path().join("alice.conf"),
+            "[Interface]\nPrivateKey = x\n\n[Peer]\nAllowedIPs = 10.0.0.0/8, 192.168.0.0/16\nEndpoint = h:1\n",
+        )
+        .unwrap();
+        assert_eq!(
+            vpn.client_allowed_ips("alice").unwrap(),
+            "10.0.0.0/8, 192.168.0.0/16"
+        );
+    }
+
+    #[test]
+    fn client_allowed_ips_none_when_absent_or_empty() {
+        let (dir, vpn) = vpn_with_script("#!/bin/sh\n");
+        std::fs::write(dir.path().join("alice.conf"), "[Peer]\nEndpoint = h:1\n").unwrap();
+        assert!(vpn.client_allowed_ips("alice").is_none());
+        std::fs::write(dir.path().join("bob.conf"), "[Peer]\nAllowedIPs =\n").unwrap();
+        assert!(vpn.client_allowed_ips("bob").is_none());
+        // Файла нет вовсе.
+        assert!(vpn.client_allowed_ips("carol").is_none());
+        // Имя с обходом каталога не должно читать ничего постороннего.
+        assert!(vpn.client_allowed_ips("../etc/passwd").is_none());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn vpn_subnet_takes_network_of_interface_address() {
+        let (_d, vpn) = vpn_with_script(
+            r#"#!/bin/sh
+echo '{"command":"check","ok":true,"service":{"unit":"awg-quick@awg0","active":true},"interface":{"name":"awg0","present":true,"addresses":["10.9.9.1/24"]},"port":{"number":1,"proto":"udp","listening":true},"module":{"loaded":true},"clients":{"total":0},"firewall":{"ufw_active":false,"port_allowed":false}}'
+"#,
+        );
+        assert_eq!(vpn.vpn_subnet().await.unwrap(), "10.9.9.0/24");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn vpn_subnet_none_when_check_fails() {
+        let (_d, vpn) = vpn_with_script("#!/bin/sh\nexit 1\n");
+        assert!(vpn.vpn_subnet().await.is_none());
     }
 }

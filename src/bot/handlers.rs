@@ -64,6 +64,11 @@ pub enum Action {
     SetConf(bool),
     SetQr(bool),
     SetLink(bool),
+    // --- Маршруты клиента, AllowedIPs (экран пресетов) ---
+    RouteToggle(crate::vpn::validate::RouteKey),
+    RouteCustom,
+    RouteSkip,
+    RouteApply,
     // --- Фильтр списка клиентов (#28) ---
     SetListFilter(crate::vpn::model::ClientFilter),
     // --- Группы (#20): делегирование управления групповым админам ---
@@ -115,6 +120,9 @@ fn parse_callback(data: &str) -> Action {
         "g:new" => Action::GroupCreate,
         "g:selmenu" => Action::GroupSelectMenu,
         "gscope" => Action::GroupScopeAsk,
+        "aip:custom" => Action::RouteCustom,
+        "aip:skip" => Action::RouteSkip,
+        "aip:apply" => Action::RouteApply,
         _ => {
             if let Some(v) = data.strip_prefix("g:card:") {
                 v.parse().map(Action::GroupCard).unwrap_or(Action::Unknown)
@@ -208,6 +216,12 @@ fn parse_callback(data: &str) -> Action {
                         .map(|g| Action::GroupScopeSet(crate::store::ListScope::Group(g)))
                         .unwrap_or(Action::Unknown),
                 }
+            } else if let Some(v) = data.strip_prefix("aip:t:") {
+                // Точные "aip:custom"/"aip:skip"/"aip:apply" разобраны выше —
+                // с этим префиксом они не пересекаются (другой разделитель).
+                crate::vpn::validate::RouteKey::parse_str(v)
+                    .map(Action::RouteToggle)
+                    .unwrap_or(Action::Unknown)
             } else if let Some(v) = data.strip_prefix("page:") {
                 v.parse().map(Action::Page).unwrap_or(Action::Unknown)
             } else if let Some(v) = data.strip_prefix("client:") {
@@ -413,6 +427,82 @@ async fn edit_or_send(
     }
 }
 
+/// Индикатор «⏳ …» на месте нажатой кнопки: длительная операция не плодит
+/// отдельное сообщение, которое потом надо удалять. Возвращает id сообщения,
+/// РЕАЛЬНО показывающего прогресс — исходного (обычный случай) или нового,
+/// если отредактировать не вышло. Дальше работают именно с ним.
+async fn progress(bot: &Bot, chat: ChatId, msg_id: MessageId, text: String) -> MessageId {
+    let edit = bot
+        .edit_message_text(chat, msg_id, text.clone())
+        .reply_markup(InlineKeyboardMarkup::default())
+        .parse_mode(ParseMode::Html)
+        .await;
+    match edit {
+        Ok(_) => msg_id,
+        Err(teloxide::errors::RequestError::Api(
+            teloxide::errors::ApiError::MessageNotModified,
+        )) => msg_id,
+        Err(e) => {
+            tracing::debug!(error = %e, "edit для индикатора не удался — отправляю новое");
+            let _ = bot
+                .edit_message_reply_markup(chat, msg_id)
+                .reply_markup(InlineKeyboardMarkup::default())
+                .await;
+            match bot
+                .send_message(chat, text)
+                .parse_mode(ParseMode::Html)
+                .await
+            {
+                Ok(m) => m.id,
+                Err(_) => msg_id,
+            }
+        }
+    }
+}
+
+/// Итоговый экран ПОСЛЕ выдачи файлов: удаляет сообщение-источник и отправляет
+/// результат вниз. Редактирование тут не годится — клавиатура осталась бы над
+/// присланными файлами; delete+send держит её под ними, и при этом чат не
+/// растёт: одно сообщение ушло, одно пришло.
+async fn finish_below(
+    bot: &Bot,
+    chat: ChatId,
+    msg_id: MessageId,
+    text: String,
+    kb: InlineKeyboardMarkup,
+) {
+    let _ = bot.delete_message(chat, msg_id).await;
+    let _ = bot
+        .send_message(chat, text)
+        .reply_markup(kb)
+        .parse_mode(ParseMode::Html)
+        .await;
+}
+
+/// Экран выбора маршрутов: заголовок и клавиатура собираются из одного набора
+/// тумблеров (единственное место, где он превращается в строку AllowedIPs).
+#[allow(clippy::too_many_arguments)]
+async fn show_routes(
+    bot: &Bot,
+    chat: ChatId,
+    msg_id: MessageId,
+    lang: Lang,
+    ctx: &crate::bot::RouteCtx,
+    sel: crate::vpn::validate::RouteSelection,
+    subnet: Option<&str>,
+    current: Option<&str>,
+) {
+    let pending = crate::vpn::validate::build_allowed_ips(sel, subnet);
+    edit_or_send(
+        bot,
+        chat,
+        msg_id,
+        i18n::routes_title(lang, ctx.name(), current, pending.as_deref()),
+        menu::allowed_ips_menu(lang, sel, subnet, ctx.is_create()),
+    )
+    .await;
+}
+
 /// Домашняя клавиатура по роли: владельцу — полное меню, групповому админу —
 /// его сокращённое (кнопка смены группы при нескольких группах).
 pub fn home_menu(role: &Role, lang: Lang) -> InlineKeyboardMarkup {
@@ -447,9 +537,14 @@ fn authorize(action: &Action, role: &Role, settings: &Store) -> bool {
         return false;
     }
     match action {
-        // Доступно всем аутентифицированным ролям.
+        // Доступно всем аутентифицированным ролям. Шаги диалога создания
+        // (срок, PSK, маршруты) — тоже: вход в диалог гейтится Add, а тот
+        // открыт всем; правку маршрутов существующего клиента гейтит Modify
+        // (owner-only) и повторная проверка роли в самой ветке.
         Menu | List | Add | Stats | Page(_) | Expiry(_) | AddPsk(_) | Lang(_)
-        | SetListFilter(_) | Unknown => true,
+        | SetListFilter(_) | RouteToggle(_) | RouteCustom | RouteSkip | RouteApply | Unknown => {
+            true
+        }
         // Экран/установка текущей группы: только GA, группа — только своя.
         GroupSelectMenu => matches!(role, Role::GroupAdmin(_)),
         GroupSelect(id) => matches!(role, Role::GroupAdmin(groups) if groups.contains(id)),
@@ -594,6 +689,9 @@ async fn show_settings(bot: &Bot, chat: ChatId, msg_id: MessageId, lang: Lang, s
 }
 
 /// Перерисовывает карточку группы: заголовок и клавиатура из одного чтения БД.
+/// `notice` — строка результата только что выполненного действия (админ удалён,
+/// инвайт отозван). Она идёт первой строкой карточки, а не отдельным
+/// сообщением: результат виден, а чат не растёт.
 async fn show_group_card(
     bot: &Bot,
     chat: ChatId,
@@ -601,19 +699,32 @@ async fn show_group_card(
     lang: Lang,
     settings: &Store,
     id: i64,
+    notice: Option<String>,
 ) {
     let Some(g) = settings.group(id) else {
-        let _ = bot.send_message(chat, i18n::not_found(lang)).await;
+        edit_or_send(
+            bot,
+            chat,
+            msg_id,
+            i18n::not_found(lang),
+            menu::main_menu(lang),
+        )
+        .await;
         return;
     };
     let count = settings.group_client_count(id);
     let admins = settings.group_admin_ids(id);
     let has_invite = settings.active_invite(id, now_epoch()).is_some();
+    let card = i18n::group_card(lang, &g.name, count, g.max_clients, admins.len());
+    let text = match notice {
+        Some(n) => format!("{n}\n\n{card}"),
+        None => card,
+    };
     edit_or_send(
         bot,
         chat,
         msg_id,
-        i18n::group_card(lang, &g.name, count, g.max_clients, admins.len()),
+        text,
         menu::group_card_menu(lang, id, has_invite),
     )
     .await;
@@ -711,7 +822,7 @@ async fn message_handler(
 
     let state = dialogue.get().await?.unwrap_or_default();
     match state {
-        State::AwaitingName => {
+        State::AwaitingName { prompt } => {
             let name = msg.text().unwrap_or_default().to_string();
             let slug = if settings.name_slug() {
                 Some(crate::vpn::validate::gen_slug())
@@ -726,12 +837,14 @@ async fn message_handler(
                                 Lang::Ru => format!("Клиент: {valid}"),
                                 Lang::En => format!("Client: {valid}"),
                             };
-                            bot.send_message(
+                            edit_or_send(
+                                &bot,
                                 msg.chat.id,
+                                prompt,
                                 format!("{confirm_line}\n{}", i18n::ask_expiry(lang)),
+                                menu::expiry_menu(lang),
                             )
-                            .reply_markup(menu::expiry_menu(lang))
-                            .await?;
+                            .await;
                             dialogue
                                 .update(State::AwaitingExpiry {
                                     name: valid,
@@ -750,18 +863,27 @@ async fn message_handler(
                             } else {
                                 home_menu(&role, lang)
                             };
-                            bot.send_message(msg.chat.id, i18n::client_exists(lang, &valid))
-                                .reply_markup(kb)
-                                .parse_mode(ParseMode::Html)
-                                .await?;
+                            edit_or_send(
+                                &bot,
+                                msg.chat.id,
+                                prompt,
+                                i18n::client_exists(lang, &valid),
+                                kb,
+                            )
+                            .await;
                             dialogue.update(State::Idle).await?;
                         }
                         Err(e) => {
                             // list --json упал — не блокируем создание (fail-open).
                             tracing::warn!(error = %e, "exists check failed, proceeding without duplicate guard");
-                            bot.send_message(msg.chat.id, i18n::ask_expiry(lang))
-                                .reply_markup(menu::expiry_menu(lang))
-                                .await?;
+                            edit_or_send(
+                                &bot,
+                                msg.chat.id,
+                                prompt,
+                                i18n::ask_expiry(lang),
+                                menu::expiry_menu(lang),
+                            )
+                            .await;
                             dialogue
                                 .update(State::AwaitingExpiry {
                                     name: valid,
@@ -772,19 +894,35 @@ async fn message_handler(
                     }
                 }
                 Err(_e) => {
-                    bot.send_message(msg.chat.id, i18n::bad_name(lang, settings.name_slug()))
-                        .await?;
+                    // Невалидное имя — остаёмся в том же state, вопрос
+                    // перерисовывается с пометкой, а не дублируется.
+                    edit_or_send(
+                        &bot,
+                        msg.chat.id,
+                        prompt,
+                        i18n::bad_name(lang, settings.name_slug()),
+                        menu::cancel_menu(lang),
+                    )
+                    .await;
                 }
             }
         }
-        State::AwaitingCustomExpiry { name, recreate } => {
+        State::AwaitingCustomExpiry {
+            name,
+            recreate,
+            prompt,
+        } => {
             let raw = msg.text().unwrap_or_default().to_string();
             match crate::vpn::validate::validate_expiry(&raw) {
                 Ok(exp) => {
-                    bot.send_message(msg.chat.id, i18n::psk_step(lang, settings.psk_default()))
-                        .reply_markup(menu::psk_step(lang, settings.psk_default()))
-                        .parse_mode(ParseMode::Html)
-                        .await?;
+                    edit_or_send(
+                        &bot,
+                        msg.chat.id,
+                        prompt,
+                        i18n::psk_step(lang, settings.psk_default()),
+                        menu::psk_step(lang, settings.psk_default()),
+                    )
+                    .await;
                     dialogue
                         .update(State::AwaitingPsk {
                             name,
@@ -794,19 +932,26 @@ async fn message_handler(
                         .await?;
                 }
                 Err(_e) => {
-                    bot.send_message(msg.chat.id, i18n::bad_expiry(lang))
-                        .await?;
+                    edit_or_send(
+                        &bot,
+                        msg.chat.id,
+                        prompt,
+                        i18n::bad_expiry(lang),
+                        menu::cancel_menu(lang),
+                    )
+                    .await;
                 }
             }
         }
-        State::AwaitingModifyValue { name, param } => {
+        State::AwaitingModifyValue {
+            name,
+            param,
+            prompt,
+        } => {
             let raw = msg.text().unwrap_or_default().to_string();
             match crate::vpn::validate::parse_modify_value(param, &raw) {
                 Ok(value) => {
-                    let waiting = bot
-                        .send_message(msg.chat.id, i18n::creating(lang))
-                        .await
-                        .ok();
+                    let pid = progress(&bot, msg.chat.id, prompt, i18n::creating(lang)).await;
                     match vpn.modify(&name, param, &value).await {
                         Ok(out) => {
                             settings.log_event(
@@ -816,50 +961,88 @@ async fn message_handler(
                                 Some(uid),
                                 Some(param.as_str()),
                             );
-                            if let Some(m) = waiting {
-                                let _ = bot.delete_message(msg.chat.id, m.id).await;
-                            }
-                            bot.send_message(
+                            edit_or_send(
+                                &bot,
                                 msg.chat.id,
+                                pid,
                                 i18n::modify_done(lang, param, &out.value),
+                                menu::client_card(lang, &name, role.is_owner()),
                             )
-                            .reply_markup(menu::main_menu(lang))
-                            .parse_mode(ParseMode::Html)
-                            .await?;
+                            .await;
                         }
                         Err(e) => {
                             tracing::error!(error = %e, "modify провалился");
-                            if let Some(m) = waiting {
-                                let _ = bot.delete_message(msg.chat.id, m.id).await;
-                            }
-                            bot.send_message(msg.chat.id, i18n::error_text(lang, &e))
-                                .await?;
+                            edit_or_send(
+                                &bot,
+                                msg.chat.id,
+                                pid,
+                                i18n::error_text(lang, &e),
+                                menu::client_card(lang, &name, role.is_owner()),
+                            )
+                            .await;
                         }
                     }
                     dialogue.exit().await?;
                 }
                 Err(_e) => {
                     // Невалидный ввод — остаёмся в том же state, даём попробовать снова.
-                    bot.send_message(
+                    edit_or_send(
+                        &bot,
                         msg.chat.id,
+                        prompt,
                         format!("⚠️ {}", i18n::ask_modify_param(lang, param)),
+                        menu::cancel_menu(lang),
                     )
-                    .await?;
+                    .await;
                 }
             }
         }
-        State::AwaitingModifyParam { name } => {
-            // Пользователь ввёл текст вместо нажатия кнопки выбора параметра —
-            // не сбрасываем диалог, переспрашиваем с подсказкой.
-            bot.send_message(
+        State::AwaitingRoutesCustom { ctx, prompt } => {
+            // Ручной ввод CIDR: значение применяется сразу — и при создании
+            // (клиент создаётся, затем modify), и при правке существующего.
+            let raw = msg.text().unwrap_or_default().to_string();
+            let Ok(value) = crate::vpn::validate::parse_allowed_ips(&raw) else {
+                edit_or_send(
+                    &bot,
+                    msg.chat.id,
+                    prompt,
+                    format!(
+                        "⚠️ {}",
+                        i18n::ask_modify_param(lang, crate::vpn::validate::ModifyParam::AllowedIps)
+                    ),
+                    menu::cancel_menu(lang),
+                )
+                .await;
+                return Ok(());
+            };
+            apply_routes(
+                &bot,
                 msg.chat.id,
-                format!("{} {}", i18n::modify_param_select_title(lang), name),
+                prompt,
+                &dialogue,
+                &vpn,
+                &settings,
+                lang,
+                &role,
+                uid,
+                ctx,
+                Some(value.as_str()),
             )
-            .reply_markup(menu::modify_param_menu(lang, &name))
-            .parse_mode(ParseMode::Html)
             .await?;
         }
-        State::AwaitingBulkPrefix => {
+        State::AwaitingModifyParam { name, prompt } => {
+            // Пользователь ввёл текст вместо нажатия кнопки выбора параметра —
+            // не сбрасываем диалог, переспрашиваем с подсказкой.
+            edit_or_send(
+                &bot,
+                msg.chat.id,
+                prompt,
+                format!("{} {}", i18n::modify_param_select_title(lang), name),
+                menu::modify_param_menu(lang, &name),
+            )
+            .await;
+        }
+        State::AwaitingBulkPrefix { prompt } => {
             let prefix = msg.text().unwrap_or_default().to_string();
             // Худший случай сразу (count=MAX_BULK, slug по текущей настройке):
             // слишком длинный префикс отбивается на первом шаге, а не после
@@ -867,9 +1050,14 @@ async fn message_handler(
             let slug_enabled = settings.name_slug();
             match crate::vpn::validate::validate_bulk_prefix(prefix.trim(), slug_enabled) {
                 Ok(()) => {
-                    bot.send_message(msg.chat.id, i18n::ask_bulk_count(lang))
-                        .reply_markup(menu::bulk_count_menu(lang))
-                        .await?;
+                    edit_or_send(
+                        &bot,
+                        msg.chat.id,
+                        prompt,
+                        i18n::ask_bulk_count(lang),
+                        menu::bulk_count_menu(lang),
+                    )
+                    .await;
                     dialogue
                         .update(State::AwaitingBulkCount {
                             prefix: prefix.trim().to_string(),
@@ -878,19 +1066,33 @@ async fn message_handler(
                 }
                 Err(_) => {
                     let max = crate::vpn::validate::max_bulk_prefix_len(slug_enabled);
-                    bot.send_message(msg.chat.id, i18n::bad_bulk_prefix(lang, max))
-                        .await?;
+                    edit_or_send(
+                        &bot,
+                        msg.chat.id,
+                        prompt,
+                        i18n::bad_bulk_prefix(lang, max),
+                        menu::cancel_menu(lang),
+                    )
+                    .await;
                 }
             }
         }
-        State::AwaitingBulkCustomExpiry { prefix, count } => {
+        State::AwaitingBulkCustomExpiry {
+            prefix,
+            count,
+            prompt,
+        } => {
             let raw = msg.text().unwrap_or_default().to_string();
             match crate::vpn::validate::validate_expiry(&raw) {
                 Ok(exp) => {
-                    bot.send_message(msg.chat.id, i18n::psk_step(lang, settings.psk_default()))
-                        .reply_markup(menu::bulk_psk_step(lang, settings.psk_default()))
-                        .parse_mode(ParseMode::Html)
-                        .await?;
+                    edit_or_send(
+                        &bot,
+                        msg.chat.id,
+                        prompt,
+                        i18n::psk_step(lang, settings.psk_default()),
+                        menu::bulk_psk_step(lang, settings.psk_default()),
+                    )
+                    .await;
                     dialogue
                         .update(State::AwaitingBulkPsk {
                             prefix,
@@ -900,20 +1102,32 @@ async fn message_handler(
                         .await?;
                 }
                 Err(_) => {
-                    bot.send_message(msg.chat.id, i18n::bad_expiry(lang))
-                        .await?;
+                    edit_or_send(
+                        &bot,
+                        msg.chat.id,
+                        prompt,
+                        i18n::bad_expiry(lang),
+                        menu::cancel_menu(lang),
+                    )
+                    .await;
                 }
             }
         }
-        State::AwaitingGroupName => {
+        State::AwaitingGroupName { prompt } => {
             if !role.is_owner() {
                 dialogue.update(State::Idle).await?;
                 return Ok(());
             }
             let raw = msg.text().unwrap_or_default().trim().to_string();
             if raw.is_empty() || raw.chars().count() > 32 {
-                bot.send_message(msg.chat.id, i18n::bad_group_name(lang))
-                    .await?;
+                edit_or_send(
+                    &bot,
+                    msg.chat.id,
+                    prompt,
+                    i18n::bad_group_name(lang),
+                    menu::cancel_menu(lang),
+                )
+                .await;
             } else {
                 match settings.create_group(&raw, now_epoch()) {
                     Ok(_) => {
@@ -924,36 +1138,57 @@ async fn message_handler(
                             Some(uid),
                             Some(&raw),
                         );
-                        bot.send_message(msg.chat.id, i18n::group_created(lang, &raw))
-                            .parse_mode(ParseMode::Html)
-                            .reply_markup(menu::main_menu(lang))
-                            .await?;
+                        edit_or_send(
+                            &bot,
+                            msg.chat.id,
+                            prompt,
+                            i18n::group_created(lang, &raw),
+                            menu::main_menu(lang),
+                        )
+                        .await;
                         dialogue.update(State::Idle).await?;
                     }
                     Err(crate::store::GroupError::NameTaken) => {
-                        bot.send_message(msg.chat.id, i18n::group_name_taken(lang, &raw))
-                            .parse_mode(ParseMode::Html)
-                            .await?;
+                        edit_or_send(
+                            &bot,
+                            msg.chat.id,
+                            prompt,
+                            i18n::group_name_taken(lang, &raw),
+                            menu::cancel_menu(lang),
+                        )
+                        .await;
                     }
                     // NotFound для INSERT недостижим — сворачиваем в общий сбой.
                     Err(crate::store::GroupError::Db | crate::store::GroupError::NotFound) => {
                         let err = crate::error::Error::Telegram("db".into());
-                        bot.send_message(msg.chat.id, i18n::error_text(lang, &err))
-                            .await?;
+                        edit_or_send(
+                            &bot,
+                            msg.chat.id,
+                            prompt,
+                            i18n::error_text(lang, &err),
+                            menu::main_menu(lang),
+                        )
+                        .await;
                         dialogue.update(State::Idle).await?;
                     }
                 }
             }
         }
-        State::AwaitingGroupRename { id } => {
+        State::AwaitingGroupRename { id, prompt } => {
             if !role.is_owner() {
                 dialogue.update(State::Idle).await?;
                 return Ok(());
             }
             let raw = msg.text().unwrap_or_default().trim().to_string();
             if raw.is_empty() || raw.chars().count() > 32 {
-                bot.send_message(msg.chat.id, i18n::bad_group_name(lang))
-                    .await?;
+                edit_or_send(
+                    &bot,
+                    msg.chat.id,
+                    prompt,
+                    i18n::bad_group_name(lang),
+                    menu::cancel_menu(lang),
+                )
+                .await;
             } else {
                 match settings.rename_group(id, &raw) {
                     Ok(()) => {
@@ -964,34 +1199,56 @@ async fn message_handler(
                             Some(uid),
                             Some(&raw),
                         );
-                        bot.send_message(msg.chat.id, i18n::group_renamed(lang, &raw))
-                            .parse_mode(ParseMode::Html)
-                            .reply_markup(menu::main_menu(lang))
-                            .await?;
+                        show_group_card(
+                            &bot,
+                            msg.chat.id,
+                            prompt,
+                            lang,
+                            &settings,
+                            id,
+                            Some(i18n::group_renamed(lang, &raw)),
+                        )
+                        .await;
                         dialogue.update(State::Idle).await?;
                     }
                     Err(crate::store::GroupError::NameTaken) => {
-                        bot.send_message(msg.chat.id, i18n::group_name_taken(lang, &raw))
-                            .parse_mode(ParseMode::Html)
-                            .await?;
+                        edit_or_send(
+                            &bot,
+                            msg.chat.id,
+                            prompt,
+                            i18n::group_name_taken(lang, &raw),
+                            menu::cancel_menu(lang),
+                        )
+                        .await;
                     }
                     Err(crate::store::GroupError::NotFound) => {
                         // Группу удалили, пока владелец вводил новое имя.
-                        bot.send_message(msg.chat.id, i18n::not_found(lang))
-                            .reply_markup(menu::main_menu(lang))
-                            .await?;
+                        edit_or_send(
+                            &bot,
+                            msg.chat.id,
+                            prompt,
+                            i18n::not_found(lang),
+                            menu::main_menu(lang),
+                        )
+                        .await;
                         dialogue.update(State::Idle).await?;
                     }
                     Err(crate::store::GroupError::Db) => {
                         let err = crate::error::Error::Telegram("db".into());
-                        bot.send_message(msg.chat.id, i18n::error_text(lang, &err))
-                            .await?;
+                        edit_or_send(
+                            &bot,
+                            msg.chat.id,
+                            prompt,
+                            i18n::error_text(lang, &err),
+                            menu::main_menu(lang),
+                        )
+                        .await;
                         dialogue.update(State::Idle).await?;
                     }
                 }
             }
         }
-        State::AwaitingGroupQuota { id } => {
+        State::AwaitingGroupQuota { id, prompt } => {
             if !role.is_owner() {
                 dialogue.update(State::Idle).await?;
                 return Ok(());
@@ -1011,25 +1268,42 @@ async fn message_handler(
                                 quota.map_or_else(|| "unlimited".to_string(), |q| q.to_string())
                             )),
                         );
-                        bot.send_message(msg.chat.id, i18n::group_quota_set(lang, quota))
-                            .reply_markup(menu::main_menu(lang))
-                            .parse_mode(ParseMode::Html)
-                            .await?;
+                        show_group_card(
+                            &bot,
+                            msg.chat.id,
+                            prompt,
+                            lang,
+                            &settings,
+                            id,
+                            Some(i18n::group_quota_set(lang, quota)),
+                        )
+                        .await;
                     } else {
                         // Группу удалили, пока владелец вводил лимит.
-                        bot.send_message(msg.chat.id, i18n::not_found(lang))
-                            .reply_markup(menu::main_menu(lang))
-                            .await?;
+                        edit_or_send(
+                            &bot,
+                            msg.chat.id,
+                            prompt,
+                            i18n::not_found(lang),
+                            menu::main_menu(lang),
+                        )
+                        .await;
                     }
                     dialogue.update(State::Idle).await?;
                 }
                 _ => {
-                    bot.send_message(msg.chat.id, i18n::bad_group_quota(lang))
-                        .await?;
+                    edit_or_send(
+                        &bot,
+                        msg.chat.id,
+                        prompt,
+                        i18n::bad_group_quota(lang),
+                        menu::cancel_menu(lang),
+                    )
+                    .await;
                 }
             }
         }
-        State::AwaitingGroupAdminId { id } => {
+        State::AwaitingGroupAdminId { id, prompt } => {
             if !role.is_owner() {
                 dialogue.update(State::Idle).await?;
                 return Ok(());
@@ -1047,24 +1321,42 @@ async fn message_handler(
                             Some(uid),
                             Some(&format!("group={id} user={new_admin} via=manual")),
                         );
-                        bot.send_message(msg.chat.id, i18n::admin_added(lang, new_admin, &gname))
-                            .parse_mode(ParseMode::Html)
-                            .reply_markup(menu::main_menu(lang))
-                            .await?;
+                        show_group_card(
+                            &bot,
+                            msg.chat.id,
+                            prompt,
+                            lang,
+                            &settings,
+                            id,
+                            Some(i18n::admin_added(lang, new_admin, &gname)),
+                        )
+                        .await;
                         if first_admin_ever && !settings.name_slug() {
                             bot.send_message(msg.chat.id, i18n::slug_recommend(lang))
                                 .reply_markup(menu::slug_recommend_menu(lang))
                                 .await?;
                         }
                     } else {
-                        bot.send_message(msg.chat.id, i18n::admin_already(lang, new_admin))
-                            .await?;
+                        edit_or_send(
+                            &bot,
+                            msg.chat.id,
+                            prompt,
+                            i18n::admin_already(lang, new_admin),
+                            menu::cancel_menu(lang),
+                        )
+                        .await;
                     }
                     dialogue.update(State::Idle).await?;
                 }
                 _ => {
-                    bot.send_message(msg.chat.id, i18n::bad_admin_id(lang))
-                        .await?;
+                    edit_or_send(
+                        &bot,
+                        msg.chat.id,
+                        prompt,
+                        i18n::bad_admin_id(lang),
+                        menu::cancel_menu(lang),
+                    )
+                    .await;
                 }
             }
         }
@@ -1108,23 +1400,34 @@ async fn message_handler(
     Ok(())
 }
 
+/// Создание клиента: `add`, привязка к группе, индивидуальные маршруты и
+/// выдача файлов. `allowed_ips` = None — клиент остаётся на глобальном режиме
+/// маршрутизации сервера (как было до появления экрана маршрутов); Some —
+/// значение ставится отдельным вызовом `modify` сразу после создания, потому
+/// что `add` в инсталлере флага для AllowedIPs не имеет. Порядок важен:
+/// `modify` перегенерирует .conf/QR/vpn://, поэтому файлы уходят после него.
+///
+/// Сообщение-источник (`msg_id`) служит индикатором «⏳», а затем удаляется в
+/// пользу итогового экрана под файлами — чат не растёт.
 #[allow(clippy::too_many_arguments)]
 async fn finish_add(
     bot: &Bot,
     chat: ChatId,
+    msg_id: MessageId,
     vpn: &Vpn,
     settings: &Store,
     lang: Lang,
     name: &str,
     expires: Option<&str>,
     psk: bool,
+    allowed_ips: Option<&str>,
     recreate: bool,
     uid: i64,
     group: Option<i64>,
     role: &Role,
 ) {
     let home = home_menu(role, lang);
-    let waiting = bot.send_message(chat, i18n::creating(lang)).await.ok();
+    let pid = progress(bot, chat, msg_id, i18n::creating(lang)).await;
     // Квота группы: проверка непосредственно перед созданием. Best-effort:
     // при двух конкурентных созданиях обе проверки могут пройти до add —
     // перелёт максимум на глубину гонки, системно квота не копится. Только
@@ -1134,13 +1437,8 @@ async fn finish_add(
         if let Some(gid) = group {
             if let Some(remaining) = settings.group_remaining(gid) {
                 if remaining < 1 {
-                    if let Some(m) = waiting {
-                        let _ = bot.delete_message(chat, m.id).await;
-                    }
                     let quota = settings.group(gid).and_then(|g| g.max_clients).unwrap_or(0);
-                    let _ = bot
-                        .send_message(chat, i18n::quota_reached(lang, quota))
-                        .await;
+                    edit_or_send(bot, chat, pid, i18n::quota_reached(lang, quota), home).await;
                     return;
                 }
             }
@@ -1151,15 +1449,15 @@ async fn finish_add(
         // не создаём нового, показываем ошибку; старый клиент остаётся.
         if let Err(e) = vpn.remove(name).await {
             tracing::error!(error = %e, "remove перед recreate провалился");
-            if let Some(m) = waiting {
-                let _ = bot.delete_message(chat, m.id).await;
-            }
-            let _ = bot.send_message(chat, i18n::error_text(lang, &e)).await;
+            edit_or_send(bot, chat, pid, i18n::error_text(lang, &e), home).await;
             return;
         }
     }
+    // Предупреждения, которые не отменяют успех: попадают в итоговый экран
+    // отдельными строками, а не самостоятельными сообщениями.
+    let mut notes: Vec<String> = Vec::new();
     match vpn.add(name, expires, psk).await {
-        Ok(res) => {
+        Ok(mut res) => {
             settings.log_event(
                 now_epoch(),
                 EventKind::ClientAdd,
@@ -1199,10 +1497,7 @@ async fn finish_add(
                     // виден только владельцу, чинится вручную. Пользователю —
                     // честная ошибка.
                     tracing::error!(error = %e, client = name, "не удалось откатить клиента после гонки квоты");
-                    if let Some(m) = waiting {
-                        let _ = bot.delete_message(chat, m.id).await;
-                    }
-                    let _ = bot.send_message(chat, i18n::error_text(lang, &e)).await;
+                    edit_or_send(bot, chat, pid, i18n::error_text(lang, &e), home).await;
                     return;
                 }
                 settings.log_event(
@@ -1212,15 +1507,42 @@ async fn finish_add(
                     Some(uid),
                     Some("quota race rollback"),
                 );
-                if let Some(m) = waiting {
-                    let _ = bot.delete_message(chat, m.id).await;
-                }
                 let quota = settings.group(gid).and_then(|g| g.max_clients).unwrap_or(0);
-                let _ = bot
-                    .send_message(chat, i18n::quota_reached(lang, quota))
-                    .reply_markup(home)
-                    .await;
+                edit_or_send(bot, chat, pid, i18n::quota_reached(lang, quota), home).await;
                 return;
+            }
+            // Индивидуальные маршруты — до выдачи файлов: modify перезаписывает
+            // .conf и перегенерирует QR/vpn://, иначе пользователь получил бы
+            // артефакты с серверными AllowedIPs. Сбой modify клиента не
+            // отменяет: он рабочий, просто с маршрутами сервера.
+            if let Some(value) = allowed_ips {
+                match vpn
+                    .modify(name, crate::vpn::validate::ModifyParam::AllowedIps, value)
+                    .await
+                {
+                    Ok(_) => {
+                        settings.log_event(
+                            now_epoch(),
+                            EventKind::Modify,
+                            Some(name),
+                            Some(uid),
+                            Some(crate::vpn::validate::ModifyParam::AllowedIps.as_str()),
+                        );
+                        // modify перегенерировал .conf/QR/vpn:// — пути те же,
+                        // но `uri` из ответа `add` уже устарел (он читался с
+                        // диска ДО правки). Перечитываем, иначе в чат уйдёт
+                        // ссылка со старыми маршрутами. Сбой чтения не
+                        // критичен: остаются пути от add, файлы по ним уже
+                        // обновлены.
+                        if let Ok(fresh) = vpn.existing_files(name) {
+                            res = fresh;
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, client = name, "modify AllowedIPs после add провалился");
+                        notes.push(i18n::routes_apply_failed(lang));
+                    }
+                }
             }
             // Фильтр выдачи по тумблерам настроек (deliver_conf/qr/link): после
             // создания шлём только включённые артефакты. Ручная повторная выдача
@@ -1238,7 +1560,7 @@ async fn finish_add(
             .await
             {
                 tracing::error!(error = %e, "не удалось отправить файлы клиента");
-                let _ = bot.send_message(chat, i18n::error_text(lang, &e)).await;
+                notes.push(i18n::error_text(lang, &e));
             }
         }
         // Гонка: клиент появился между проверкой exists() и add — скрипт молча
@@ -1247,19 +1569,12 @@ async fn finish_add(
         // в скоупе роли (как в AwaitingName: групповому админу нельзя
         // предлагать пересоздание чужого клиента).
         Err(crate::error::Error::ClientExists(_)) => {
-            if let Some(m) = waiting {
-                let _ = bot.delete_message(chat, m.id).await;
-            }
             let kb = if client_in_scope(role, settings, name) {
                 menu::confirm_recreate(lang, name)
             } else {
                 home
             };
-            let _ = bot
-                .send_message(chat, i18n::client_exists(lang, name))
-                .reply_markup(kb)
-                .parse_mode(ParseMode::Html)
-                .await;
+            edit_or_send(bot, chat, pid, i18n::client_exists(lang, name), kb).await;
             return;
         }
         Err(e) => {
@@ -1267,24 +1582,150 @@ async fn finish_add(
             // «Готово» следом за ошибкой (#40). Клавиатуру возвращаем: без
             // неё пользователь оставался бы без меню после сбоя.
             tracing::error!(error = %e, "add провалился");
-            if let Some(m) = waiting {
-                let _ = bot.delete_message(chat, m.id).await;
-            }
-            let _ = bot
-                .send_message(chat, i18n::error_text(lang, &e))
-                .reply_markup(home)
-                .await;
+            edit_or_send(bot, chat, pid, i18n::error_text(lang, &e), home).await;
             return;
         }
     }
-    if let Some(m) = waiting {
-        let _ = bot.delete_message(chat, m.id).await;
+    let text = if notes.is_empty() {
+        i18n::done(lang)
+    } else {
+        format!("{}\n\n{}", i18n::done(lang), notes.join("\n"))
+    };
+    finish_below(bot, chat, pid, text, home).await;
+}
+
+/// Применяет выбранные маршруты. При создании — доводит диалог до `finish_add`
+/// (клиент создаётся, затем получает AllowedIPs), при правке — один `modify`
+/// существующему клиенту. Общая точка для кнопки «Применить», «Как на сервере»
+/// (`value = None`, только при создании) и ручного ввода CIDR.
+#[allow(clippy::too_many_arguments)]
+async fn apply_routes(
+    bot: &Bot,
+    chat: ChatId,
+    msg_id: MessageId,
+    dialogue: &MyDialogue,
+    vpn: &Vpn,
+    settings: &Store,
+    lang: Lang,
+    role: &Role,
+    uid: i64,
+    ctx: crate::bot::RouteCtx,
+    value: Option<&str>,
+) -> HandlerResult {
+    match ctx {
+        crate::bot::RouteCtx::Create {
+            name,
+            expires,
+            recreate,
+            psk,
+        } => {
+            // Recreate: право на объект проверялось на входе в Action::Recreate —
+            // за время диалога (срок/PSK/маршруты) владелец мог отозвать группу
+            // у админа или перенести клиента. Перепроверяем перед созданием.
+            if recreate && !client_in_scope(role, settings, &name) {
+                edit_or_send(
+                    bot,
+                    chat,
+                    msg_id,
+                    session_expired_text(lang).to_string(),
+                    home_menu(role, lang),
+                )
+                .await;
+                dialogue.exit().await?;
+                return Ok(());
+            }
+            // Группа для привязки: при recreate — существующая привязка
+            // клиента; новому клиенту группового админа — его текущая группа
+            // (стала недоступна за время диалога — не создаём «в никуда»).
+            let group = match group_for_new_client(role, settings, uid, recreate, &name) {
+                Some(g) => g,
+                None => {
+                    if let Role::GroupAdmin(groups) = role {
+                        show_group_select(bot, chat, msg_id, lang, settings, groups).await;
+                    }
+                    dialogue.exit().await?;
+                    return Ok(());
+                }
+            };
+            finish_add(
+                bot,
+                chat,
+                msg_id,
+                vpn,
+                settings,
+                lang,
+                &name,
+                expires.as_deref(),
+                psk,
+                value,
+                recreate,
+                uid,
+                group,
+                role,
+            )
+            .await;
+            dialogue.exit().await?;
+        }
+        crate::bot::RouteCtx::Edit { name } => {
+            // Правка чужих параметров — только владельцу (Modify тоже
+            // owner-only; роль могла смениться за время диалога).
+            if !role.is_owner() {
+                edit_or_send(
+                    bot,
+                    chat,
+                    msg_id,
+                    session_expired_text(lang).to_string(),
+                    home_menu(role, lang),
+                )
+                .await;
+                dialogue.exit().await?;
+                return Ok(());
+            }
+            let card = menu::client_card(lang, &name, role.is_owner());
+            let Some(value) = value else {
+                // Пропуск шага существует только при создании — у существующего
+                // клиента нечего «оставить как на сервере». Сюда попадает лишь
+                // crafted callback: кнопки такого сочетания не дают.
+                edit_or_send(
+                    bot,
+                    chat,
+                    msg_id,
+                    unknown_action_text(lang).to_string(),
+                    card,
+                )
+                .await;
+                dialogue.exit().await?;
+                return Ok(());
+            };
+            let param = crate::vpn::validate::ModifyParam::AllowedIps;
+            let pid = progress(bot, chat, msg_id, i18n::creating(lang)).await;
+            match vpn.modify(&name, param, value).await {
+                Ok(out) => {
+                    settings.log_event(
+                        now_epoch(),
+                        EventKind::Modify,
+                        Some(&name),
+                        Some(uid),
+                        Some(param.as_str()),
+                    );
+                    edit_or_send(
+                        bot,
+                        chat,
+                        pid,
+                        i18n::modify_done(lang, param, &out.value),
+                        card,
+                    )
+                    .await;
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "modify AllowedIPs провалился");
+                    edit_or_send(bot, chat, pid, i18n::error_text(lang, &e), card).await;
+                }
+            }
+            dialogue.exit().await?;
+        }
     }
-    let _ = bot
-        .send_message(chat, i18n::done(lang))
-        .reply_markup(home)
-        .parse_mode(ParseMode::Html)
-        .await;
+    Ok(())
 }
 
 /// Завершающий шаг массовой генерации: превентивные проверки (вместо длинной
@@ -1307,6 +1748,7 @@ async fn finish_add(
 async fn finish_bulk(
     bot: &Bot,
     chat: ChatId,
+    msg_id: MessageId,
     vpn: &Vpn,
     settings: &Store,
     lang: Lang,
@@ -1316,7 +1758,8 @@ async fn finish_bulk(
     psk: bool,
     uid: i64,
 ) {
-    let waiting = bot.send_message(chat, i18n::bulk_creating(lang)).await.ok();
+    let home = menu::main_menu(lang);
+    let pid = progress(bot, chat, msg_id, i18n::bulk_creating(lang)).await;
 
     // 1. Генерация имён (slug из настроек — единый для всей пачки, как в add).
     let slug = if settings.name_slug() {
@@ -1327,13 +1770,8 @@ async fn finish_bulk(
     let names = match crate::vpn::validate::gen_bulk_names(prefix, count as u32, slug.as_deref()) {
         Ok(n) => n,
         Err(_) => {
-            if let Some(m) = waiting {
-                let _ = bot.delete_message(chat, m.id).await;
-            }
             let max = crate::vpn::validate::max_bulk_prefix_len(slug.is_some());
-            let _ = bot
-                .send_message(chat, i18n::bad_bulk_prefix(lang, max))
-                .await;
+            edit_or_send(bot, chat, pid, i18n::bad_bulk_prefix(lang, max), home).await;
             return;
         }
     };
@@ -1342,32 +1780,23 @@ async fn finish_bulk(
     match vpn.capacity().await {
         Ok(cap) => {
             if cap.free == 0 {
-                if let Some(m) = waiting {
-                    let _ = bot.delete_message(chat, m.id).await;
-                }
-                let _ = bot.send_message(chat, i18n::capacity_exhausted(lang)).await;
+                edit_or_send(bot, chat, pid, i18n::capacity_exhausted(lang), home).await;
                 return;
             }
             if (cap.free as usize) < count {
-                if let Some(m) = waiting {
-                    let _ = bot.delete_message(chat, m.id).await;
-                }
-                let _ = bot
-                    .send_message(
-                        chat,
-                        i18n::capacity_insufficient(lang, cap.free, count as u32),
-                    )
-                    .await;
+                edit_or_send(
+                    bot,
+                    chat,
+                    pid,
+                    i18n::capacity_insufficient(lang, cap.free, count as u32),
+                    home,
+                )
+                .await;
                 return;
             }
         }
         Err(_) => {
-            if let Some(m) = waiting {
-                let _ = bot.delete_message(chat, m.id).await;
-            }
-            let _ = bot
-                .send_message(chat, i18n::capacity_unavailable(lang))
-                .await;
+            edit_or_send(bot, chat, pid, i18n::capacity_unavailable(lang), home).await;
             return;
         }
     }
@@ -1380,13 +1809,7 @@ async fn finish_bulk(
             let existing_names: std::collections::HashSet<&str> =
                 existing.iter().map(|c| c.name.as_str()).collect();
             if let Some(collision) = names.iter().find(|n| existing_names.contains(n.as_str())) {
-                if let Some(m) = waiting {
-                    let _ = bot.delete_message(chat, m.id).await;
-                }
-                let _ = bot
-                    .send_message(chat, i18n::client_exists(lang, collision))
-                    .parse_mode(ParseMode::Html)
-                    .await;
+                edit_or_send(bot, chat, pid, i18n::client_exists(lang, collision), home).await;
                 return;
             }
         }
@@ -1415,29 +1838,30 @@ async fn finish_bulk(
             }
             // 5. Альбом .conf — одним sendMediaGroup (только если включён и есть
             // что отправлять; пустой альбом Telegram отклонит).
+            let mut notes: Vec<String> = Vec::new();
             if settings.deliver_conf() && !res.created.is_empty() {
                 let conf_paths: Vec<String> =
                     res.created.iter().map(|c| c.conf_path.clone()).collect();
                 if let Err(e) = render::send_album(bot, chat, &conf_paths).await {
                     tracing::error!(error = %e, "альбом .conf не отправлен");
-                    // Файлы созданы, но не доставлены — сообщаем как ошибку.
-                    let _ = bot.send_message(chat, i18n::error_text(lang, &e)).await;
+                    // Файлы созданы, но не доставлены — предупреждение в итоге.
+                    notes.push(i18n::error_text(lang, &e));
                 }
             }
             // 6. Итог: «Создано N» (+ список пропущенных с причинами, если есть).
-            let _ = bot
-                .send_message(chat, i18n::bulk_result_summary(lang, &res))
-                .parse_mode(ParseMode::Html)
-                .reply_markup(menu::main_menu(lang))
-                .await;
+            // Уходит вниз, под альбом .conf, вместо индикатора «⏳».
+            let summary = i18n::bulk_result_summary(lang, &res);
+            let text = if notes.is_empty() {
+                summary
+            } else {
+                format!("{summary}\n\n{}", notes.join("\n"))
+            };
+            finish_below(bot, chat, pid, text, home).await;
         }
         Err(e) => {
             tracing::error!(error = %e, "add_many провалился");
-            let _ = bot.send_message(chat, i18n::error_text(lang, &e)).await;
+            edit_or_send(bot, chat, pid, i18n::error_text(lang, &e), home).await;
         }
-    }
-    if let Some(m) = waiting {
-        let _ = bot.delete_message(chat, m.id).await;
     }
 }
 
@@ -1529,7 +1953,7 @@ async fn render_clients_list(
         }
         Err(e) => {
             tracing::error!(error = %e, "stats провалился");
-            let _ = bot.send_message(chat, i18n::error_text(lang, &e)).await;
+            edit_or_send(bot, chat, msg_id, i18n::error_text(lang, &e), home).await;
         }
     }
 }
@@ -1729,7 +2153,14 @@ async fn callback_handler(
                     .await;
                 }
                 Err(e) => {
-                    bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                    edit_or_send(
+                        &bot,
+                        chat,
+                        msg_id,
+                        i18n::error_text(lang, &e),
+                        home_menu(&role, lang),
+                    )
+                    .await;
                 }
             }
         }
@@ -1758,11 +2189,25 @@ async fn callback_handler(
                     .await;
                 }
                 None => {
-                    bot.send_message(chat, i18n::not_found(lang)).await?;
+                    edit_or_send(
+                        &bot,
+                        chat,
+                        msg_id,
+                        i18n::not_found(lang),
+                        home_menu(&role, lang),
+                    )
+                    .await;
                 }
             },
             Err(e) => {
-                bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                edit_or_send(
+                    &bot,
+                    chat,
+                    msg_id,
+                    i18n::error_text(lang, &e),
+                    home_menu(&role, lang),
+                )
+                .await;
             }
         },
         Action::ClientHistory(name) => {
@@ -1780,6 +2225,7 @@ async fn callback_handler(
         Action::SendConf(name) => {
             // 📄 Конфиг — только .conf, без QR/ссылки (фильтр выдачи не применяется:
             // это ручная повторная выдача конкретного артефакта).
+            let card = menu::client_card(lang, &name, role.is_owner());
             match vpn.existing_files(&name) {
                 Ok(res) => {
                     if let Err(e) = bot
@@ -1787,58 +2233,61 @@ async fn callback_handler(
                         .await
                     {
                         let err = crate::error::Error::Telegram(e.to_string());
-                        bot.send_message(chat, i18n::error_text(lang, &err)).await?;
+                        edit_or_send(&bot, chat, msg_id, i18n::error_text(lang, &err), card).await;
                     }
                 }
                 Err(e) => {
-                    bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                    edit_or_send(&bot, chat, msg_id, i18n::error_text(lang, &e), card).await;
                 }
             }
         }
         Action::SendQr(name) => {
             // 🖼 QR — опционален (qrencode может отсутствовать на сервере).
+            let card = menu::client_card(lang, &name, role.is_owner());
             match vpn.existing_files(&name) {
                 Ok(res) if std::path::Path::new(&res.qr_path).exists() => {
                     if let Err(e) = bot.send_photo(chat, InputFile::file(&res.qr_path)).await {
                         let err = crate::error::Error::Telegram(e.to_string());
-                        bot.send_message(chat, i18n::error_text(lang, &err)).await?;
+                        edit_or_send(&bot, chat, msg_id, i18n::error_text(lang, &err), card).await;
                     }
                 }
                 Ok(_) => {
-                    bot.send_message(chat, i18n::qr_not_generated(lang)).await?;
+                    edit_or_send(&bot, chat, msg_id, i18n::qr_not_generated(lang), card).await;
                 }
                 Err(e) => {
-                    bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                    edit_or_send(&bot, chat, msg_id, i18n::error_text(lang, &e), card).await;
                 }
             }
         }
         Action::SendLink(name) => {
             // 🔗 Ссылка vpn:// — опциональна (qrencode генерирует её заодно с QR).
+            let card = menu::client_card(lang, &name, role.is_owner());
             match vpn.existing_files(&name) {
                 Ok(res) if !res.uri.is_empty() => {
-                    bot.send_message(chat, i18n::import_link(lang, &res.uri))
-                        .parse_mode(ParseMode::Html)
-                        .await?;
+                    // Ссылку кладём в само сообщение-карточку: её копируют
+                    // прямо отсюда, отдельное сообщение только копило бы чат.
+                    edit_or_send(&bot, chat, msg_id, i18n::import_link(lang, &res.uri), card).await;
                 }
                 Ok(_) => {
-                    bot.send_message(chat, i18n::link_unavailable(lang)).await?;
+                    edit_or_send(&bot, chat, msg_id, i18n::link_unavailable(lang), card).await;
                 }
                 Err(e) => {
-                    bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                    edit_or_send(&bot, chat, msg_id, i18n::error_text(lang, &e), card).await;
                 }
             }
         }
         Action::SendAll(name) => {
             // 📦 Всё — безусловная выдача conf+QR+ссылка (фильтр настроек игнорируется:
             // пользователь явно запросил всё через карточку клиента).
+            let card = menu::client_card(lang, &name, role.is_owner());
             match vpn.existing_files(&name) {
                 Ok(res) => {
                     if let Err(e) = render::send_client_files(&bot, chat, lang, &res).await {
-                        bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                        edit_or_send(&bot, chat, msg_id, i18n::error_text(lang, &e), card).await;
                     }
                 }
                 Err(e) => {
-                    bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                    edit_or_send(&bot, chat, msg_id, i18n::error_text(lang, &e), card).await;
                 }
             }
         }
@@ -1861,20 +2310,36 @@ async fn callback_handler(
                     Some(uid),
                     None,
                 );
-                bot.send_message(chat, i18n::deleted(lang, &name))
-                    .reply_markup(home_menu(&role, lang))
-                    .parse_mode(ParseMode::Html)
-                    .await?;
+                edit_or_send(
+                    &bot,
+                    chat,
+                    msg_id,
+                    i18n::deleted(lang, &name),
+                    home_menu(&role, lang),
+                )
+                .await;
             }
             Err(e) => {
                 tracing::error!(error = %e, "remove провалился");
-                bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                edit_or_send(
+                    &bot,
+                    chat,
+                    msg_id,
+                    i18n::error_text(lang, &e),
+                    home_menu(&role, lang),
+                )
+                .await;
             }
         },
         Action::Recreate(name) => {
-            bot.send_message(chat, i18n::ask_expiry(lang))
-                .reply_markup(menu::expiry_menu(lang))
-                .await?;
+            edit_or_send(
+                &bot,
+                chat,
+                msg_id,
+                i18n::ask_expiry(lang),
+                menu::expiry_menu(lang),
+            )
+            .await;
             dialogue
                 .update(State::AwaitingExpiry {
                     name,
@@ -1883,27 +2348,30 @@ async fn callback_handler(
                 .await?;
         }
         Action::Regen(name) => {
-            let waiting = bot.send_message(chat, i18n::regen_running(lang)).await.ok();
+            let pid = progress(&bot, chat, msg_id, i18n::regen_running(lang)).await;
             match vpn.regen_client(&name).await {
                 Ok(res) => {
                     settings.log_event(now_epoch(), EventKind::Regen, Some(&name), Some(uid), None);
-                    if let Err(e) = render::send_client_files(&bot, chat, lang, &res).await {
-                        tracing::error!(error = %e, "не удалось отправить файлы после regen");
-                        bot.send_message(chat, i18n::error_text(lang, &e)).await?;
-                    } else {
-                        bot.send_message(chat, i18n::done(lang))
-                            .reply_markup(home_menu(&role, lang))
-                            .parse_mode(ParseMode::Html)
-                            .await?;
-                    }
+                    let text = match render::send_client_files(&bot, chat, lang, &res).await {
+                        Ok(()) => i18n::done(lang),
+                        Err(e) => {
+                            tracing::error!(error = %e, "не удалось отправить файлы после regen");
+                            i18n::error_text(lang, &e)
+                        }
+                    };
+                    finish_below(&bot, chat, pid, text, home_menu(&role, lang)).await;
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "regen провалился");
-                    bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                    edit_or_send(
+                        &bot,
+                        chat,
+                        pid,
+                        i18n::error_text(lang, &e),
+                        home_menu(&role, lang),
+                    )
+                    .await;
                 }
-            }
-            if let Some(m) = waiting {
-                let _ = bot.delete_message(chat, m.id).await;
             }
         }
         Action::RegenAll => {
@@ -1917,41 +2385,21 @@ async fn callback_handler(
             .await;
         }
         Action::RegenAllRun(reset_routes) => {
-            let waiting = bot
-                .send_message(chat, i18n::regen_all_running(lang))
-                .await
-                .ok();
+            let pid = progress(&bot, chat, msg_id, i18n::regen_all_running(lang)).await;
             let regen_all_result = vpn.regen_all(reset_routes).await;
             if regen_all_result.is_ok() {
                 settings.log_event(now_epoch(), EventKind::RegenAll, None, Some(uid), None);
             }
-            match regen_all_result {
-                Ok(crate::vpn::RegenAllOutcome::NoClients) => {
-                    bot.send_message(chat, i18n::clients_empty(lang))
-                        .reply_markup(menu::main_menu(lang))
-                        .parse_mode(ParseMode::Html)
-                        .await?;
-                }
-                Ok(crate::vpn::RegenAllOutcome::Done(_n)) => {
-                    bot.send_message(chat, i18n::regen_all_done(lang))
-                        .reply_markup(menu::main_menu(lang))
-                        .parse_mode(ParseMode::Html)
-                        .await?;
-                }
-                Ok(crate::vpn::RegenAllOutcome::Partial { .. }) => {
-                    bot.send_message(chat, i18n::regen_all_partial(lang))
-                        .reply_markup(menu::main_menu(lang))
-                        .parse_mode(ParseMode::Html)
-                        .await?;
-                }
+            let text = match regen_all_result {
+                Ok(crate::vpn::RegenAllOutcome::NoClients) => i18n::clients_empty(lang),
+                Ok(crate::vpn::RegenAllOutcome::Done(_n)) => i18n::regen_all_done(lang),
+                Ok(crate::vpn::RegenAllOutcome::Partial { .. }) => i18n::regen_all_partial(lang),
                 Err(e) => {
                     tracing::error!(error = %e, "массовый regen провалился");
-                    bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                    i18n::error_text(lang, &e)
                 }
-            }
-            if let Some(m) = waiting {
-                let _ = bot.delete_message(chat, m.id).await;
-            }
+            };
+            edit_or_send(&bot, chat, pid, text, menu::main_menu(lang)).await;
         }
         Action::Add => {
             // Групповой админ без выбранной группы не может создавать «в никуда» —
@@ -1962,26 +2410,48 @@ async fn callback_handler(
                     return Ok(());
                 }
             }
-            bot.send_message(chat, i18n::ask_client_name(lang, settings.name_slug()))
+            edit_or_send(
+                &bot,
+                chat,
+                msg_id,
+                i18n::ask_client_name(lang, settings.name_slug()),
+                menu::cancel_menu(lang),
+            )
+            .await;
+            dialogue
+                .update(State::AwaitingName { prompt: msg_id })
                 .await?;
-            dialogue.update(State::AwaitingName).await?;
         }
         Action::Expiry(kind) => {
             let (name, recreate) = match dialogue.get().await?.unwrap_or_default() {
                 State::AwaitingExpiry { name, recreate } => (name, recreate),
                 _ => {
-                    bot.send_message(chat, session_expired_text(lang))
-                        .reply_markup(home_menu(&role, lang))
-                        .parse_mode(ParseMode::Html)
-                        .await?;
+                    edit_or_send(
+                        &bot,
+                        chat,
+                        msg_id,
+                        session_expired_text(lang).to_string(),
+                        home_menu(&role, lang),
+                    )
+                    .await;
                     return Ok(());
                 }
             };
             if kind == "custom" {
-                bot.send_message(chat, i18n::ask_custom_expiry(lang))
-                    .await?;
+                edit_or_send(
+                    &bot,
+                    chat,
+                    msg_id,
+                    i18n::ask_custom_expiry(lang),
+                    menu::cancel_menu(lang),
+                )
+                .await;
                 dialogue
-                    .update(State::AwaitingCustomExpiry { name, recreate })
+                    .update(State::AwaitingCustomExpiry {
+                        name,
+                        recreate,
+                        prompt: msg_id,
+                    })
                     .await?;
             } else {
                 let expires = if kind == "none" {
@@ -1989,10 +2459,14 @@ async fn callback_handler(
                 } else {
                     Some(kind.clone())
                 };
-                bot.send_message(chat, i18n::psk_step(lang, settings.psk_default()))
-                    .reply_markup(menu::psk_step(lang, settings.psk_default()))
-                    .parse_mode(ParseMode::Html)
-                    .await?;
+                edit_or_send(
+                    &bot,
+                    chat,
+                    msg_id,
+                    i18n::psk_step(lang, settings.psk_default()),
+                    menu::psk_step(lang, settings.psk_default()),
+                )
+                .await;
                 dialogue
                     .update(State::AwaitingPsk {
                         name,
@@ -2003,6 +2477,9 @@ async fn callback_handler(
             }
         }
         Action::AddPsk(psk) => {
+            // PSK выбран — остался шаг маршрутов. Подсеть VPN спрашиваем у
+            // check один раз, здесь: дальше экран живёт на тумблерах и лишних
+            // запусков скрипта не делает.
             let (name, expires, recreate) = match dialogue.get().await?.unwrap_or_default() {
                 State::AwaitingPsk {
                     name,
@@ -2010,72 +2487,190 @@ async fn callback_handler(
                     recreate,
                 } => (name, expires, recreate),
                 _ => {
-                    bot.send_message(chat, session_expired_text(lang))
-                        .reply_markup(home_menu(&role, lang))
-                        .parse_mode(ParseMode::Html)
-                        .await?;
+                    edit_or_send(
+                        &bot,
+                        chat,
+                        msg_id,
+                        session_expired_text(lang).to_string(),
+                        home_menu(&role, lang),
+                    )
+                    .await;
                     return Ok(());
                 }
             };
-            // Recreate: право на объект проверялось только на входе в
-            // Action::Recreate — за время диалога (выбор срока/PSK) владелец
-            // мог отозвать группу у админа или перенести клиента в другую
-            // группу. Перепроверяем непосредственно перед finish_add.
-            if recreate && !client_in_scope(&role, &settings, &name) {
-                bot.send_message(chat, session_expired_text(lang))
-                    .reply_markup(home_menu(&role, lang))
-                    .parse_mode(ParseMode::Html)
-                    .await?;
-                dialogue.exit().await?;
-                return Ok(());
-            }
-            // Группа для привязки: при recreate — существующая привязка
-            // клиента (см. group_for_new_client); новому клиенту групповому
-            // админу — его текущая группа (если она стала недоступна за время
-            // диалога — не создаём «в никуда», отправляем на выбор группы),
-            // владельцу — без группы.
-            let group = match group_for_new_client(&role, &settings, uid, recreate, &name) {
-                Some(g) => g,
-                None => {
-                    if let Role::GroupAdmin(groups) = &role {
-                        show_group_select(&bot, chat, msg_id, lang, &settings, groups).await;
-                    }
-                    dialogue.exit().await?;
-                    return Ok(());
-                }
+            // Пересоздание удаляет клиента и создаёт заново, поэтому его
+            // индивидуальные маршруты потерялись бы молча. Клиент ещё жив
+            // (remove произойдёт в finish_add) — читаем их и предзаполняем
+            // тумблеры, чтобы «Применить» вернуло то же самое.
+            let current = if recreate {
+                vpn.client_allowed_ips(&name)
+            } else {
+                None
             };
-            finish_add(
+            let subnet = vpn.vpn_subnet().await;
+            let sel = current
+                .as_deref()
+                .and_then(|v| crate::vpn::validate::selection_from_value(v, subnet.as_deref()))
+                .unwrap_or_default();
+            let ctx = crate::bot::RouteCtx::Create {
+                name,
+                expires,
+                recreate,
+                psk,
+            };
+            show_routes(
                 &bot,
                 chat,
+                msg_id,
+                lang,
+                &ctx,
+                sel,
+                subnet.as_deref(),
+                current.as_deref(),
+            )
+            .await;
+            dialogue
+                .update(State::AwaitingRoutes {
+                    ctx,
+                    sel,
+                    subnet,
+                    current,
+                })
+                .await?;
+        }
+        Action::RouteToggle(key) => {
+            let State::AwaitingRoutes {
+                ctx,
+                mut sel,
+                subnet,
+                current,
+            } = dialogue.get().await?.unwrap_or_default()
+            else {
+                edit_or_send(
+                    &bot,
+                    chat,
+                    msg_id,
+                    session_expired_text(lang).to_string(),
+                    home_menu(&role, lang),
+                )
+                .await;
+                return Ok(());
+            };
+            sel.toggle(key);
+            show_routes(
+                &bot,
+                chat,
+                msg_id,
+                lang,
+                &ctx,
+                sel,
+                subnet.as_deref(),
+                current.as_deref(),
+            )
+            .await;
+            dialogue
+                .update(State::AwaitingRoutes {
+                    ctx,
+                    sel,
+                    subnet,
+                    current,
+                })
+                .await?;
+        }
+        Action::RouteCustom => {
+            let State::AwaitingRoutes { ctx, .. } = dialogue.get().await?.unwrap_or_default()
+            else {
+                edit_or_send(
+                    &bot,
+                    chat,
+                    msg_id,
+                    session_expired_text(lang).to_string(),
+                    home_menu(&role, lang),
+                )
+                .await;
+                return Ok(());
+            };
+            edit_or_send(
+                &bot,
+                chat,
+                msg_id,
+                i18n::ask_modify_param(lang, crate::vpn::validate::ModifyParam::AllowedIps),
+                menu::cancel_menu(lang),
+            )
+            .await;
+            dialogue
+                .update(State::AwaitingRoutesCustom {
+                    ctx,
+                    prompt: msg_id,
+                })
+                .await?;
+        }
+        Action::RouteSkip | Action::RouteApply => {
+            let State::AwaitingRoutes {
+                ctx, sel, subnet, ..
+            } = dialogue.get().await?.unwrap_or_default()
+            else {
+                edit_or_send(
+                    &bot,
+                    chat,
+                    msg_id,
+                    session_expired_text(lang).to_string(),
+                    home_menu(&role, lang),
+                )
+                .await;
+                return Ok(());
+            };
+            // «Как на сервере» — значение не задаём вовсе; «Применить» —
+            // собираем строку из тумблеров (пустой набор кнопку не показывает,
+            // но craftable callback обрабатываем как пропуск).
+            let value = if action == Action::RouteSkip {
+                None
+            } else {
+                crate::vpn::validate::build_allowed_ips(sel, subnet.as_deref())
+            };
+            apply_routes(
+                &bot,
+                chat,
+                msg_id,
+                &dialogue,
                 &vpn,
                 &settings,
                 lang,
-                &name,
-                expires.as_deref(),
-                psk,
-                recreate,
-                uid,
-                group,
                 &role,
+                uid,
+                ctx,
+                value.as_deref(),
             )
-            .await;
-            dialogue.exit().await?;
+            .await?;
         }
         Action::AddBulk => {
             // Шаг 1/4 массового диалога: запрос префикса (текстовый ввод, а не
             // кнопка). Валидация префикса — на следующем шаге (gen_bulk_names с
             // count=1 как smoke-проверка), тут только приглашение к вводу.
-            bot.send_message(chat, i18n::ask_bulk_prefix(lang)).await?;
-            dialogue.update(State::AwaitingBulkPrefix).await?;
+            edit_or_send(
+                &bot,
+                chat,
+                msg_id,
+                i18n::ask_bulk_prefix(lang),
+                menu::cancel_menu(lang),
+            )
+            .await;
+            dialogue
+                .update(State::AwaitingBulkPrefix { prompt: msg_id })
+                .await?;
         }
         Action::AddBulkRun(count) => {
             // callback_data — untrusted input (craftable). Клавиатура эмитит
             // только 1/3/5/10, но защищаемся от crafted bulk:N извне.
             if count == 0 || count > crate::vpn::validate::MAX_BULK as usize {
-                bot.send_message(chat, session_expired_text(lang))
-                    .reply_markup(menu::main_menu(lang))
-                    .parse_mode(ParseMode::Html)
-                    .await?;
+                edit_or_send(
+                    &bot,
+                    chat,
+                    msg_id,
+                    session_expired_text(lang).to_string(),
+                    menu::main_menu(lang),
+                )
+                .await;
                 return Ok(());
             }
             // Шаг 2/4: префикс уже введён (AwaitingBulkCount хранит его) —
@@ -2084,16 +2679,25 @@ async fn callback_handler(
             let prefix = match dialogue.get().await?.unwrap_or_default() {
                 State::AwaitingBulkCount { prefix } => prefix,
                 _ => {
-                    bot.send_message(chat, session_expired_text(lang))
-                        .reply_markup(menu::main_menu(lang))
-                        .parse_mode(ParseMode::Html)
-                        .await?;
+                    edit_or_send(
+                        &bot,
+                        chat,
+                        msg_id,
+                        session_expired_text(lang).to_string(),
+                        menu::main_menu(lang),
+                    )
+                    .await;
                     return Ok(());
                 }
             };
-            bot.send_message(chat, i18n::ask_expiry(lang))
-                .reply_markup(menu::bulk_expiry_menu(lang))
-                .await?;
+            edit_or_send(
+                &bot,
+                chat,
+                msg_id,
+                i18n::ask_expiry(lang),
+                menu::bulk_expiry_menu(lang),
+            )
+            .await;
             dialogue
                 .update(State::AwaitingBulkExpiry { prefix, count })
                 .await?;
@@ -2104,18 +2708,32 @@ async fn callback_handler(
             let (prefix, count) = match dialogue.get().await?.unwrap_or_default() {
                 State::AwaitingBulkExpiry { prefix, count } => (prefix, count),
                 _ => {
-                    bot.send_message(chat, session_expired_text(lang))
-                        .reply_markup(menu::main_menu(lang))
-                        .parse_mode(ParseMode::Html)
-                        .await?;
+                    edit_or_send(
+                        &bot,
+                        chat,
+                        msg_id,
+                        session_expired_text(lang).to_string(),
+                        menu::main_menu(lang),
+                    )
+                    .await;
                     return Ok(());
                 }
             };
             if kind == "custom" {
-                bot.send_message(chat, i18n::ask_custom_expiry(lang))
-                    .await?;
+                edit_or_send(
+                    &bot,
+                    chat,
+                    msg_id,
+                    i18n::ask_custom_expiry(lang),
+                    menu::cancel_menu(lang),
+                )
+                .await;
                 dialogue
-                    .update(State::AwaitingBulkCustomExpiry { prefix, count })
+                    .update(State::AwaitingBulkCustomExpiry {
+                        prefix,
+                        count,
+                        prompt: msg_id,
+                    })
                     .await?;
             } else {
                 let expires = if kind == "none" {
@@ -2123,10 +2741,14 @@ async fn callback_handler(
                 } else {
                     Some(kind.clone())
                 };
-                bot.send_message(chat, i18n::psk_step(lang, settings.psk_default()))
-                    .reply_markup(menu::bulk_psk_step(lang, settings.psk_default()))
-                    .parse_mode(ParseMode::Html)
-                    .await?;
+                edit_or_send(
+                    &bot,
+                    chat,
+                    msg_id,
+                    i18n::psk_step(lang, settings.psk_default()),
+                    menu::bulk_psk_step(lang, settings.psk_default()),
+                )
+                .await;
                 dialogue
                     .update(State::AwaitingBulkPsk {
                         prefix,
@@ -2146,16 +2768,21 @@ async fn callback_handler(
                     expires,
                 } => (prefix, count, expires),
                 _ => {
-                    bot.send_message(chat, session_expired_text(lang))
-                        .reply_markup(menu::main_menu(lang))
-                        .parse_mode(ParseMode::Html)
-                        .await?;
+                    edit_or_send(
+                        &bot,
+                        chat,
+                        msg_id,
+                        session_expired_text(lang).to_string(),
+                        menu::main_menu(lang),
+                    )
+                    .await;
                     return Ok(());
                 }
             };
             finish_bulk(
                 &bot,
                 chat,
+                msg_id,
                 &vpn,
                 &settings,
                 lang,
@@ -2180,13 +2807,59 @@ async fn callback_handler(
                 menu::modify_param_menu(lang, &name),
             )
             .await;
-            dialogue.update(State::AwaitingModifyParam { name }).await?;
+            dialogue
+                .update(State::AwaitingModifyParam {
+                    name,
+                    prompt: msg_id,
+                })
+                .await?;
         }
         Action::ModifyParam(name, param) => {
-            bot.send_message(chat, i18n::ask_modify_param(lang, param))
-                .await?;
+            // AllowedIPs — не текстовый ввод, а тот же экран пресетов, что и
+            // при создании: тумблеры предзаполняются текущим значением клиента.
+            if param == crate::vpn::validate::ModifyParam::AllowedIps {
+                let current = vpn.client_allowed_ips(&name);
+                let subnet = vpn.vpn_subnet().await;
+                let sel = current
+                    .as_deref()
+                    .and_then(|v| crate::vpn::validate::selection_from_value(v, subnet.as_deref()))
+                    .unwrap_or_default();
+                let ctx = crate::bot::RouteCtx::Edit { name };
+                show_routes(
+                    &bot,
+                    chat,
+                    msg_id,
+                    lang,
+                    &ctx,
+                    sel,
+                    subnet.as_deref(),
+                    current.as_deref(),
+                )
+                .await;
+                dialogue
+                    .update(State::AwaitingRoutes {
+                        ctx,
+                        sel,
+                        subnet,
+                        current,
+                    })
+                    .await?;
+                return Ok(());
+            }
+            edit_or_send(
+                &bot,
+                chat,
+                msg_id,
+                i18n::ask_modify_param(lang, param),
+                menu::cancel_menu(lang),
+            )
+            .await;
             dialogue
-                .update(State::AwaitingModifyValue { name, param })
+                .update(State::AwaitingModifyValue {
+                    name,
+                    param,
+                    prompt: msg_id,
+                })
                 .await?;
         }
         Action::Restart => {
@@ -2200,48 +2873,32 @@ async fn callback_handler(
             .await;
         }
         Action::RestartRun => {
-            let waiting = bot.send_message(chat, i18n::creating(lang)).await.ok();
-            match vpn.restart().await {
+            let pid = progress(&bot, chat, msg_id, i18n::creating(lang)).await;
+            let text = match vpn.restart().await {
                 Ok(out) => {
                     settings.log_event(now_epoch(), EventKind::Restart, None, Some(uid), None);
-                    if let Some(m) = waiting {
-                        let _ = bot.delete_message(chat, m.id).await;
-                    }
-                    bot.send_message(chat, i18n::restart_done(lang, out.active))
-                        .reply_markup(menu::main_menu(lang))
-                        .parse_mode(ParseMode::Html)
-                        .await?;
+                    i18n::restart_done(lang, out.active)
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "restart провалился");
-                    if let Some(m) = waiting {
-                        let _ = bot.delete_message(chat, m.id).await;
-                    }
-                    bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                    i18n::error_text(lang, &e)
                 }
-            }
+            };
+            edit_or_send(&bot, chat, pid, text, menu::main_menu(lang)).await;
         }
         Action::RepairModule => {
-            let waiting = bot.send_message(chat, i18n::creating(lang)).await.ok();
-            match vpn.repair_module().await {
+            let pid = progress(&bot, chat, msg_id, i18n::creating(lang)).await;
+            let text = match vpn.repair_module().await {
                 Ok(out) => {
                     settings.log_event(now_epoch(), EventKind::Repair, None, Some(uid), None);
-                    if let Some(m) = waiting {
-                        let _ = bot.delete_message(chat, m.id).await;
-                    }
-                    bot.send_message(chat, i18n::repair_result(lang, out.rc))
-                        .reply_markup(menu::main_menu(lang))
-                        .parse_mode(ParseMode::Html)
-                        .await?;
+                    i18n::repair_result(lang, out.rc)
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "repair-module провалился");
-                    if let Some(m) = waiting {
-                        let _ = bot.delete_message(chat, m.id).await;
-                    }
-                    bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                    i18n::error_text(lang, &e)
                 }
-            }
+            };
+            edit_or_send(&bot, chat, pid, text, menu::main_menu(lang)).await;
         }
         Action::Lang(code) => {
             if let Some(l) = i18n::parse_lang(&code) {
@@ -2328,26 +2985,31 @@ async fn callback_handler(
             .await;
         }
         Action::BackupNew => {
-            let waiting = bot
-                .send_message(chat, i18n::backup_creating(lang))
-                .await
-                .ok();
+            let pid = progress(&bot, chat, msg_id, i18n::backup_creating(lang)).await;
             match vpn.backup().await {
                 Ok(bf) => {
                     settings.log_event(now_epoch(), EventKind::Backup, None, Some(uid), None);
                     // Свежесозданный бэкап — самый новый по mtime, т.е. индекс 0 в list_backups().
-                    bot.send_message(chat, i18n::backup_done(lang, &bf.name))
-                        .reply_markup(menu::backup_card(lang, 0))
-                        .parse_mode(ParseMode::Html)
-                        .await?;
+                    edit_or_send(
+                        &bot,
+                        chat,
+                        pid,
+                        i18n::backup_done(lang, &bf.name),
+                        menu::backup_card(lang, 0),
+                    )
+                    .await;
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "backup провалился");
-                    bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                    edit_or_send(
+                        &bot,
+                        chat,
+                        pid,
+                        i18n::error_text(lang, &e),
+                        menu::backup_menu(lang),
+                    )
+                    .await;
                 }
-            }
-            if let Some(m) = waiting {
-                let _ = bot.delete_message(chat, m.id).await;
             }
         }
         Action::BackupList => match vpn.list_backups() {
@@ -2372,7 +3034,14 @@ async fn callback_handler(
                 .await;
             }
             Err(e) => {
-                bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                edit_or_send(
+                    &bot,
+                    chat,
+                    msg_id,
+                    i18n::error_text(lang, &e),
+                    menu::backup_menu(lang),
+                )
+                .await;
             }
         },
         Action::BackupCard(idx) => match vpn.list_backups() {
@@ -2393,7 +3062,14 @@ async fn callback_handler(
                 }
             },
             Err(e) => {
-                bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                edit_or_send(
+                    &bot,
+                    chat,
+                    msg_id,
+                    i18n::error_text(lang, &e),
+                    menu::backup_menu(lang),
+                )
+                .await;
             }
         },
         Action::BackupDownload(idx) => match vpn.list_backups() {
@@ -2402,17 +3078,36 @@ async fn callback_handler(
                     if let Err(e) = bot.send_document(chat, InputFile::file(&bf.path)).await {
                         tracing::error!(error = %e, "send_document провалился");
                         let err = crate::error::Error::Telegram(e.to_string());
-                        bot.send_message(chat, i18n::error_text(lang, &err)).await?;
+                        edit_or_send(
+                            &bot,
+                            chat,
+                            msg_id,
+                            i18n::error_text(lang, &err),
+                            menu::backup_card(lang, idx),
+                        )
+                        .await;
                     }
                 }
                 None => {
-                    bot.send_message(chat, i18n::backup_not_found(lang))
-                        .reply_markup(menu::main_menu(lang))
-                        .await?;
+                    edit_or_send(
+                        &bot,
+                        chat,
+                        msg_id,
+                        i18n::backup_not_found(lang),
+                        menu::backup_menu(lang),
+                    )
+                    .await;
                 }
             },
             Err(e) => {
-                bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                edit_or_send(
+                    &bot,
+                    chat,
+                    msg_id,
+                    i18n::error_text(lang, &e),
+                    menu::backup_menu(lang),
+                )
+                .await;
             }
         },
         Action::Restore(idx) => match vpn.list_backups() {
@@ -2439,68 +3134,51 @@ async fn callback_handler(
                 }
             },
             Err(e) => {
-                bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                edit_or_send(
+                    &bot,
+                    chat,
+                    msg_id,
+                    i18n::error_text(lang, &e),
+                    menu::backup_menu(lang),
+                )
+                .await;
             }
         },
         Action::RestoreYes(idx) => {
-            let waiting = bot.send_message(chat, i18n::restoring(lang)).await.ok();
-            match vpn.restore(idx).await {
+            let pid = progress(&bot, chat, msg_id, i18n::restoring(lang)).await;
+            let text = match vpn.restore(idx).await {
                 Ok(()) => {
                     settings.log_event(now_epoch(), EventKind::Restore, None, Some(uid), None);
-                    bot.send_message(chat, i18n::restore_done(lang))
-                        .reply_markup(menu::main_menu(lang))
-                        .parse_mode(ParseMode::Html)
-                        .await?;
+                    i18n::restore_done(lang)
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "restore провалился");
-                    bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                    i18n::error_text(lang, &e)
                 }
-            }
-            if let Some(m) = waiting {
-                let _ = bot.delete_message(chat, m.id).await;
-            }
+            };
+            edit_or_send(&bot, chat, pid, text, menu::main_menu(lang)).await;
         }
         Action::Check => {
-            let waiting = bot.send_message(chat, i18n::check_running(lang)).await.ok();
-            match vpn.check().await {
-                Ok(report) => {
-                    let body = i18n::check_card(lang, &report);
-                    bot.send_message(chat, body)
-                        .parse_mode(ParseMode::Html)
-                        .reply_markup(menu::main_menu(lang))
-                        .await?;
-                }
+            let pid = progress(&bot, chat, msg_id, i18n::check_running(lang)).await;
+            let text = match vpn.check().await {
+                Ok(report) => i18n::check_card(lang, &report),
                 Err(e) => {
                     tracing::error!(error = %e, "check провалился");
-                    bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                    i18n::error_text(lang, &e)
                 }
-            }
-            if let Some(m) = waiting {
-                let _ = bot.delete_message(chat, m.id).await;
-            }
+            };
+            edit_or_send(&bot, chat, pid, text, menu::main_menu(lang)).await;
         }
         Action::Diagnose => {
-            let waiting = bot
-                .send_message(chat, i18n::diagnose_running(lang))
-                .await
-                .ok();
-            match vpn.diagnose().await {
-                Ok(body) => {
-                    let body = truncate_for_message(body);
-                    bot.send_message(chat, i18n::diagnose_result(lang, &body))
-                        .reply_markup(menu::main_menu(lang))
-                        .parse_mode(ParseMode::Html)
-                        .await?;
-                }
+            let pid = progress(&bot, chat, msg_id, i18n::diagnose_running(lang)).await;
+            let text = match vpn.diagnose().await {
+                Ok(body) => i18n::diagnose_result(lang, &truncate_for_message(body)),
                 Err(e) => {
                     tracing::error!(error = %e, "diagnose провалился");
-                    bot.send_message(chat, i18n::error_text(lang, &e)).await?;
+                    i18n::error_text(lang, &e)
                 }
-            }
-            if let Some(m) = waiting {
-                let _ = bot.delete_message(chat, m.id).await;
-            }
+            };
+            edit_or_send(&bot, chat, pid, text, menu::main_menu(lang)).await;
         }
         Action::Groups => {
             let groups: Vec<(crate::store::GroupRow, i64)> = settings
@@ -2519,19 +3197,46 @@ async fn callback_handler(
             edit_or_send(&bot, chat, msg_id, title, menu::groups_menu(lang, &groups)).await;
         }
         Action::GroupCreate => {
-            bot.send_message(chat, i18n::ask_group_name(lang)).await?;
-            dialogue.update(State::AwaitingGroupName).await?;
+            edit_or_send(
+                &bot,
+                chat,
+                msg_id,
+                i18n::ask_group_name(lang),
+                menu::cancel_menu(lang),
+            )
+            .await;
+            dialogue
+                .update(State::AwaitingGroupName { prompt: msg_id })
+                .await?;
         }
         Action::GroupCard(id) => {
-            show_group_card(&bot, chat, msg_id, lang, &settings, id).await;
+            show_group_card(&bot, chat, msg_id, lang, &settings, id, None).await;
         }
         Action::GroupRenameAsk(id) => {
-            bot.send_message(chat, i18n::ask_group_name(lang)).await?;
-            dialogue.update(State::AwaitingGroupRename { id }).await?;
+            edit_or_send(
+                &bot,
+                chat,
+                msg_id,
+                i18n::ask_group_name(lang),
+                menu::cancel_menu(lang),
+            )
+            .await;
+            dialogue
+                .update(State::AwaitingGroupRename { id, prompt: msg_id })
+                .await?;
         }
         Action::GroupQuotaAsk(id) => {
-            bot.send_message(chat, i18n::ask_group_quota(lang)).await?;
-            dialogue.update(State::AwaitingGroupQuota { id }).await?;
+            edit_or_send(
+                &bot,
+                chat,
+                msg_id,
+                i18n::ask_group_quota(lang),
+                menu::cancel_menu(lang),
+            )
+            .await;
+            dialogue
+                .update(State::AwaitingGroupQuota { id, prompt: msg_id })
+                .await?;
         }
         Action::GroupAdmins(id) => {
             let admins = settings.group_admin_ids(id);
@@ -2559,9 +3264,16 @@ async fn callback_handler(
                 Some(uid),
                 Some(&format!("group={id} user={admin_uid}")),
             );
-            bot.send_message(chat, i18n::admin_removed(lang, admin_uid))
-                .await?;
-            show_group_card(&bot, chat, msg_id, lang, &settings, id).await;
+            show_group_card(
+                &bot,
+                chat,
+                msg_id,
+                lang,
+                &settings,
+                id,
+                Some(i18n::admin_removed(lang, admin_uid)),
+            )
+            .await;
         }
         Action::GroupDeleteAsk(id) => {
             let name = settings.group(id).map(|g| g.name).unwrap_or_default();
@@ -2585,10 +3297,14 @@ async fn callback_handler(
                 Some(uid),
                 Some(&format!("detach {name}")),
             );
-            bot.send_message(chat, i18n::group_deleted(lang, &name))
-                .parse_mode(ParseMode::Html)
-                .reply_markup(menu::main_menu(lang))
-                .await?;
+            edit_or_send(
+                &bot,
+                chat,
+                msg_id,
+                i18n::group_deleted(lang, &name),
+                menu::main_menu(lang),
+            )
+            .await;
         }
         Action::GroupDeleteAllAsk(id) => {
             let name = settings.group(id).map(|g| g.name).unwrap_or_default();
@@ -2605,10 +3321,7 @@ async fn callback_handler(
         Action::GroupDeleteAllYes(id) => {
             let name = settings.group(id).map(|g| g.name).unwrap_or_default();
             let clients = settings.group_client_names(id);
-            let waiting = bot
-                .send_message(chat, i18n::group_delete_running(lang))
-                .await
-                .ok();
+            let pid = progress(&bot, chat, msg_id, i18n::group_delete_running(lang)).await;
             let mut failed = 0usize;
             for c in &clients {
                 match vpn.remove(c).await {
@@ -2627,9 +3340,6 @@ async fn callback_handler(
                     }
                 }
             }
-            if let Some(m) = waiting {
-                let _ = bot.delete_message(chat, m.id).await;
-            }
             if failed == 0 {
                 settings.delete_group(id);
                 settings.log_event(
@@ -2639,15 +3349,26 @@ async fn callback_handler(
                     Some(uid),
                     Some(&format!("with_clients {name}")),
                 );
-                bot.send_message(chat, i18n::group_deleted(lang, &name))
-                    .parse_mode(ParseMode::Html)
-                    .reply_markup(menu::main_menu(lang))
-                    .await?;
+                edit_or_send(
+                    &bot,
+                    chat,
+                    pid,
+                    i18n::group_deleted(lang, &name),
+                    menu::main_menu(lang),
+                )
+                .await;
             } else {
                 // Часть клиентов не удалилась — группу не трогаем, чтобы не
                 // потерять привязку выживших. Владелец повторит после починки.
                 let err = crate::error::Error::Telegram(format!("{failed} clients not removed"));
-                bot.send_message(chat, i18n::error_text(lang, &err)).await?;
+                edit_or_send(
+                    &bot,
+                    chat,
+                    pid,
+                    i18n::error_text(lang, &err),
+                    menu::main_menu(lang),
+                )
+                .await;
             }
         }
         Action::GroupInvite(id) => {
@@ -2656,7 +3377,14 @@ async fn callback_handler(
                 // Ошибка БД: ссылки нет — честная ошибка вместо «успеха»
                 // с мёртвым токеном.
                 let err = crate::error::Error::Telegram("db".into());
-                bot.send_message(chat, i18n::error_text(lang, &err)).await?;
+                edit_or_send(
+                    &bot,
+                    chat,
+                    msg_id,
+                    i18n::error_text(lang, &err),
+                    menu::group_card_menu(lang, id, false),
+                )
+                .await;
                 return Ok(());
             };
             settings.log_event(
@@ -2670,15 +3398,21 @@ async fn callback_handler(
             let username = me.username.clone().unwrap_or_default();
             let url = format!("https://t.me/{username}?start=inv_{token}");
             let hours = crate::store::INVITE_TTL_SECS / 3600;
-            bot.send_message(chat, i18n::invite_link_text(lang, &url, hours))
-                .parse_mode(ParseMode::Html)
-                .await?;
+            // Ссылка живёт в самой карточке группы: её копируют отсюда, а
+            // отдельное сообщение просто копило бы чат.
+            edit_or_send(
+                &bot,
+                chat,
+                msg_id,
+                i18n::invite_link_text(lang, &url, hours),
+                menu::group_card_menu(lang, id, true),
+            )
+            .await;
             if first_admin_ever && !settings.name_slug() {
                 bot.send_message(chat, i18n::slug_recommend(lang))
                     .reply_markup(menu::slug_recommend_menu(lang))
                     .await?;
             }
-            show_group_card(&bot, chat, msg_id, lang, &settings, id).await;
         }
         Action::GroupInviteRevoke(id) => {
             settings.revoke_invite(id);
@@ -2689,12 +3423,29 @@ async fn callback_handler(
                 Some(uid),
                 Some(&format!("group={id}")),
             );
-            bot.send_message(chat, i18n::invite_revoked(lang)).await?;
-            show_group_card(&bot, chat, msg_id, lang, &settings, id).await;
+            show_group_card(
+                &bot,
+                chat,
+                msg_id,
+                lang,
+                &settings,
+                id,
+                Some(i18n::invite_revoked(lang)),
+            )
+            .await;
         }
         Action::GroupAdminById(id) => {
-            bot.send_message(chat, i18n::ask_admin_id(lang)).await?;
-            dialogue.update(State::AwaitingGroupAdminId { id }).await?;
+            edit_or_send(
+                &bot,
+                chat,
+                msg_id,
+                i18n::ask_admin_id(lang),
+                menu::cancel_menu(lang),
+            )
+            .await;
+            dialogue
+                .update(State::AwaitingGroupAdminId { id, prompt: msg_id })
+                .await?;
         }
         Action::MoveClientAsk(name) => {
             let groups = settings.list_groups();
@@ -2713,9 +3464,10 @@ async fn callback_handler(
             // этой проверки assign_client_group молча пишет висячий
             // group_id (FK не включены), а client_moved соврал бы, что
             // клиент отвязан от группы.
+            let card = menu::client_card(lang, &name, role.is_owner());
             let gname = if let Some(id) = target {
                 let Some(g) = settings.group(id) else {
-                    bot.send_message(chat, i18n::not_found(lang)).await?;
+                    edit_or_send(&bot, chat, msg_id, i18n::not_found(lang), card).await;
                     return Ok(());
                 };
                 // Квота действует и на перенос: полная группа не принимает клиентов
@@ -2725,13 +3477,13 @@ async fn callback_handler(
                     crate::store::QuotaAssign::Assigned => {}
                     crate::store::QuotaAssign::Full => {
                         let quota = g.max_clients.unwrap_or(0);
-                        bot.send_message(chat, i18n::quota_reached(lang, quota))
-                            .await?;
+                        edit_or_send(&bot, chat, msg_id, i18n::quota_reached(lang, quota), card)
+                            .await;
                         return Ok(());
                     }
                     crate::store::QuotaAssign::Db => {
                         let err = crate::error::Error::Telegram("db".into());
-                        bot.send_message(chat, i18n::error_text(lang, &err)).await?;
+                        edit_or_send(&bot, chat, msg_id, i18n::error_text(lang, &err), card).await;
                         return Ok(());
                     }
                 }
@@ -2740,10 +3492,14 @@ async fn callback_handler(
                 settings.assign_client_group(&name, None, now_epoch());
                 None
             };
-            bot.send_message(chat, i18n::client_moved(lang, &name, gname.as_deref()))
-                .parse_mode(ParseMode::Html)
-                .reply_markup(menu::main_menu(lang))
-                .await?;
+            edit_or_send(
+                &bot,
+                chat,
+                msg_id,
+                i18n::client_moved(lang, &name, gname.as_deref()),
+                card,
+            )
+            .await;
         }
         Action::GroupRegenAsk(id) => {
             let name = settings.group(id).map(|g| g.name).unwrap_or_default();
@@ -2759,10 +3515,7 @@ async fn callback_handler(
         }
         Action::GroupRegenRun(id) => {
             let clients = settings.group_client_names(id);
-            let waiting = bot
-                .send_message(chat, i18n::regen_all_running(lang))
-                .await
-                .ok();
+            let pid = progress(&bot, chat, msg_id, i18n::regen_all_running(lang)).await;
             let (mut ok, mut failed) = (0usize, 0usize);
             for c in &clients {
                 match vpn.regen_client(c).await {
@@ -2782,13 +3535,14 @@ async fn callback_handler(
                     }
                 }
             }
-            if let Some(m) = waiting {
-                let _ = bot.delete_message(chat, m.id).await;
-            }
-            bot.send_message(chat, i18n::group_regen_done(lang, ok, failed))
-                .reply_markup(menu::main_menu(lang))
-                .parse_mode(ParseMode::Html)
-                .await?;
+            edit_or_send(
+                &bot,
+                chat,
+                pid,
+                i18n::group_regen_done(lang, ok, failed),
+                menu::group_card_menu(lang, id, settings.active_invite(id, now_epoch()).is_some()),
+            )
+            .await;
         }
         Action::GroupScopeAsk => {
             let groups = settings.list_groups();
@@ -2819,7 +3573,14 @@ async fn callback_handler(
             .await;
         }
         Action::Unknown => {
-            bot.send_message(chat, unknown_action_text(lang)).await?;
+            edit_or_send(
+                &bot,
+                chat,
+                msg_id,
+                unknown_action_text(lang).to_string(),
+                home_menu(&role, lang),
+            )
+            .await;
         }
     }
     Ok(())
@@ -3289,6 +4050,22 @@ mod tests {
             menu::group_scope_menu(Lang::Ru, &[sample_group()]),
             menu::clients_empty_menu(Lang::Ru, crate::vpn::model::ClientFilter::All, true),
             menu::slug_recommend_menu(Lang::Ru),
+            menu::cancel_menu(Lang::Ru),
+            menu::allowed_ips_menu(
+                Lang::Ru,
+                crate::vpn::validate::RouteSelection {
+                    net10: true,
+                    ..crate::vpn::validate::RouteSelection::default()
+                },
+                Some("10.9.9.0/24"),
+                true,
+            ),
+            menu::allowed_ips_menu(
+                Lang::Ru,
+                crate::vpn::validate::RouteSelection::default(),
+                None,
+                false,
+            ),
         ];
 
         for kb in &keyboards {
@@ -3354,6 +4131,10 @@ mod tests {
             SetConf(false),
             SetQr(false),
             SetLink(false),
+            RouteToggle(crate::vpn::validate::RouteKey::Net10),
+            RouteCustom,
+            RouteSkip,
+            RouteApply,
             SetListFilter(crate::vpn::model::ClientFilter::All),
             Groups,
             GroupCreate,
@@ -3431,6 +4212,10 @@ mod tests {
                 SetConf(_) => {}
                 SetQr(_) => {}
                 SetLink(_) => {}
+                RouteToggle(_) => {}
+                RouteCustom => {}
+                RouteSkip => {}
+                RouteApply => {}
                 SetListFilter(_) => {}
                 Groups => {}
                 GroupCreate => {}
@@ -3488,6 +4273,14 @@ mod tests {
             (Action::Page(0), true, true),
             (Action::Expiry("1d".into()), true, true),
             (Action::AddPsk(true), true, true),
+            (
+                Action::RouteToggle(crate::vpn::validate::RouteKey::Net10),
+                true,
+                true,
+            ),
+            (Action::RouteCustom, true, true),
+            (Action::RouteSkip, true, true),
+            (Action::RouteApply, true, true),
             (Action::Lang("ru".into()), true, true),
             (
                 Action::SetListFilter(crate::vpn::model::ClientFilter::All),
@@ -3605,5 +4398,47 @@ mod tests {
             // раньше, на входе в handle_callback).
             assert!(!authorize(action, &denied, &store), "denied: {action:?}");
         }
+    }
+
+    #[test]
+    fn parse_callback_route_toggles_and_actions() {
+        use crate::vpn::validate::RouteKey;
+        assert_eq!(
+            parse_callback("aip:t:10"),
+            Action::RouteToggle(RouteKey::Net10)
+        );
+        assert_eq!(
+            parse_callback("aip:t:172"),
+            Action::RouteToggle(RouteKey::Net172)
+        );
+        assert_eq!(
+            parse_callback("aip:t:192"),
+            Action::RouteToggle(RouteKey::Net192)
+        );
+        assert_eq!(
+            parse_callback("aip:t:vpn"),
+            Action::RouteToggle(RouteKey::Vpn)
+        );
+        assert_eq!(
+            parse_callback("aip:t:all"),
+            Action::RouteToggle(RouteKey::All)
+        );
+        assert_eq!(
+            parse_callback("aip:t:local"),
+            Action::RouteToggle(RouteKey::Local)
+        );
+        assert_eq!(parse_callback("aip:custom"), Action::RouteCustom);
+        assert_eq!(parse_callback("aip:skip"), Action::RouteSkip);
+        assert_eq!(parse_callback("aip:apply"), Action::RouteApply);
+    }
+
+    #[test]
+    fn parse_callback_route_rejects_unknown_keys() {
+        // callback_data подделывается — неизвестный пресет не должен молча
+        // превращаться в какой-то из существующих.
+        assert_eq!(parse_callback("aip:t:"), Action::Unknown);
+        assert_eq!(parse_callback("aip:t:0.0.0.0/0"), Action::Unknown);
+        assert_eq!(parse_callback("aip:"), Action::Unknown);
+        assert_eq!(parse_callback("aip"), Action::Unknown);
     }
 }
