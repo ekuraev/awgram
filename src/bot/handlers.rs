@@ -498,7 +498,7 @@ async fn show_routes(
         chat,
         msg_id,
         i18n::routes_title(lang, ctx.name(), current, pending.as_deref()),
-        menu::allowed_ips_menu(lang, sel, subnet, ctx.is_create()),
+        menu::allowed_ips_menu(lang, sel, subnet, ctx.is_creating()),
     )
     .await;
 }
@@ -1402,10 +1402,11 @@ async fn message_handler(
 
 /// Создание клиента: `add`, привязка к группе, индивидуальные маршруты и
 /// выдача файлов. `allowed_ips` = None — клиент остаётся на глобальном режиме
-/// маршрутизации сервера (как было до появления экрана маршрутов); Some —
-/// значение ставится отдельным вызовом `modify` сразу после создания, потому
-/// что `add` в инсталлере флага для AllowedIPs не имеет. Порядок важен:
-/// `modify` перегенерирует .conf/QR/vpn://, поэтому файлы уходят после него.
+/// маршрутизации сервера. Some — маршруты ставит сам `add` через
+/// `--allowed-ips`, если инсталлер это умеет; на старом сервере `add_client`
+/// откатывается на обычное создание, и тогда значение доставляет отдельный
+/// `modify`. Порядок важен: `modify` перегенерирует .conf/QR/vpn://, поэтому
+/// файлы уходят после него.
 ///
 /// Сообщение-источник (`msg_id`) служит индикатором «⏳», а затем удаляется в
 /// пользу итогового экрана под файлами — чат не растёт.
@@ -1456,8 +1457,10 @@ async fn finish_add(
     // Предупреждения, которые не отменяют успех: попадают в итоговый экран
     // отдельными строками, а не самостоятельными сообщениями.
     let mut notes: Vec<String> = Vec::new();
-    match vpn.add(name, expires, psk).await {
-        Ok(mut res) => {
+    match vpn.add_client(name, expires, psk, allowed_ips).await {
+        Ok(out) => {
+            let routes_applied = out.routes_applied;
+            let mut res = out.res;
             settings.log_event(
                 now_epoch(),
                 EventKind::ClientAdd,
@@ -1511,11 +1514,13 @@ async fn finish_add(
                 edit_or_send(bot, chat, pid, i18n::quota_reached(lang, quota), home).await;
                 return;
             }
-            // Индивидуальные маршруты — до выдачи файлов: modify перезаписывает
-            // .conf и перегенерирует QR/vpn://, иначе пользователь получил бы
-            // артефакты с серверными AllowedIPs. Сбой modify клиента не
-            // отменяет: он рабочий, просто с маршрутами сервера.
-            if let Some(value) = allowed_ips {
+            // Откат для старого инсталлера: маршруты не уехали вместе с
+            // созданием, ставим их отдельно — до выдачи файлов, потому что
+            // modify перезаписывает .conf и перегенерирует QR/vpn://, иначе
+            // пользователь получил бы артефакты с серверными AllowedIPs. Сбой
+            // modify клиента не отменяет: он рабочий, просто с маршрутами
+            // сервера.
+            if let Some(value) = allowed_ips.filter(|_| !routes_applied) {
                 match vpn
                     .modify(name, crate::vpn::validate::ModifyParam::AllowedIps, value)
                     .await
@@ -1666,6 +1671,43 @@ async fn apply_routes(
             .await;
             dialogue.exit().await?;
         }
+        crate::bot::RouteCtx::Bulk {
+            prefix,
+            count,
+            expires,
+            psk,
+        } => {
+            // Массовая генерация owner-only (гейт стоит на AddBulk* в
+            // authorize); роль могла смениться за время диалога.
+            if !role.is_owner() {
+                edit_or_send(
+                    bot,
+                    chat,
+                    msg_id,
+                    session_expired_text(lang).to_string(),
+                    home_menu(role, lang),
+                )
+                .await;
+                dialogue.exit().await?;
+                return Ok(());
+            }
+            finish_bulk(
+                bot,
+                chat,
+                msg_id,
+                vpn,
+                settings,
+                lang,
+                &prefix,
+                count,
+                expires.as_deref(),
+                psk,
+                value,
+                uid,
+            )
+            .await;
+            dialogue.exit().await?;
+        }
         crate::bot::RouteCtx::Edit { name } => {
             // Правка чужих параметров — только владельцу (Modify тоже
             // owner-only; роль могла смениться за время диалога).
@@ -1756,6 +1798,7 @@ async fn finish_bulk(
     count: usize,
     expires: Option<&str>,
     psk: bool,
+    allowed_ips: Option<&str>,
     uid: i64,
 ) {
     let home = menu::main_menu(lang);
@@ -1820,8 +1863,14 @@ async fn finish_bulk(
 
     // 4. Один вызов add_many (сразу со всеми именами). add_many возвращает
     // BulkResult{created, skipped} — все результаты, не только первый.
-    match vpn.add_many(&names, expires, psk).await {
-        Ok(res) => {
+    // Маршруты уезжают одним `--allowed-ips` на весь вызов. Отката на modify
+    // здесь нет: он означал бы запуск скрипта на каждого клиента пачки.
+    match vpn
+        .add_many_clients(&names, expires, psk, allowed_ips)
+        .await
+    {
+        Ok(out) => {
+            let res = out.res;
             for r in &res.created {
                 settings.log_event(
                     now_epoch(),
@@ -1839,6 +1888,9 @@ async fn finish_bulk(
             // 5. Альбом .conf — одним sendMediaGroup (только если включён и есть
             // что отправлять; пустой альбом Telegram отклонит).
             let mut notes: Vec<String> = Vec::new();
+            if allowed_ips.is_some() && !out.routes_applied {
+                notes.push(i18n::routes_not_supported(lang));
+            }
             if settings.deliver_conf() && !res.created.is_empty() {
                 let conf_paths: Vec<String> =
                     res.created.iter().map(|c| c.conf_path.clone()).collect();
@@ -2779,6 +2831,30 @@ async fn callback_handler(
                     return Ok(());
                 }
             };
+            // Шаг маршрутов для пачки показываем, только если инсталлер
+            // принимает `--allowed-ips`: одним флагом он ставит их всем за
+            // один вызов. На старом сервере пришлось бы звать `modify` на
+            // каждого клиента, поэтому там шага просто нет.
+            if vpn.supports_add_allowed_ips().await {
+                let subnet = vpn.vpn_subnet().await;
+                let ctx = crate::bot::RouteCtx::Bulk {
+                    prefix,
+                    count,
+                    expires,
+                    psk,
+                };
+                let sel = crate::vpn::validate::RouteSelection::default();
+                show_routes(&bot, chat, msg_id, lang, &ctx, sel, subnet.as_deref(), None).await;
+                dialogue
+                    .update(State::AwaitingRoutes {
+                        ctx,
+                        sel,
+                        subnet,
+                        current: None,
+                    })
+                    .await?;
+                return Ok(());
+            }
             finish_bulk(
                 &bot,
                 chat,
@@ -2790,6 +2866,7 @@ async fn callback_handler(
                 count,
                 expires.as_deref(),
                 psk,
+                None,
                 uid,
             )
             .await;

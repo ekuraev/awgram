@@ -31,9 +31,11 @@ tangible on budget VPS hosts.
   status filter and "online-first" sorting; client card, deletion with
   confirmation; menus, lists, prompts and operation results all live in one
   message — the chat never piles up duplicates.
-- 🔗 **AllowedIPs from presets** — at creation and when editing a client:
-  RFC 1918 local networks, the VPN subnet, a full tunnel or your own CIDR list;
-  you can also keep the server's routing mode.
+- 🔗 **AllowedIPs from presets** — at creation, in bulk creation and when
+  editing a client: RFC 1918 local networks, the VPN subnet, a full tunnel or
+  your own CIDR list; you can also keep the server's routing mode. When the
+  installer supports `add --allowed-ips`, the routes are set by the same call
+  that creates the client, otherwise by a separate edit right after it.
 - ⚙️ **Modify client parameters**: Keepalive, DNS, AllowedIPs, Endpoint.
 - 🔄 **Config re-issue**: one client or all at once (optionally with route
   reset).
@@ -169,6 +171,16 @@ and depends directly on its interface.
   unchanged.
 - Subcommands used: `add`, `remove`, `list`, `stats`, `regen`, `modify`,
   `backup`, `restore`, `check`, `restart`, `repair-module` — all with `--json`.
+- **Optional `add --allowed-ips`**
+  ([Issue #253](https://github.com/bivlked/amneziawg-installer/issues/253))
+  — per-client routes set by the same call that creates the client. The bot
+  detects the flag from the script's own help (`--help`, which changes
+  nothing) rather than from a version number: the release carrying the flag is
+  not known in advance, and on a half-updated server the number and reality
+  disagree. Without the flag the old `add` + `modify` path is used and the
+  minimum version stays the same. Bulk creation has no fallback, since
+  `modify` would have to run once per client, so the routes step is hidden
+  there.
 
 ## Building from source
 
