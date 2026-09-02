@@ -34,14 +34,19 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
   ответ бота перерисовывает сам вопрос.
 
 - **Совместимость с инсталлером**: поддерживаемая версия —
-  [v5.29.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.29.0)
+  [v5.31.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.31.0)
   (сверен `--json`-контракт: v5.27.1 нормализует списки `AllowedIPs`/`DNS`
   в `modify`/`regen` к виду «a, b, c» и чинит `regen`, схлопывавший эти
-  списки; конверты не изменились — `value` в ответе `modify` остаётся
-  присланным значением, новые сообщения уходят в stderr, а бот и так
-  шлёт списки в каноническом виде; v5.28.0–v5.29.0 меняют только
-  установщик, подписи релизов и документацию — в `manage_amneziawg.sh`
-  сменился лишь номер версии); минимальная — по-прежнему v5.21.0.
+  списки; v5.28.0–v5.29.0 меняют только установщик, подписи релизов и
+  документацию; v5.30.0 ограничил обращения к интерфейсу таймаутом и при
+  неудачном чтении оставляет клиентам `no_data` вместо «нет handshake» —
+  бот этот статус уже понимает и красит жёлтым, а пустой
+  `interface.addresses` в `check --json` просто прячет пресет подсети VPN;
+  v5.31.0 определяет полный туннель покрытием маршрутов и предупреждает,
+  когда `modify` получает полный туннель без `::/0` — пресет «весь трафик»
+  шлёт `0.0.0.0/0, ::/0`, так что предупреждение не срабатывает. Конверты
+  `--json` не изменились, новые сообщения уходят в stderr); минимальная —
+  по-прежнему v5.21.0.
 
 ### 🇬🇧 English
 
@@ -72,14 +77,19 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
   the bot's reply redraws the prompt itself.
 
 - **Installer compatibility**: the supported version is now
-  [v5.29.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.29.0)
+  [v5.31.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.31.0)
   (`--json` contract verified: v5.27.1 normalizes the `AllowedIPs`/`DNS`
   lists in `modify`/`regen` to the canonical "a, b, c" form and fixes
-  `regen` collapsing those lists; the envelopes are unchanged — the
-  `modify` reply still echoes `value` as sent, new messages go to stderr,
-  and the bot already sends lists in the canonical form; v5.28.0–v5.29.0
-  only touch the installer, release signing and docs — `manage_amneziawg.sh`
-  changed nothing but its version number); the minimum is still v5.21.0.
+  `regen` collapsing those lists; v5.28.0–v5.29.0 only touch the installer,
+  release signing and docs; v5.30.0 bounds interface calls by a timeout and
+  on a failed read leaves clients at `no_data` instead of "no handshake" —
+  the bot already understands that status and marks it yellow, and an empty
+  `interface.addresses` in `check --json` simply hides the VPN subnet
+  preset; v5.31.0 decides a full tunnel by route coverage and warns when
+  `modify` is handed a full tunnel without `::/0` — the "all traffic" preset
+  sends `0.0.0.0/0, ::/0`, so that warning never fires. The `--json`
+  envelopes are unchanged and new messages go to stderr); the minimum is
+  still v5.21.0.
 
 ## [0.9.0] — 2026-08-21
 

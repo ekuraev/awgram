@@ -134,12 +134,12 @@ The bot is a layer on top of `manage_amneziawg.sh` from
 and depends directly on its interface.
 
 - **Supported installer version:
-  [v5.29.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.29.0)**
+  [v5.31.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.31.0)**
   (`--json` contract verified). Minimum is
   [v5.21.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.21.0);
   older v5.20.x releases are not supported — the bot uses the extended
   `--json` interface for management commands introduced in v5.21.0.
-  v5.21.1–v5.29.0 keep the JSON contract intact: v5.21.1/v5.21.2 are
+  v5.21.1–v5.31.0 keep the JSON contract intact: v5.21.1/v5.21.2 are
   validation bugfixes, v5.22.0 added an `awgsetup_cfg.init` drift warning
   to `regen`/`check` (goes to stderr, stdout JSON untouched), v5.23.0
   only changes the installers (kernel module handling on older kernels),
@@ -154,7 +154,19 @@ and depends directly on its interface.
   bot already sends lists in the canonical form; v5.28.0–v5.29.0 only
   touch the installer (boot-critical package protection during the system
   upgrade, key masking in the diagnostic report), release signing and
-  docs — `manage_amneziawg.sh` changed nothing but its version number.
+  docs — `manage_amneziawg.sh` changed nothing but its version number;
+  v5.30.0 bounds every interface call by a timeout and stops reporting an
+  unread state as a measured one — on a failed read `list --json` leaves
+  clients at `no_data` instead of "no handshake" (the bot understands that
+  status and marks it yellow), and `check --json` returns an empty
+  `interface.addresses`, which the bot degrades on gracefully: the VPN
+  subnet preset is hidden and bulk creation reports capacity as
+  unavailable; v5.31.0 decides a full tunnel by route coverage, so the
+  default "Amnezia" mode now gets `::/0`, and `modify` warns when it is
+  handed a full tunnel without `::/0` — the bot's "all traffic" preset
+  sends `0.0.0.0/0, ::/0`, so that warning never fires. All new messages
+  from both releases go to stderr and the `--json` envelopes are
+  unchanged.
 - Subcommands used: `add`, `remove`, `list`, `stats`, `regen`, `modify`,
   `backup`, `restore`, `check`, `restart`, `repair-module` — all with `--json`.
 
