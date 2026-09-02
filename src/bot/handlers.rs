@@ -3223,15 +3223,20 @@ async fn callback_handler(
         },
         Action::RestoreYes(idx) => {
             let pid = progress(&bot, chat, msg_id, i18n::restoring(lang)).await;
-            let text = match vpn.restore(idx).await {
-                Ok(()) => {
-                    settings.log_event(now_epoch(), EventKind::Restore, None, Some(uid), None);
-                    i18n::restore_done(lang)
-                }
-                Err(e) => {
-                    tracing::error!(error = %e, "restore провалился");
-                    i18n::error_text(lang, &e)
-                }
+            // Временно: путь ищем через list_backups() по индексу — ветка целиком
+            // переписывается в Task 9.
+            let text = match vpn.list_backups().ok().and_then(|l| l.get(idx).cloned()) {
+                Some(bf) => match vpn.restore_path(&bf.path).await {
+                    Ok(()) => {
+                        settings.log_event(now_epoch(), EventKind::Restore, None, Some(uid), None);
+                        i18n::restore_done(lang)
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "restore провалился");
+                        i18n::error_text(lang, &e)
+                    }
+                },
+                None => i18n::backup_not_found(lang),
             };
             edit_or_send(&bot, chat, pid, text, menu::main_menu(lang)).await;
         }

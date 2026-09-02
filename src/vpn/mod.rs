@@ -629,8 +629,14 @@ impl Vpn {
         Ok(crate::vpn::model::CapacityInfo { free, total })
     }
 
-    fn backups_dir(&self) -> PathBuf {
+    /// `clients_dir/backups` — сюда пишет сам инсталлер (и режет до 10).
+    pub fn backups_dir(&self) -> PathBuf {
         self.clients_dir.join("backups")
+    }
+
+    /// Подкаталог бота: инсталлер ищет с `-maxdepth 1` и его не трогает.
+    pub fn bot_backups_dir(&self) -> PathBuf {
+        self.backups_dir().join("awgram")
     }
 
     /// Читает `clients_dir/backups/`, отбирая только `*.tar.gz`, отсортированные по mtime убыв.
@@ -706,27 +712,18 @@ impl Vpn {
         })
     }
 
-    /// Восстанавливает из бэкапа по индексу в списке `list_backups()` (0 = самый новый).
-    /// Парсит JSON-конверт: `rolled_back:true → RestoreRolledBack`,
-    /// `ok:false && !rolled_back → ScriptFailed`. `AWG_STRICT_CONFIRM=1` + `--yes`.
-    pub async fn restore(&self, index: usize) -> Result<()> {
-        let backups = self.list_backups()?;
-        let bf = backups
-            .get(index)
-            .ok_or_else(|| crate::error::Error::Parse("бэкап не найден".into()))?;
-        if bf.name.contains('/')
-            || !bf.name.starts_with("awg_backup_")
-            || !bf.name.ends_with(".tar.gz")
-        {
-            return Err(crate::error::Error::Parse("некорректное имя бэкапа".into()));
-        }
+    /// Восстанавливает из архива инсталлера по пути. Содержимое архива уже
+    /// проверил вызывающий (`backup::format`), здесь только конверт:
+    /// `rolled_back:true → RestoreRolledBack`, `ok:false && !rolled_back →
+    /// ScriptFailed`. `AWG_STRICT_CONFIRM=1` + `--yes`.
+    pub async fn restore_path(&self, path: &std::path::Path) -> Result<()> {
         let spec = RunSpec {
             script: &self.script,
             sudo_prefix: &self.sudo_prefix,
             timeout_secs: self.timeout_secs,
             extra_env: &[("AWG_STRICT_CONFIRM", "1")],
         };
-        let path = bf.path.to_string_lossy().into_owned();
+        let path = path.to_string_lossy().into_owned();
         let (out, code) = run(&spec, &["restore", &path, "--json", "--yes"]).await?;
         // restore печатает {"rolled_back":true} при exit 1 — парсим всегда.
         if out.trim().is_empty() {
@@ -1352,16 +1349,6 @@ echo '{{"command":"backup","ok":true,"path":"{}","size_bytes":7}}'
     }
 
     #[tokio::test]
-    #[serial] // гонка ETXTBSY: параллельный fork удерживает write-fd чужого fake-скрипта до execve
-    async fn restore_rejects_out_of_range() {
-        let (_d, vpn) = vpn_with_script("#!/bin/sh\n");
-        assert!(matches!(
-            vpn.restore(999).await,
-            Err(crate::error::Error::Parse(_))
-        ));
-    }
-
-    #[tokio::test]
     #[serial]
     async fn check_returns_report_with_problems() {
         // check с ok:false (обнаружены проблемы) НЕ ошибка выполнения — возвращаем отчёт.
@@ -1507,17 +1494,17 @@ exit 1
 echo '{"command":"restore","ok":true,"source":"/x.tar.gz","applied":true,"rolled_back":false,"restored":{"server_conf":true,"clients":3,"keys":true}}'
 "#;
         let (dir, vpn) = vpn_with_script(stub);
-        // restore требует list_backups для индекса — подготовим один.
         let bdir = dir.path().join("backups");
         std::fs::create_dir_all(&bdir).unwrap();
-        std::fs::write(bdir.join("awg_backup_x.tar.gz"), b"x").unwrap();
-        vpn.restore(0).await.unwrap();
+        let path = bdir.join("awg_backup_x.tar.gz");
+        std::fs::write(&path, b"x").unwrap();
+        vpn.restore_path(&path).await.unwrap();
     }
 
     #[tokio::test]
     #[serial]
     async fn restore_rolled_back_becomes_error() {
-        // list_backups возвращает 1 запись; stub эмитит rolled_back=true → exit 1.
+        // stub эмитит rolled_back=true → exit 1.
         let (dir, vpn) = vpn_with_script(
             r#"#!/bin/sh
 echo '{"command":"restore","ok":false,"error":"boom","source":"/x.tar.gz","applied":false,"rolled_back":true}'
@@ -1526,12 +1513,39 @@ exit 1
         );
         let bdir = dir.path().join("backups");
         std::fs::create_dir_all(&bdir).unwrap();
-        std::fs::write(bdir.join("awg_backup_x.tar.gz"), b"x").unwrap();
-        let err = vpn.restore(0).await.unwrap_err();
+        let path = bdir.join("awg_backup_x.tar.gz");
+        std::fs::write(&path, b"x").unwrap();
+        let err = vpn.restore_path(&path).await.unwrap_err();
         assert!(
             matches!(err, crate::error::Error::RestoreRolledBack),
             "got {err:?}"
         );
+    }
+
+    #[test]
+    fn bot_backups_dir_is_awgram_subdir() {
+        let (dir, vpn) = vpn_with_script("#!/bin/sh\n");
+        assert_eq!(vpn.backups_dir(), dir.path().join("backups"));
+        assert_eq!(
+            vpn.bot_backups_dir(),
+            dir.path().join("backups").join("awgram")
+        );
+    }
+
+    #[test]
+    fn list_backups_ignores_awgram_subdir() {
+        let (dir, vpn) = vpn_with_script("#!/bin/sh\n");
+        let sub = dir.path().join("backups").join("awgram");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("awgram_backup_t.tar.gz"), b"x").unwrap();
+        std::fs::write(dir.path().join("backups").join("awg_backup_a.tar.gz"), b"x").unwrap();
+        let names: Vec<_> = vpn
+            .list_backups()
+            .unwrap()
+            .into_iter()
+            .map(|b| b.name)
+            .collect();
+        assert_eq!(names, vec!["awg_backup_a.tar.gz"]);
     }
 
     #[tokio::test]
