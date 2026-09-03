@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use teloxide::dispatching::dialogue::InMemStorage;
 use teloxide::dispatching::{HandlerExt, UpdateFilterExt};
+use teloxide::net::Download;
 use teloxide::prelude::*;
 use teloxide::types::{CallbackQuery, InlineKeyboardMarkup, InputFile, MessageId, ParseMode};
 
@@ -444,6 +445,17 @@ fn normalize_comment(raw: &str) -> Result<Option<String>, ()> {
     Ok(Some(t.to_string()))
 }
 
+/// Предварительная проверка документа до скачивания: расширение и размер.
+fn upload_precheck(file_name: Option<&str>, size: u32) -> Result<(), &'static str> {
+    if size as u64 > crate::backup::format::MAX_FILE_BYTES {
+        return Err("too_large");
+    }
+    match file_name {
+        Some(n) if n.ends_with(".tar.gz") => Ok(()),
+        _ => Err("not_targz"),
+    }
+}
+
 /// Обрезает вывод скрипта до лимита Telegram-сообщения (3500 байт, с запасом
 /// на HTML-обёртку), округляя вниз до границы UTF-8-символа — байтовый индекс
 /// может попасть внутрь многобайтового символа (кириллица в выводе скрипта).
@@ -556,6 +568,23 @@ async fn progress(bot: &Bot, chat: ChatId, msg_id: MessageId, text: String) -> M
             }
         }
     }
+}
+
+/// Скачивает присланный документ во временный файл по его `FileId`.
+async fn download_document(
+    bot: &Bot,
+    file_id: &teloxide::types::FileId,
+    dest: &std::path::Path,
+) -> crate::error::Result<()> {
+    let file = bot
+        .get_file(file_id.clone())
+        .await
+        .map_err(|e| crate::error::Error::Telegram(e.to_string()))?;
+    let mut dst = tokio::fs::File::create(dest).await?;
+    bot.download_file(&file.path, &mut dst)
+        .await
+        .map_err(|e| crate::error::Error::Telegram(e.to_string()))?;
+    Ok(())
 }
 
 /// Итоговый экран ПОСЛЕ выдачи файлов: удаляет сообщение-источник и отправляет
@@ -1669,6 +1698,115 @@ async fn message_handler(
                         &crate::backup::Key::Bundle(ts),
                         Some(i18n::comment_saved(lang)),
                         None,
+                    )
+                    .await;
+                }
+            }
+        }
+        State::AwaitingBackupUpload { prompt } => {
+            if !role.is_owner() {
+                dialogue.update(State::Idle).await?;
+                return Ok(());
+            }
+            let Some(doc) = msg.document() else {
+                edit_or_send(
+                    &bot,
+                    msg.chat.id,
+                    prompt,
+                    i18n::upload_not_a_file(lang),
+                    menu::backup_upload_menu(lang),
+                )
+                .await;
+                return Ok(());
+            };
+            if let Err(code) = upload_precheck(doc.file_name.as_deref(), doc.file.size) {
+                let reason = match code {
+                    "too_large" => i18n::format_error(
+                        lang,
+                        &crate::backup::format::FormatError::TooLarge(doc.file.size as u64),
+                    ),
+                    _ => i18n::upload_not_a_file(lang),
+                };
+                edit_or_send(
+                    &bot,
+                    msg.chat.id,
+                    prompt,
+                    i18n::upload_rejected(lang, &reason),
+                    menu::backup_upload_menu(lang),
+                )
+                .await;
+                return Ok(());
+            }
+            let pid = progress(&bot, msg.chat.id, prompt, i18n::backup_creating(lang)).await;
+            let tmp = match tempfile::tempdir() {
+                Ok(t) => t,
+                Err(e) => {
+                    edit_or_send(
+                        &bot,
+                        msg.chat.id,
+                        pid,
+                        i18n::error_text(lang, &e.into()),
+                        menu::backup_menu(lang),
+                    )
+                    .await;
+                    dialogue.update(State::Idle).await?;
+                    return Ok(());
+                }
+            };
+            // Локальное имя — только basename присланного файла (без `/`,
+            // без абсолютных путей), иначе дефолт.
+            let local_name = doc
+                .file_name
+                .as_deref()
+                .and_then(|n| std::path::Path::new(n).file_name())
+                .map(|n| n.to_os_string())
+                .unwrap_or_else(|| "upload.tar.gz".into());
+            let local = tmp.path().join(local_name);
+            if let Err(e) = download_document(&bot, &doc.file.id, &local).await {
+                edit_or_send(
+                    &bot,
+                    msg.chat.id,
+                    pid,
+                    i18n::error_text(lang, &e),
+                    menu::backup_upload_menu(lang),
+                )
+                .await;
+                return Ok(());
+            }
+            match crate::backup::service::accept_upload(&vpn, &settings, &local, Some(uid)) {
+                Ok(row) => {
+                    dialogue.update(State::Idle).await?;
+                    settings.log_event(
+                        now_epoch(),
+                        EventKind::BackupUpload,
+                        None,
+                        Some(uid),
+                        Some(&row.name),
+                    );
+                    let ts = crate::backup::format::ts_from_bundle_name(&row.name)
+                        .unwrap_or_default()
+                        .to_string();
+                    show_backup_card(
+                        &bot,
+                        msg.chat.id,
+                        pid,
+                        lang,
+                        &vpn,
+                        &settings,
+                        &crate::backup::Key::Bundle(ts),
+                        Some(i18n::upload_accepted(lang, &row.name)),
+                        None,
+                    )
+                    .await;
+                }
+                Err(e) => {
+                    // Остаёмся в состоянии: пользователь может прислать другой файл.
+                    edit_or_send(
+                        &bot,
+                        msg.chat.id,
+                        pid,
+                        i18n::upload_rejected(lang, &i18n::error_text(lang, &e)),
+                        menu::backup_upload_menu(lang),
                     )
                     .await;
                 }
@@ -3645,13 +3783,78 @@ async fn callback_handler(
                 .await
             }
         },
-        // Ветки для восстановления, загрузки и расписания — заглушки на эту
-        // задачу, реальные обработчики появятся в Task 10–11.
-        Action::BackupRestore(_)
-        | Action::BackupRestoreYes(_, _)
-        | Action::BackupUpload
-        | Action::BackupSchedule
-        | Action::BackupSchedSet(_) => {
+        Action::BackupRestore(key) => {
+            use crate::backup::service::{find, Located};
+            match find(&vpn, &settings, &key) {
+                Some(Located::Bundle(row, _)) => {
+                    edit_or_send(
+                        &bot,
+                        chat,
+                        msg_id,
+                        i18n::confirm_restore(lang, &row.name, row.has_db),
+                        menu::confirm_restore(lang, &key, row.has_db),
+                    )
+                    .await
+                }
+                Some(Located::Installer(bf)) => {
+                    edit_or_send(
+                        &bot,
+                        chat,
+                        msg_id,
+                        i18n::confirm_restore(lang, &bf.name, false),
+                        menu::confirm_restore(lang, &key, false),
+                    )
+                    .await
+                }
+                None => {
+                    edit_or_send(
+                        &bot,
+                        chat,
+                        msg_id,
+                        i18n::backup_not_found(lang),
+                        menu::backup_menu(lang),
+                    )
+                    .await
+                }
+            }
+        }
+        Action::BackupRestoreYes(key, with_db) => {
+            let pid = progress(&bot, chat, msg_id, i18n::restoring(lang)).await;
+            let text = match crate::backup::service::restore(&vpn, &settings, &key, with_db).await {
+                Ok(out) => {
+                    // Событие пишем ПОСЛЕ restore БД — попадает в восстановленную БД.
+                    settings.log_event(
+                        now_epoch(),
+                        EventKind::Restore,
+                        None,
+                        Some(uid),
+                        Some(&format!("{} db={}", key.encode(), out.db)),
+                    );
+                    i18n::restore_done_detail(lang, out.awg, out.db)
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "restore провалился");
+                    i18n::error_text(lang, &e)
+                }
+            };
+            edit_or_send(&bot, chat, pid, text, menu::main_menu(lang)).await;
+        }
+        Action::BackupUpload => {
+            edit_or_send(
+                &bot,
+                chat,
+                msg_id,
+                i18n::ask_backup_upload(lang),
+                menu::backup_upload_menu(lang),
+            )
+            .await;
+            dialogue
+                .update(State::AwaitingBackupUpload { prompt: msg_id })
+                .await?;
+        }
+        // Ветки для расписания автобэкапа — заглушка на эту задачу,
+        // реальный обработчик появится в Task 11.
+        Action::BackupSchedule | Action::BackupSchedSet(_) => {
             edit_or_send(
                 &bot,
                 chat,
@@ -4115,6 +4318,17 @@ mod tests {
             Ok(Some("я".repeat(200)))
         );
         assert_eq!(normalize_comment(&"я".repeat(201)), Err(()));
+    }
+
+    #[test]
+    fn upload_precheck_rules() {
+        assert_eq!(upload_precheck(Some("a.tar.gz"), 10), Ok(()));
+        assert_eq!(upload_precheck(Some("a.zip"), 10), Err("not_targz"));
+        assert_eq!(upload_precheck(None, 10), Err("not_targz"));
+        assert_eq!(
+            upload_precheck(Some("a.tar.gz"), (20 * 1024 * 1024) + 1),
+            Err("too_large")
+        );
     }
 
     #[test]
