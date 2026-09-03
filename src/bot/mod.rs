@@ -128,6 +128,16 @@ pub enum State {
         id: i64,
         prompt: MessageId,
     },
+    // --- бэкапы (#35, #53) ---
+    /// Комментарий: при создании `target == None` (после ответа стартует
+    /// бэкап), при правке — `Some(ts)` бандла.
+    AwaitingBackupComment {
+        target: Option<String>,
+        prompt: MessageId,
+    },
+    AwaitingBackupUpload {
+        prompt: MessageId,
+    },
 }
 
 #[cfg(test)]
@@ -156,6 +166,21 @@ mod tests {
             prefix: "user".into(),
             count: 10,
             expires: None,
+        };
+    }
+
+    #[test]
+    fn backup_states_exist() {
+        let _ = State::AwaitingBackupComment {
+            target: None,
+            prompt: MessageId(1),
+        };
+        let _ = State::AwaitingBackupComment {
+            target: Some("T".into()),
+            prompt: MessageId(1),
+        };
+        let _ = State::AwaitingBackupUpload {
+            prompt: MessageId(1),
         };
     }
 

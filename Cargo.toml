@@ -11,7 +11,7 @@ repository = "https://github.com/ekuraev/awgram"
 
 [dependencies]
 teloxide = { version = "0.17", default-features = false, features = ["macros", "ctrlc_handler", "rustls"] }
-tokio = { version = "1.39", features = ["rt-multi-thread", "macros", "process", "time"] }
+tokio = { version = "1.39", features = ["rt-multi-thread", "macros", "process", "time", "fs"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "1.1"
@@ -20,13 +20,17 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 regex = "1"
 rand = "0.10"
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["backup", "bundled"] }
 url = "2"
 # Версия и TLS-фичи едут за teloxide; socks нужен для socks5(h)-прокси.
 reqwest = { version = "0.12", default-features = false, features = ["socks"] }
+tar = "0.4"
+flate2 = "1.1"
+sha2 = "0.11"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+tempfile = "3"
 
 [dev-dependencies]
-tempfile = "3"
 serial_test = "4"
 tokio = { version = "1.39", features = ["test-util"] }
 

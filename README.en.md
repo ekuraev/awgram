@@ -66,7 +66,9 @@ tangible on budget VPS hosts.
   firewall status (✅/⚠️/❌).
 - 🔬 **Environment diagnostics**.
 - 🔁 **Restart service** and 🛠 **kernel module repair** (DKMS rebuild).
-- 💾 **Backup/restore** of the AmneziaWG state, archive download to chat.
+- 💾 **Backups**: scheduled with rotation and reports, comments and
+  pinning, restore AmneziaWG and, optionally, the bot's own database
+  (groups, stats), backup download as a file.
 
 ### Settings & security
 
@@ -79,6 +81,18 @@ tangible on budget VPS hosts.
   `https` proxies in `telegram_proxies` with automatic failover — for
   servers where the Bot API is unreachable directly; details and the
   routing-based alternative in [docs/proxy.en.md](docs/proxy.en.md).
+
+- ⚠️ **Backups in hardened mode**: the installer creates its archives with
+  `chmod 600`, unreadable by the `awgram` user, so backups through the bot
+  fully work in root mode. In hardened mode grant read access manually
+  (`setfacl -m u:awgram:r /root/awg/backups/*.tar.gz`) or wait for an
+  installer update.
+- 🧰 **Manual restore from a bundle** when the bot itself is unavailable:
+
+  ```bash
+  tar -xzf awgram_backup_<ts>.tar.gz awg/ \
+    && sudo bash /root/awg/manage_amneziawg.sh restore awg/awg_backup_<ts>.tar.gz
+  ```
 
 ## Quick start
 

@@ -1,6 +1,8 @@
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 
+use crate::backup::Key;
 use crate::i18n::{self, Lang};
+use crate::store::{BackupRow, BackupSchedule};
 use crate::vpn::model::{format_handshake_compact, Client, ClientFilter};
 use crate::vpn::validate::{RouteKey, RouteSelection};
 use crate::vpn::BackupFile;
@@ -666,37 +668,149 @@ pub fn backup_menu(lang: Lang) -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![
         vec![cb(&i18n::btn_backup_new(lang), "bk:new")],
         vec![cb(&i18n::btn_backup_list(lang), "bk:list")],
+        vec![cb(&i18n::btn_backup_upload(lang), "bk:upload")],
+        vec![cb(&i18n::btn_backup_sched(lang), "bk:sched")],
         vec![cb(&i18n::btn_back(lang), "menu")],
     ])
 }
 
-/// Один ряд на бэкап, кнопка ведёт на карточку по индексу в `list_backups()`.
-/// Имя файла — обычный текст кнопки (Telegram не рендерит в кнопках HTML,
-/// экранирование здесь не нужно, в отличие от текста сообщений).
-pub fn backups_list(lang: Lang, backups: &[BackupFile]) -> InlineKeyboardMarkup {
-    let mut rows: Vec<Vec<InlineKeyboardButton>> = backups
-        .iter()
-        .enumerate()
-        .map(|(idx, bf)| vec![cb(&bf.name, &format!("bk:card:{idx}"))])
-        .collect();
-    rows.push(vec![cb(&i18n::btn_back(lang), "menu")]);
+/// Бандлы бота (по ключу `<ts>`), затем снапшоты инсталлера (`i:<ts>`).
+/// Строки, ts которых не разбирается обратно в `Key`, пропускаются: их
+/// `bk:card:<ts>` либо не влезет в 64 байта лимита callback'а Telegram, либо
+/// не распарсится на приёме — кнопка была бы мёртвой, а с ней и весь экран.
+pub fn backups_list(lang: Lang, rows: &[BackupRow], snaps: &[BackupFile]) -> InlineKeyboardMarkup {
+    let mut out: Vec<Vec<InlineKeyboardButton>> = Vec::new();
+    for r in rows {
+        if let Some(ts) = crate::backup::format::ts_from_bundle_name(&r.name) {
+            if Key::parse(ts).is_none() {
+                continue;
+            }
+            out.push(vec![cb(
+                &i18n::backup_list_row(lang, r),
+                &format!("bk:card:{}", Key::Bundle(ts.into()).encode()),
+            )]);
+        }
+    }
+    for s in snaps {
+        if let Some(ts) = crate::backup::format::ts_from_awg_name(&s.name) {
+            if Key::parse(ts).is_none() {
+                continue;
+            }
+            out.push(vec![cb(
+                &i18n::snapshot_row(lang, s),
+                &format!("bk:card:{}", Key::Installer(ts.into()).encode()),
+            )]);
+        }
+    }
+    out.push(vec![cb(&i18n::btn_back(lang), "backup")]);
+    InlineKeyboardMarkup::new(out)
+}
+
+pub fn backup_card(lang: Lang, ts: &str, pinned: bool) -> InlineKeyboardMarkup {
+    let k = Key::Bundle(ts.into()).encode();
+    let mut rows = vec![
+        vec![cb(&i18n::btn_restore(lang), &format!("bk:restore:{k}"))],
+        vec![cb(&i18n::btn_comment(lang), &format!("bk:comment:{ts}")), {
+            let label = if pinned {
+                i18n::btn_unpin(lang)
+            } else {
+                i18n::btn_pin(lang)
+            };
+            cb(
+                &label,
+                &format!("bk:pin:{ts}:{}", if pinned { "off" } else { "on" }),
+            )
+        }],
+        vec![cb(&i18n::btn_verify(lang), &format!("bk:verify:{ts}"))],
+        vec![
+            cb(&i18n::btn_download_bundle(lang), &format!("bk:dl:{k}")),
+            cb(&i18n::btn_download_awg(lang), &format!("bk:dlawg:{k}")),
+        ],
+    ];
+    if !pinned {
+        rows.push(vec![cb(
+            &i18n::btn_delete_backup(lang),
+            &format!("bk:del:{k}"),
+        )]);
+    }
+    rows.push(vec![cb(&i18n::btn_to_backups(lang), "bk:list")]);
     InlineKeyboardMarkup::new(rows)
 }
 
-pub fn backup_card(lang: Lang, idx: usize) -> InlineKeyboardMarkup {
+pub fn installer_card(lang: Lang, ts: &str) -> InlineKeyboardMarkup {
+    let k = Key::Installer(ts.into()).encode();
     InlineKeyboardMarkup::new(vec![
-        vec![
-            cb(&i18n::btn_download(lang), &format!("bk:dl:{idx}")),
-            cb(&i18n::btn_restore(lang), &format!("bk:restore:{idx}")),
-        ],
-        vec![cb(&i18n::btn_back(lang), "menu")],
+        vec![cb(&i18n::btn_restore(lang), &format!("bk:restore:{k}"))],
+        vec![cb(&i18n::btn_download(lang), &format!("bk:dl:{k}"))],
+        vec![cb(&i18n::btn_delete_backup(lang), &format!("bk:del:{k}"))],
+        vec![cb(&i18n::btn_to_backups(lang), "bk:list")],
     ])
 }
 
-pub fn confirm_restore(lang: Lang, idx: usize) -> InlineKeyboardMarkup {
+pub fn confirm_restore(lang: Lang, key: &Key, has_db: bool) -> InlineKeyboardMarkup {
+    let k = key.encode();
+    let mut rows = Vec::new();
+    if has_db {
+        rows.push(vec![cb(
+            &i18n::btn_restore_with_db(lang),
+            &format!("bk:restore_yes:{k}:db"),
+        )]);
+    }
+    rows.push(vec![cb(
+        &i18n::btn_restore_awg_only(lang),
+        &format!("bk:restore_yes:{k}:awg"),
+    )]);
+    rows.push(vec![cb(&i18n::btn_back(lang), &format!("bk:card:{k}"))]);
+    InlineKeyboardMarkup::new(rows)
+}
+
+pub fn confirm_backup_delete(lang: Lang, key: &Key) -> InlineKeyboardMarkup {
+    let k = key.encode();
     InlineKeyboardMarkup::new(vec![vec![
-        cb(&i18n::btn_confirm(lang), &format!("bk:restore_yes:{idx}")),
-        cb(&i18n::btn_back(lang), "menu"),
+        cb(&i18n::btn_confirm(lang), &format!("bk:del_yes:{k}")),
+        cb(&i18n::btn_back(lang), &format!("bk:card:{k}")),
+    ]])
+}
+
+pub fn backup_comment_menu(lang: Lang, editing: bool) -> InlineKeyboardMarkup {
+    let first = if editing {
+        cb(&i18n::btn_clear_comment(lang), "bk:comment_clear")
+    } else {
+        cb(&i18n::btn_skip_comment(lang), "bk:new_skip")
+    };
+    InlineKeyboardMarkup::new(vec![vec![first], vec![cb(&i18n::btn_back(lang), "backup")]])
+}
+
+pub fn backup_upload_menu(lang: Lang) -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![vec![cb(&i18n::btn_back(lang), "backup")]])
+}
+
+pub fn backup_sched_menu(lang: Lang, s: &BackupSchedule) -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![
+        vec![cb(
+            &i18n::btn_sched_period(lang, s.period),
+            "bk:sched:period",
+        )],
+        vec![cb(
+            &i18n::btn_sched_time(lang, s.hour, s.minute),
+            "bk:sched:time",
+        )],
+        vec![cb(&i18n::btn_sched_keep(lang, s.keep), "bk:sched:keep")],
+        vec![cb(
+            &i18n::btn_sched_notify(lang, s.notify_ok),
+            "bk:sched:notify",
+        )],
+        vec![cb(&i18n::btn_sched_db(lang, s.include_db), "bk:sched:db")],
+        vec![cb(&i18n::btn_back(lang), "backup")],
+    ])
+}
+
+/// Клавиатура под уведомлением планировщика: к списку бэкапов или к
+/// настройкам автобэкапа.
+pub fn backup_notice_menu(lang: Lang) -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![vec![
+        cb(&i18n::btn_backup_list(lang), "bk:list"),
+        cb(&i18n::btn_backup_sched(lang), "bk:sched"),
     ]])
 }
 
@@ -1427,48 +1541,142 @@ mod tests {
     }
 
     #[test]
-    fn backup_menu_has_new_list_and_back() {
+    fn backup_menu_has_new_list_upload_sched_back() {
         let data = all_callback_data(&backup_menu(Lang::Ru));
-        assert!(data.contains(&"bk:new".to_string()));
-        assert!(data.contains(&"bk:list".to_string()));
-        assert!(data.contains(&"menu".to_string()));
+        assert_eq!(
+            data,
+            vec!["bk:new", "bk:list", "bk:upload", "bk:sched", "menu"]
+        );
     }
 
     #[test]
-    fn backups_list_one_button_per_backup_by_index() {
-        let backups = vec![
-            BackupFile {
-                name: "a.tar.gz".into(),
-                path: "a.tar.gz".into(),
+    fn backup_notice_menu_links_list_and_schedule() {
+        let data = all_callback_data(&backup_notice_menu(Lang::Ru));
+        assert_eq!(data, vec!["bk:list", "bk:sched"]);
+    }
+
+    #[test]
+    fn backups_list_rows_by_key_then_snapshots() {
+        let row = |name: &str| crate::store::BackupRow {
+            name: name.into(),
+            created_at: 1,
+            kind: crate::store::BackupKind::Auto,
+            actor: None,
+            comment: Some("перед обновлением сервера и ещё длинный текст".into()),
+            pinned: false,
+            size: 2_400_000,
+            sha256: None,
+            has_db: false,
+            clients: Some(3),
+            groups: None,
+        };
+        let snap = BackupFile {
+            name: "awg_backup_S.tar.gz".into(),
+            path: "p".into(),
+            size: 1,
+            mtime: 1,
+        };
+        let kb = backups_list(
+            Lang::Ru,
+            &[row("awgram_backup_A.tar.gz"), row("awgram_backup_B.tar.gz")],
+            &[snap],
+        );
+        let data = all_callback_data(&kb);
+        assert_eq!(
+            data,
+            vec!["bk:card:A", "bk:card:B", "bk:card:i:S", "backup"]
+        );
+        for t in all_button_texts(&kb) {
+            assert!(t.chars().count() <= 64, "{t}");
+        }
+
+        // ts, который не разбирается обратно в Key (длиннее лимита), в
+        // клавиатуру не попадает: callback не влез бы в 64 байта Telegram.
+        let long = "z".repeat(70);
+        let kb2 = backups_list(
+            Lang::Ru,
+            &[row(&format!("awgram_backup_{long}.tar.gz"))],
+            &[BackupFile {
+                name: format!("awg_backup_{long}.tar.gz"),
+                path: "p".into(),
                 size: 1,
                 mtime: 1,
-            },
-            BackupFile {
-                name: "b.tar.gz".into(),
-                path: "b.tar.gz".into(),
-                size: 2,
-                mtime: 2,
-            },
-        ];
-        let data = all_callback_data(&backups_list(Lang::Ru, &backups));
-        assert!(data.contains(&"bk:card:0".to_string()));
-        assert!(data.contains(&"bk:card:1".to_string()));
-        assert!(data.contains(&"menu".to_string()));
+            }],
+        );
+        assert_eq!(all_callback_data(&kb2), vec!["backup"]);
+        for d in all_callback_data(&kb) {
+            assert!(d.len() <= 64, "callback длиннее лимита Telegram: {d}");
+        }
     }
 
     #[test]
-    fn backup_card_encodes_index() {
-        let data = all_callback_data(&backup_card(Lang::Ru, 2));
-        assert!(data.contains(&"bk:dl:2".to_string()));
-        assert!(data.contains(&"bk:restore:2".to_string()));
-        assert!(data.contains(&"menu".to_string()));
+    fn backup_card_buttons_depend_on_pin() {
+        let pinned = all_callback_data(&backup_card(Lang::Ru, "T", true));
+        assert!(pinned.contains(&"bk:restore:T".to_string()));
+        assert!(pinned.contains(&"bk:pin:T:off".to_string()));
+        assert!(!pinned.iter().any(|d| d.starts_with("bk:del:")));
+        let plain = all_callback_data(&backup_card(Lang::Ru, "T", false));
+        assert!(plain.contains(&"bk:pin:T:on".to_string()));
+        assert!(plain.contains(&"bk:del:T".to_string()));
+        for d in [
+            "bk:comment:T",
+            "bk:verify:T",
+            "bk:dl:T",
+            "bk:dlawg:T",
+            "bk:list",
+        ] {
+            assert!(plain.contains(&d.to_string()), "{d}");
+        }
+        let snap = all_callback_data(&installer_card(Lang::Ru, "S"));
+        assert_eq!(
+            snap,
+            vec!["bk:restore:i:S", "bk:dl:i:S", "bk:del:i:S", "bk:list"]
+        );
     }
 
     #[test]
-    fn confirm_restore_encodes_index() {
-        let data = all_callback_data(&confirm_restore(Lang::Ru, 3));
-        assert!(data.contains(&"bk:restore_yes:3".to_string()));
-        assert!(data.contains(&"menu".to_string()));
+    fn confirm_restore_offers_db_choice_only_when_present() {
+        use crate::backup::Key;
+        let with = all_callback_data(&confirm_restore(Lang::Ru, &Key::Bundle("T".into()), true));
+        assert_eq!(
+            with,
+            vec!["bk:restore_yes:T:db", "bk:restore_yes:T:awg", "bk:card:T"]
+        );
+        let without = all_callback_data(&confirm_restore(
+            Lang::Ru,
+            &Key::Installer("S".into()),
+            false,
+        ));
+        assert_eq!(without, vec!["bk:restore_yes:i:S:awg", "bk:card:i:S"]);
+        let del = all_callback_data(&confirm_backup_delete(Lang::Ru, &Key::Bundle("T".into())));
+        assert_eq!(del, vec!["bk:del_yes:T", "bk:card:T"]);
+    }
+
+    #[test]
+    fn backup_sched_menu_has_all_fields() {
+        let data = all_callback_data(&backup_sched_menu(
+            Lang::Ru,
+            &crate::store::BackupSchedule::default(),
+        ));
+        assert_eq!(
+            data,
+            vec![
+                "bk:sched:period",
+                "bk:sched:time",
+                "bk:sched:keep",
+                "bk:sched:notify",
+                "bk:sched:db",
+                "backup"
+            ]
+        );
+        let c = all_callback_data(&backup_comment_menu(Lang::Ru, false));
+        assert_eq!(c, vec!["bk:new_skip", "backup"]);
+        let e = all_callback_data(&backup_comment_menu(Lang::Ru, true));
+        assert_eq!(e, vec!["bk:comment_clear", "backup"]);
+        assert_eq!(
+            all_callback_data(&backup_upload_menu(Lang::Ru)),
+            vec!["backup"]
+        );
     }
 
     fn g(id: i64, name: &str) -> crate::store::GroupRow {

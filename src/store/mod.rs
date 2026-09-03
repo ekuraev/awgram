@@ -7,16 +7,19 @@ use std::sync::Mutex;
 
 use rusqlite::Connection;
 
+mod backups;
 mod events;
 mod groups;
 mod settings;
 mod stats;
 
+pub use backups::{BackupKind, BackupRow};
 pub use events::{EventKind, EventRow};
 pub use groups::{
     gen_invite_token, GroupError, GroupRow, InviteRow, InviteUse, ListScope, QuotaAssign,
     INVITE_TTL_SECS,
 };
+pub use settings::{BackupFailure, BackupSchedule, Period};
 pub use stats::{PeriodTotals, Sample, TrafficSummary};
 
 /// SQL-батчи миграций: индекс в массиве + 1 == schema_version после применения.
@@ -101,6 +104,23 @@ pub(crate) const MIGRATIONS: &[&str] = &[
     );
     ALTER TABLE clients ADD COLUMN group_id INTEGER REFERENCES groups(id);
     "#,
+    // v3: метаданные бэкапов бота (#35, #53). Файлы лежат в
+    // clients_dir/backups/awgram/, строки — кэш и носитель комментария/пина.
+    r#"
+    CREATE TABLE backups(
+        name       TEXT PRIMARY KEY,
+        created_at INTEGER NOT NULL,
+        kind       TEXT NOT NULL,
+        actor      INTEGER,
+        comment    TEXT,
+        pinned     INTEGER NOT NULL DEFAULT 0,
+        size       INTEGER NOT NULL,
+        sha256     TEXT,
+        has_db     INTEGER NOT NULL,
+        clients    INTEGER,
+        groups     INTEGER
+    );
+    "#,
 ];
 
 pub struct Store {
@@ -151,6 +171,32 @@ impl Store {
         let conn = self.conn.lock().unwrap();
         f(&conn)
     }
+
+    /// Число миграций == актуальная schema_version.
+    pub fn current_schema() -> i64 {
+        MIGRATIONS.len() as i64
+    }
+
+    /// Консистентный снимок живой БД в файл (SQLite backup API, работает при WAL).
+    pub fn snapshot_to(&self, path: &Path) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let mut dst = Connection::open(path)?;
+        let b = rusqlite::backup::Backup::new(&conn, &mut dst)?;
+        b.run_to_completion(256, std::time::Duration::from_millis(5), None)
+    }
+
+    /// Заменяет содержимое живой БД снимком и доводит схему до текущей.
+    /// Копирование постранично внутри транзакции назначения: при ошибке
+    /// живая БД остаётся прежней.
+    pub fn restore_from(&self, path: &Path) -> rusqlite::Result<()> {
+        let mut conn = self.conn.lock().unwrap();
+        let src = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        {
+            let b = rusqlite::backup::Backup::new(&src, &mut conn)?;
+            b.run_to_completion(256, std::time::Duration::from_millis(5), None)?;
+        }
+        migrate(&conn)
+    }
 }
 
 fn migrate(conn: &Connection) -> rusqlite::Result<()> {
@@ -188,7 +234,7 @@ mod tests {
     fn open_creates_schema_and_version() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(&dir.path().join("sub/awgram.db")).unwrap();
-        assert_eq!(store.schema_version(), 2);
+        assert_eq!(store.schema_version(), 3);
     }
 
     #[test]
@@ -197,12 +243,49 @@ mod tests {
         let path = dir.path().join("awgram.db");
         drop(Store::open(&path).unwrap());
         let store = Store::open(&path).unwrap();
-        assert_eq!(store.schema_version(), 2);
+        assert_eq!(store.schema_version(), 3);
     }
 
     #[test]
     fn in_memory_store_works() {
         let store = Store::open_in_memory();
-        assert_eq!(store.schema_version(), 2);
+        assert_eq!(store.schema_version(), 3);
+    }
+
+    #[test]
+    fn snapshot_and_restore_roundtrip_with_migrate() {
+        let dir = tempfile::tempdir().unwrap();
+        let live = Store::open(&dir.path().join("live.db")).unwrap();
+        live.set_psk_default(true);
+        let snap = dir.path().join("snap.db");
+        live.snapshot_to(&snap).unwrap();
+        // снимок — самостоятельная БД с той же схемой
+        let s2 = Store::open(&snap).unwrap();
+        assert!(s2.psk_default());
+        drop(s2);
+        // меняем живую и откатываем из снимка
+        live.set_psk_default(false);
+        live.restore_from(&snap).unwrap();
+        assert!(live.psk_default());
+        assert_eq!(live.schema_version(), Store::current_schema());
+    }
+
+    #[test]
+    fn restore_from_older_schema_migrates() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("old.db");
+        {
+            let c = Connection::open(&old).unwrap();
+            c.execute_batch(
+                "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 INSERT INTO meta VALUES('schema_version','0');",
+            )
+            .unwrap();
+        }
+        let live = Store::open(&dir.path().join("live.db")).unwrap();
+        live.restore_from(&old).unwrap();
+        assert_eq!(live.schema_version(), Store::current_schema());
+        // таблицы v1..v3 появились
+        assert!(live.backup_row("x").is_none());
     }
 }

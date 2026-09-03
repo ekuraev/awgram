@@ -718,6 +718,12 @@ setup_hardened() {
   else
     warn warn_no_cdir "$CLIENTS_DIR" "$CLIENTS_DIR"
   fi
+  # Бот пишет бандлы в backups/awgram и удаляет старые — нужен rwx на оба каталога.
+  # Архивы самого инсталлера (chmod 600) для awgram нечитаемы — см. README.
+  install -d -m 700 "$CLIENTS_DIR/backups" "$CLIENTS_DIR/backups/awgram" 2>/dev/null || true
+  { setfacl -m "u:$SVC_USER:rwx" "$CLIENTS_DIR/backups" "$CLIENTS_DIR/backups/awgram" \
+      && setfacl -d -m "u:$SVC_USER:rwx" "$CLIENTS_DIR/backups/awgram"; } 2>/dev/null \
+    || warn warn_acl_failed "$CLIENTS_DIR/backups" "$CLIENTS_DIR/backups"
 }
 
 # ---------- заглушки (заменяются задачами 6-8) ----------

@@ -748,6 +748,13 @@ pub fn backup_creating(lang: Lang) -> String {
     }
     .to_string()
 }
+pub fn backup_verifying(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "⏳ Проверяю контрольную сумму…",
+        Lang::En => "⏳ Verifying checksum…",
+    }
+    .to_string()
+}
 pub fn backup_done(lang: Lang, filename: &str) -> String {
     let f = html_escape(filename);
     match lang {
@@ -762,12 +769,11 @@ pub fn backups_empty(lang: Lang) -> String {
     }
     .to_string()
 }
-pub fn backups_list_title(lang: Lang) -> String {
+pub fn backups_list_title(lang: Lang, kept: usize, keep: u32, pinned: usize) -> String {
     match lang {
-        Lang::Ru => "📃 <b>Бэкапы</b>:",
-        Lang::En => "📃 <b>Backups</b>:",
+        Lang::Ru => format!("📃 <b>Бэкапы</b>: хранится {kept} из {keep}, закреплено {pinned}"),
+        Lang::En => format!("📃 <b>Backups</b>: keeping {kept} of {keep}, pinned {pinned}"),
     }
-    .to_string()
 }
 pub fn btn_download(lang: Lang) -> String {
     match lang {
@@ -783,13 +789,26 @@ pub fn btn_restore(lang: Lang) -> String {
     }
     .to_string()
 }
-pub fn confirm_restore(lang: Lang, filename: &str) -> String {
-    let f = html_escape(filename);
-    match lang {
-        Lang::Ru => {
-            format!("♻️ Восстановить из <code>{f}</code>? Текущее состояние будет заменено.")
+/// Экран подтверждения восстановления: предупреждает о замене конфигурации,
+/// напоминает про pre-restore снапшот инсталлера и (если у бэкапа есть БД)
+/// про выбор — восстанавливать её или нет.
+pub fn confirm_restore(lang: Lang, name: &str, has_db: bool) -> String {
+    let n = html_escape(name);
+    let db_note = if has_db {
+        match lang {
+            Lang::Ru => "\nМожно выбрать, восстанавливать ли также БД бота.",
+            Lang::En => "\nYou can choose whether to also restore the bot DB.",
         }
-        Lang::En => format!("♻️ Restore from <code>{f}</code>? Current state will be replaced."),
+    } else {
+        ""
+    };
+    match lang {
+        Lang::Ru => format!(
+            "♻️ Восстановить из <code>{n}</code>? Текущая конфигурация AmneziaWG будет заменена. Инсталлер сохранит pre-restore снапшот перед восстановлением.{db_note}"
+        ),
+        Lang::En => format!(
+            "♻️ Restore from <code>{n}</code>? The current AmneziaWG configuration will be replaced. The installer will save a pre-restore snapshot before restoring.{db_note}"
+        ),
     }
 }
 pub fn btn_confirm(lang: Lang) -> String {
@@ -812,6 +831,579 @@ pub fn restore_done(lang: Lang) -> String {
         Lang::En => "✅ Restore complete.",
     }
     .to_string()
+}
+pub fn btn_backup_sched(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "⚙️ Авто-бэкап",
+        Lang::En => "⚙️ Auto-backup",
+    }
+    .to_string()
+}
+
+// --- бэкапы по ключу (#35, #53): карточки, список, расписание ---
+pub fn btn_backup_upload(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "📤 Загрузить файл",
+        Lang::En => "📤 Upload file",
+    }
+    .to_string()
+}
+pub fn btn_pin(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "📌 Закрепить",
+        Lang::En => "📌 Pin",
+    }
+    .to_string()
+}
+pub fn btn_unpin(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "📌 Открепить",
+        Lang::En => "📌 Unpin",
+    }
+    .to_string()
+}
+pub fn btn_comment(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "✏️ Комментарий",
+        Lang::En => "✏️ Comment",
+    }
+    .to_string()
+}
+pub fn btn_verify(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "🔄 Проверить целостность",
+        Lang::En => "🔄 Verify integrity",
+    }
+    .to_string()
+}
+pub fn btn_delete_backup(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "🗑 Удалить",
+        Lang::En => "🗑 Delete",
+    }
+    .to_string()
+}
+pub fn btn_download_bundle(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "📥 Скачать бандл",
+        Lang::En => "📥 Download bundle",
+    }
+    .to_string()
+}
+pub fn btn_download_awg(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "📥 Скачать архив AWG",
+        Lang::En => "📥 Download AWG archive",
+    }
+    .to_string()
+}
+pub fn btn_skip_comment(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "⏭ Без комментария",
+        Lang::En => "⏭ No comment",
+    }
+    .to_string()
+}
+pub fn btn_clear_comment(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "🧹 Очистить",
+        Lang::En => "🧹 Clear",
+    }
+    .to_string()
+}
+pub fn btn_restore_with_db(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "♻️ Восстановить AWG и БД бота",
+        Lang::En => "♻️ Restore AWG and bot DB",
+    }
+    .to_string()
+}
+pub fn btn_restore_awg_only(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "♻️ Только AWG",
+        Lang::En => "♻️ AWG only",
+    }
+    .to_string()
+}
+pub fn btn_to_backups(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "◀️ К списку",
+        Lang::En => "◀️ To list",
+    }
+    .to_string()
+}
+pub fn ask_backup_comment(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "✏️ Комментарий к бэкапу (до 200 символов)? Например: «Перед обновлением».",
+        Lang::En => "✏️ Comment for this backup (up to 200 chars)? E.g. \"Before upgrade\".",
+    }
+    .to_string()
+}
+pub fn comment_too_long(lang: Lang, max: usize) -> String {
+    match lang {
+        Lang::Ru => format!("⚠️ Слишком длинно, максимум {max} символов."),
+        Lang::En => format!("⚠️ Too long, {max} characters max."),
+    }
+}
+pub fn installer_snapshots_label(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "🧷 Снапшоты инсталлера",
+        Lang::En => "🧷 Installer snapshots",
+    }
+    .to_string()
+}
+pub fn backup_deleted(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "🗑 Бэкап удалён.",
+        Lang::En => "🗑 Backup deleted.",
+    }
+    .to_string()
+}
+pub fn verify_result(lang: Lang, ok: bool) -> String {
+    match (lang, ok) {
+        (Lang::Ru, true) => "✅ Контрольная сумма совпадает.",
+        (Lang::Ru, false) => "⚠️ Контрольная сумма НЕ совпадает — файл повреждён.",
+        (Lang::En, true) => "✅ Checksum matches.",
+        (Lang::En, false) => "⚠️ Checksum does NOT match — the file is corrupted.",
+    }
+    .to_string()
+}
+pub fn comment_saved(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "✏️ Комментарий сохранён.",
+        Lang::En => "✏️ Comment saved.",
+    }
+    .to_string()
+}
+/// Отказ удалить закреплённый бэкап: закрепление и есть защита от удаления,
+/// так что подсказываем снять его, а не повторяем статус «закреплён».
+pub fn unpin_first(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "📌 Бэкап закреплён: сначала снимите закрепление.",
+        Lang::En => "📌 This backup is pinned: unpin it first.",
+    }
+    .to_string()
+}
+pub fn pinned_toggled(lang: Lang, on: bool) -> String {
+    match (lang, on) {
+        (Lang::Ru, true) => "📌 Закреплён: не участвует в ротации.",
+        (Lang::Ru, false) => "📌 Откреплён.",
+        (Lang::En, true) => "📌 Pinned: excluded from rotation.",
+        (Lang::En, false) => "📌 Unpinned.",
+    }
+    .to_string()
+}
+/// «✅ Восстановлено: AmneziaWG{ и БД бота}.» — «и БД бота» добавляется,
+/// только если восстанавливалась и она (`db`).
+pub fn restore_done_detail(lang: Lang, awg: bool, db: bool) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    if awg {
+        parts.push("AmneziaWG");
+    }
+    if db {
+        parts.push(match lang {
+            Lang::Ru => "БД бота",
+            Lang::En => "bot DB",
+        });
+    }
+    let joined = match lang {
+        Lang::Ru => parts.join(" и "),
+        Lang::En => parts.join(" and "),
+    };
+    match lang {
+        Lang::Ru => format!("✅ Восстановлено: {joined}."),
+        Lang::En => format!("✅ Restored: {joined}."),
+    }
+}
+/// Приписка к результату восстановления, когда AWG вернулся, а БД бота — нет.
+/// Повторять восстановление целиком не нужно и вредно, поэтому говорим прямо,
+/// что именно не получилось и в каком состоянии всё осталось.
+pub fn restore_db_failed(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => {
+            "⚠️ AmneziaWG восстановлен, но БД бота восстановить не удалось — проверьте группы и настройки."
+        }
+        Lang::En => {
+            "⚠️ AmneziaWG has been restored, but the bot DB could not be — check groups and settings."
+        }
+    }
+    .to_string()
+}
+pub fn ask_backup_upload(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => {
+            "📤 Пришлите файл бэкапа <code>.tar.gz</code> (бандл awgram или архив инсталлера), до 20 МБ."
+        }
+        Lang::En => {
+            "📤 Send a <code>.tar.gz</code> backup (awgram bundle or installer archive), up to 20 MB."
+        }
+    }
+    .to_string()
+}
+/// Индикатор прогресса после того, как файл прошёл `upload_precheck` и
+/// скачивается/проверяется — отличается от `backup_creating` (тот про
+/// упаковку нового бэкапа, этот про приём чужого файла).
+pub fn upload_processing(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "⏳ Проверяю файл…",
+        Lang::En => "⏳ Checking the file…",
+    }
+    .to_string()
+}
+pub fn upload_not_a_file(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "⚠️ Нужен файл .tar.gz. Пришлите документом или нажмите «Назад».",
+        Lang::En => "⚠️ A .tar.gz file is required. Send it as a document or press \"Back\".",
+    }
+    .to_string()
+}
+pub fn upload_rejected(lang: Lang, reason: &str) -> String {
+    match lang {
+        Lang::Ru => format!("❌ Файл отклонён.\n{reason}"),
+        Lang::En => format!("❌ File rejected.\n{reason}"),
+    }
+}
+pub fn upload_accepted(lang: Lang, name: &str) -> String {
+    let n = html_escape(name);
+    match lang {
+        Lang::Ru => format!("✅ Бэкап загружен:\n<code>{n}</code>"),
+        Lang::En => format!("✅ Backup uploaded:\n<code>{n}</code>"),
+    }
+}
+
+/// `%d.%m %H:%M` в локальной таймзоне — короткий формат для строк списков
+/// (в отличие от `fmt_ts`, который выводит ещё и год).
+fn local_dt_short(epoch: i64) -> String {
+    use chrono::TimeZone;
+    chrono::Local
+        .timestamp_opt(epoch, 0)
+        .single()
+        .map(|d| d.format("%d.%m %H:%M").to_string())
+        .unwrap_or_else(|| epoch.to_string())
+}
+
+/// Текст кнопки бандла в списке бэкапов: дата · размер · пин/БД ·
+/// комментарий (усечённый). Держим в пределах лимита кнопки Telegram (64
+/// символа), поэтому комментарий обрезается заранее.
+pub fn backup_list_row(lang: Lang, r: &crate::store::BackupRow) -> String {
+    let _ = lang;
+    let dt = local_dt_short(r.created_at);
+    let size = crate::vpn::model::human_bytes(r.size);
+    let mut marks = String::new();
+    if r.pinned {
+        marks.push('📌');
+    }
+    if r.has_db {
+        marks.push('💾');
+    }
+    let comment = r.comment.as_deref().map(|c| {
+        let mut it = c.chars();
+        let head: String = it.by_ref().take(24).collect();
+        if it.next().is_some() {
+            format!("{head}…")
+        } else {
+            head
+        }
+    });
+    let mut out = format!("{dt} · {size}");
+    if !marks.is_empty() {
+        out.push_str(&format!(" · {marks}"));
+    }
+    if let Some(c) = comment.filter(|c| !c.is_empty()) {
+        out.push_str(&format!(" · {c}"));
+    }
+    out
+}
+
+/// Текст кнопки снапшота инсталлера в списке бэкапов.
+pub fn snapshot_row(lang: Lang, bf: &crate::vpn::BackupFile) -> String {
+    let _ = lang;
+    let dt = local_dt_short(bf.mtime);
+    let size = crate::vpn::model::human_bytes(bf.size);
+    format!("🧷 {dt} · {size}")
+}
+
+/// Карточка бандла бота (HTML). Версия awgram недоступна в `BackupRow` —
+/// сознательно не показывается, чтобы не врать. `verify` — результат
+/// последней проверки контрольной суммы (`None`, если ещё не проверялась).
+pub fn backup_card(lang: Lang, r: &crate::store::BackupRow, verify: Option<bool>) -> String {
+    use crate::store::BackupKind;
+    let name = html_escape(&r.name);
+    let created = fmt_ts(lang, r.created_at);
+    let kind = match (lang, r.kind) {
+        (Lang::Ru, BackupKind::Auto) => "авто",
+        (Lang::Ru, BackupKind::Manual) => "ручной",
+        (Lang::Ru, BackupKind::Upload) => "загружен",
+        (Lang::En, BackupKind::Auto) => "auto",
+        (Lang::En, BackupKind::Manual) => "manual",
+        (Lang::En, BackupKind::Upload) => "uploaded",
+    };
+    let actor = r.actor.map(|a| format!(" (uid {a})")).unwrap_or_default();
+    let size = crate::vpn::model::human_bytes(r.size);
+    let comment = r
+        .comment
+        .as_deref()
+        .filter(|c| !c.is_empty())
+        .map(html_escape)
+        .unwrap_or_else(|| "—".to_string());
+    let clients = r
+        .clients
+        .map(|c| c.to_string())
+        .unwrap_or_else(|| "—".to_string());
+    let groups = r
+        .groups
+        .map(|g| g.to_string())
+        .unwrap_or_else(|| "—".to_string());
+    let has_db = match (lang, r.has_db) {
+        (Lang::Ru, true) => "есть",
+        (Lang::Ru, false) => "нет",
+        (Lang::En, true) => "yes",
+        (Lang::En, false) => "no",
+    };
+    let verify_line = match (lang, verify) {
+        (Lang::Ru, Some(true)) => "✅ совпадает",
+        (Lang::Ru, Some(false)) => "⚠️ не совпадает",
+        (Lang::Ru, None) => "— не проверялась",
+        (Lang::En, Some(true)) => "✅ matches",
+        (Lang::En, Some(false)) => "⚠️ does not match",
+        (Lang::En, None) => "— not verified",
+    };
+    match lang {
+        Lang::Ru => format!(
+            "<code>{name}</code>\nСоздан: {created}\nВид: {kind}{actor}\nРазмер: {size}\nКомментарий: {comment}\nСостав: {clients} клиентов, {groups} групп, БД бота: {has_db}\nЦелостность: {verify_line}"
+        ),
+        Lang::En => format!(
+            "<code>{name}</code>\nCreated: {created}\nKind: {kind}{actor}\nSize: {size}\nComment: {comment}\nContents: {clients} clients, {groups} groups, bot DB: {has_db}\nIntegrity: {verify_line}"
+        ),
+    }
+}
+
+/// Карточка pre-restore снапшота инсталлера: у него нет комментария и пина.
+pub fn installer_card_text(lang: Lang, bf: &crate::vpn::BackupFile) -> String {
+    let name = html_escape(&bf.name);
+    let dt = fmt_ts(lang, bf.mtime);
+    let size = crate::vpn::model::human_bytes(bf.size);
+    match lang {
+        Lang::Ru => format!(
+            "<code>{name}</code>\nСоздан: {dt}\nРазмер: {size}\nСнапшот инсталлера (pre-restore); без комментария и пина."
+        ),
+        Lang::En => format!(
+            "<code>{name}</code>\nCreated: {dt}\nSize: {size}\nInstaller snapshot (pre-restore); no comment or pin."
+        ),
+    }
+}
+
+pub fn confirm_backup_delete(lang: Lang, name: &str, comment: Option<&str>) -> String {
+    let n = html_escape(name);
+    let extra = comment
+        .filter(|c| !c.is_empty())
+        .map(|c| {
+            let c = html_escape(c);
+            match lang {
+                Lang::Ru => format!("\nКомментарий: {c}"),
+                Lang::En => format!("\nComment: {c}"),
+            }
+        })
+        .unwrap_or_default();
+    match lang {
+        Lang::Ru => format!("🗑 Удалить <code>{n}</code>?{extra}"),
+        Lang::En => format!("🗑 Delete <code>{n}</code>?{extra}"),
+    }
+}
+
+/// Заголовок экрана автобэкапа: период, ближайший запуск (или «Выключен»),
+/// и при затяжном сбое — отдельная строка с числом попыток.
+pub fn backup_sched_title(
+    lang: Lang,
+    s: &crate::store::BackupSchedule,
+    next: Option<String>,
+    failure: Option<(u32, String)>,
+) -> String {
+    let off = matches!(s.period, crate::store::Period::Off);
+    let mut out = match lang {
+        Lang::Ru => "⚙️ <b>Авто-бэкап</b>\n".to_string(),
+        Lang::En => "⚙️ <b>Auto-backup</b>\n".to_string(),
+    };
+    match (lang, off, next) {
+        (Lang::Ru, true, _) | (Lang::Ru, false, None) => out.push_str("Выключен"),
+        (Lang::En, true, _) | (Lang::En, false, None) => out.push_str("Disabled"),
+        (Lang::Ru, false, Some(n)) => out.push_str(&format!("Следующий запуск: {n}")),
+        (Lang::En, false, Some(n)) => out.push_str(&format!("Next run: {n}")),
+    }
+    if let Some((attempts, since)) = failure {
+        match lang {
+            Lang::Ru => out.push_str(&format!("\n⚠️ Сбой с {since}, попытка №{attempts}")),
+            Lang::En => out.push_str(&format!("\n⚠️ Failing since {since}, attempt #{attempts}")),
+        }
+    }
+    out
+}
+pub fn btn_sched_period(lang: Lang, p: crate::store::Period) -> String {
+    use crate::store::Period;
+    let label = match (lang, p) {
+        (Lang::Ru, Period::Off) => "Выкл",
+        (Lang::Ru, Period::Daily) => "Ежедневно",
+        (Lang::Ru, Period::Weekly) => "Еженедельно",
+        (Lang::Ru, Period::Monthly) => "Ежемесячно",
+        (Lang::En, Period::Off) => "Off",
+        (Lang::En, Period::Daily) => "Daily",
+        (Lang::En, Period::Weekly) => "Weekly",
+        (Lang::En, Period::Monthly) => "Monthly",
+    };
+    match lang {
+        Lang::Ru => format!("Период: {label}"),
+        Lang::En => format!("Period: {label}"),
+    }
+}
+pub fn btn_sched_time(lang: Lang, h: u8, m: u8) -> String {
+    match lang {
+        Lang::Ru => format!("Время: {h:02}:{m:02}"),
+        Lang::En => format!("Time: {h:02}:{m:02}"),
+    }
+}
+pub fn btn_sched_keep(lang: Lang, keep: u32) -> String {
+    match lang {
+        Lang::Ru => format!("Хранить: {keep}"),
+        Lang::En => format!("Keep: {keep}"),
+    }
+}
+pub fn btn_sched_notify(lang: Lang, on: bool) -> String {
+    match (lang, on) {
+        (Lang::Ru, true) => "Отчёт об успехе: вкл ✅",
+        (Lang::Ru, false) => "Отчёт об успехе: выкл ⬜",
+        (Lang::En, true) => "Success report: on ✅",
+        (Lang::En, false) => "Success report: off ⬜",
+    }
+    .to_string()
+}
+pub fn btn_sched_db(lang: Lang, on: bool) -> String {
+    match (lang, on) {
+        (Lang::Ru, true) => "БД бота в бэкапе: вкл ✅",
+        (Lang::Ru, false) => "БД бота в бэкапе: выкл ⬜",
+        (Lang::En, true) => "Bot DB in backup: on ✅",
+        (Lang::En, false) => "Bot DB in backup: off ⬜",
+    }
+    .to_string()
+}
+
+/// Тексты ошибок формата бэкапа (`backup::format::FormatError`) —
+/// используются `error_text` для `Error::BackupInvalid`, а также
+/// напрямую при отказе загрузки (`bk:upload`).
+pub fn format_error(lang: Lang, e: &crate::backup::format::FormatError) -> String {
+    use crate::backup::format::FormatError;
+    match (lang, e) {
+        // Лимит зависит от того, где сработала проверка: перенос через
+        // Telegram — 20 МБ, разбор локального архива — 512 МиБ. Поэтому
+        // называем не потолок, а размер самого файла.
+        (Lang::Ru, FormatError::TooLarge(n)) => {
+            let h = crate::vpn::model::human_bytes(*n);
+            format!("файл больше допустимого размера ({h})")
+        }
+        (Lang::En, FormatError::TooLarge(n)) => {
+            let h = crate::vpn::model::human_bytes(*n);
+            format!("file is larger than the allowed size ({h})")
+        }
+        (Lang::Ru, FormatError::BadEntry(_)) => {
+            "в архиве недопустимые записи (ссылки, абсолютные пути или ..)".to_string()
+        }
+        (Lang::En, FormatError::BadEntry(_)) => {
+            "the archive has disallowed entries (links, absolute paths or ..)".to_string()
+        }
+        (Lang::Ru, FormatError::NotInstallerArchive) => {
+            "это не архив инсталлера: нет server/*.conf".to_string()
+        }
+        (Lang::En, FormatError::NotInstallerArchive) => {
+            "not an installer archive: no server/*.conf".to_string()
+        }
+        (Lang::Ru, FormatError::NotBundle(_)) => "это не бандл awgram".to_string(),
+        (Lang::En, FormatError::NotBundle(_)) => "not an awgram bundle".to_string(),
+        (Lang::Ru, FormatError::DbInvalid(_)) => "снимок БД повреждён".to_string(),
+        (Lang::En, FormatError::DbInvalid(_)) => "the DB snapshot is corrupted".to_string(),
+        (Lang::Ru, FormatError::DbTooNew { found, current }) => {
+            format!("БД в бэкапе новее текущей ({found} > {current}) — обновите awgram")
+        }
+        (Lang::En, FormatError::DbTooNew { found, current }) => {
+            format!("the backup's DB is newer than current ({found} > {current}) — update awgram")
+        }
+        (Lang::Ru, FormatError::Io(_)) | (Lang::Ru, FormatError::Json(_)) => {
+            "файл не читается как tar.gz".to_string()
+        }
+        (Lang::En, FormatError::Io(_)) | (Lang::En, FormatError::Json(_)) => {
+            "the file can't be read as tar.gz".to_string()
+        }
+    }
+}
+
+// --- backup: уведомления планировщика ---
+/// Локальное время (`chrono::Local`) в формате `дд.мм.гггг чч:мм`.
+pub fn fmt_ts(_lang: Lang, epoch: i64) -> String {
+    use chrono::TimeZone;
+    chrono::Local
+        .timestamp_opt(epoch, 0)
+        .single()
+        .map(|d| d.format("%d.%m.%Y %H:%M").to_string())
+        .unwrap_or_else(|| epoch.to_string())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn backup_auto_ok(
+    lang: Lang,
+    name: &str,
+    size_h: &str,
+    secs: u64,
+    kept: usize,
+    keep: u32,
+    pinned: usize,
+    free_h: Option<&str>,
+) -> String {
+    let n = html_escape(name);
+    let free = match (lang, free_h) {
+        (_, None) => String::new(),
+        (Lang::Ru, Some(f)) => format!("\n💽 Свободно на диске: {f}"),
+        (Lang::En, Some(f)) => format!("\n💽 Free disk space: {f}"),
+    };
+    match lang {
+        Lang::Ru => format!(
+            "✅ <b>Автобэкап создан</b>\n<code>{n}</code>\n📁 Размер: {size_h}\n⏱ Время: {secs} с{free}\n\nХранится {kept} из {keep}, закреплено {pinned}."
+        ),
+        Lang::En => format!(
+            "✅ <b>Scheduled backup created</b>\n<code>{n}</code>\n📁 Size: {size_h}\n⏱ Took: {secs} s{free}\n\nKeeping {kept} of {keep}, pinned {pinned}."
+        ),
+    }
+}
+
+pub fn backup_auto_failed(
+    lang: Lang,
+    err_text: &str,
+    attempt: u32,
+    since_fmt: &str,
+    free_h: Option<&str>,
+) -> String {
+    let free = match (lang, free_h) {
+        (_, None) => String::new(),
+        (Lang::Ru, Some(f)) => format!("\n💽 Свободно на диске: {f}"),
+        (Lang::En, Some(f)) => format!("\n💽 Free disk space: {f}"),
+    };
+    match lang {
+        Lang::Ru => format!(
+            "⚠️ <b>Сбой автобэкапа</b>\n{err_text}\n\nПопытка №{attempt}, сбои с {since_fmt}.{free}\nПовторные попытки с нарастающим интервалом (до суток); напоминание не чаще раза в 6 часов, пока бэкап не пройдёт."
+        ),
+        Lang::En => format!(
+            "⚠️ <b>Scheduled backup failed</b>\n{err_text}\n\nAttempt #{attempt}, failing since {since_fmt}.{free}\nRetrying with increasing intervals (up to a day); reminder at most every 6 hours until a backup succeeds."
+        ),
+    }
+}
+
+pub fn backup_recovered(lang: Lang, attempts: u32, name: &str) -> String {
+    let n = html_escape(name);
+    match lang {
+        Lang::Ru => format!(
+            "✅ <b>Автобэкап снова работает</b> после {attempts} неудачных попыток.\n<code>{n}</code>"
+        ),
+        Lang::En => format!(
+            "✅ <b>Scheduled backups are back</b> after {attempts} failed attempts.\n<code>{n}</code>"
+        ),
+    }
 }
 
 // --- check ---
@@ -878,6 +1470,28 @@ pub fn error_text(lang: Lang, err: &Error) -> String {
             "⚠️ Восстановление провалилось. Конфиг откачен к предыдущему состоянию."
         }
         (Lang::En, Error::RestoreRolledBack) => "⚠️ Restore failed. Configuration was rolled back.",
+        (_, Error::BackupInvalid(e)) => return format!("⚠️ {}", format_error(lang, e)),
+        (Lang::Ru, Error::BackupUnreadable(_)) => {
+            "❌ Архив бэкапа недоступен для чтения. В hardened-режиме нужен доступ пользователя awgram к backups/ — см. README."
+        }
+        (Lang::En, Error::BackupUnreadable(_)) => {
+            "❌ The backup archive isn't readable. In hardened mode the awgram user needs access to backups/ — see README."
+        }
+        (_, Error::BackupNotFound) => return backup_not_found(lang),
+        (Lang::Ru, Error::BackupNoSpace { need, free }) => {
+            return format!(
+                "❌ Недостаточно места на диске: нужно {}, свободно {}. Удалите старые бэкапы или уменьшите «Хранить».",
+                crate::vpn::model::human_bytes(*need),
+                crate::vpn::model::human_bytes(*free)
+            )
+        }
+        (Lang::En, Error::BackupNoSpace { need, free }) => {
+            return format!(
+                "❌ Not enough disk space: need {}, free {}. Delete old backups or lower \"Keep\".",
+                crate::vpn::model::human_bytes(*need),
+                crate::vpn::model::human_bytes(*free)
+            )
+        }
         (Lang::Ru, _) => "❌ Ошибка выполнения операции.",
         (Lang::En, _) => "❌ Operation error.",
     }
@@ -1791,6 +2405,25 @@ mod tests {
 
     #[test]
     fn all_messages_nonempty_both_langs() {
+        let sample_row = crate::store::BackupRow {
+            name: "awgram_backup_T.tar.gz".into(),
+            created_at: 1,
+            kind: crate::store::BackupKind::Manual,
+            actor: None,
+            comment: Some("c".into()),
+            pinned: true,
+            size: 1,
+            sha256: None,
+            has_db: true,
+            clients: Some(1),
+            groups: Some(0),
+        };
+        let snap = crate::vpn::BackupFile {
+            name: "awg_backup_S.tar.gz".into(),
+            path: "p".into(),
+            size: 1,
+            mtime: 1,
+        };
         for l in [Lang::Ru, Lang::En] {
             assert!(!menu_title(l).is_empty());
             assert!(!access_denied(l).is_empty());
@@ -1798,6 +2431,7 @@ mod tests {
             assert!(!ask_expiry(l).is_empty());
             assert!(!settings_title(l, true, true, true, true, true).is_empty());
             assert!(!backups_empty(l).is_empty());
+            assert!(!backup_verifying(l).is_empty());
             assert!(!restore_done(l).is_empty());
             // карточка: имя экранируется
             let card = client_card(
@@ -1814,7 +2448,105 @@ mod tests {
             assert!(card.contains("a&lt;b&gt;"));
             assert!(!card.contains("a<b>"));
             assert!(card.contains("🟢")); // цвет статуса передан напрямую (mark)
+
+            assert!(!backup_auto_ok(l, "a<b>", "2.3 MB", 3, 5, 7, 1, Some("38.0 GB")).is_empty());
+            assert!(backup_auto_ok(l, "a<b>", "2.3 MB", 3, 5, 7, 1, None).contains("&lt;b&gt;"));
+            assert!(!backup_auto_failed(l, "boom", 3, "03.09.2026 03:00", None).is_empty());
+            assert!(!backup_recovered(l, 4, "x").is_empty());
+
+            assert!(!ask_backup_comment(l).is_empty());
+            assert!(!comment_too_long(l, 200).is_empty());
+            assert!(!backups_list_title(l, 5, 7, 1).is_empty());
+            assert!(!installer_snapshots_label(l).is_empty());
+            assert!(!backup_list_row(l, &sample_row).is_empty());
+            assert!(!snapshot_row(l, &snap).is_empty());
+            assert!(backup_card(l, &sample_row, Some(true)).contains("awgram_backup_T.tar.gz"));
+            assert!(!backup_card(l, &sample_row, Some(false)).is_empty());
+            assert!(!backup_card(l, &sample_row, None).is_empty());
+            assert!(!installer_card_text(l, &snap).is_empty());
+            assert!(!confirm_backup_delete(l, "n", Some("c")).is_empty());
+            assert!(!backup_deleted(l).is_empty());
+            assert!(!verify_result(l, true).is_empty() && !verify_result(l, false).is_empty());
+            assert!(!comment_saved(l).is_empty());
+            assert!(!pinned_toggled(l, true).is_empty());
+            assert!(!unpin_first(l).is_empty());
+            assert!(!confirm_restore(l, "n", true).is_empty());
+            assert!(!restore_done_detail(l, true, true).is_empty());
+            assert!(!restore_done_detail(l, true, false).is_empty());
+            assert!(!restore_db_failed(l).is_empty());
+            assert!(!ask_backup_upload(l).is_empty());
+            assert!(!upload_processing(l).is_empty());
+            assert!(!upload_not_a_file(l).is_empty());
+            assert!(!upload_rejected(l, "r").is_empty());
+            assert!(!upload_accepted(l, "n").is_empty());
+            assert!(!backup_sched_title(
+                l,
+                &crate::store::BackupSchedule::default(),
+                Some("x".into()),
+                Some((3, "y".into()))
+            )
+            .is_empty());
+            assert!(
+                !backup_sched_title(l, &crate::store::BackupSchedule::default(), None, None)
+                    .is_empty()
+            );
+            for p in [
+                crate::store::Period::Off,
+                crate::store::Period::Daily,
+                crate::store::Period::Weekly,
+                crate::store::Period::Monthly,
+            ] {
+                assert!(!btn_sched_period(l, p).is_empty());
+            }
+            assert!(!btn_sched_time(l, 3, 0).is_empty());
+            assert!(!btn_sched_keep(l, 7).is_empty());
+            assert!(!btn_sched_notify(l, true).is_empty());
+            assert!(!btn_sched_db(l, false).is_empty());
+            assert!(
+                !format_error(l, &crate::backup::format::FormatError::NotInstallerArchive)
+                    .is_empty()
+            );
+            // размер называется по-человечески, а не в байтах
+            let too_large = format_error(
+                l,
+                &crate::backup::format::FormatError::TooLarge(30 * 1024 * 1024),
+            );
+            assert!(too_large.contains("30.0 MB"), "{too_large}");
+            assert!(!error_text(l, &Error::BackupUnreadable("p".into())).is_empty());
         }
+    }
+
+    #[test]
+    fn backup_list_row_is_short_and_marks_pin() {
+        fn sample_backup_row() -> crate::store::BackupRow {
+            crate::store::BackupRow {
+                name: "awgram_backup_T.tar.gz".into(),
+                created_at: 1,
+                kind: crate::store::BackupKind::Manual,
+                actor: None,
+                comment: Some("x".repeat(60)),
+                pinned: true,
+                size: 1,
+                sha256: None,
+                has_db: true,
+                clients: Some(1),
+                groups: Some(0),
+            }
+        }
+        let mut r = sample_backup_row();
+        assert!(backup_list_row(Lang::Ru, &r).contains('📌'));
+        assert!(backup_list_row(Lang::Ru, &r).chars().count() <= 64);
+        r.pinned = false;
+        r.comment = None;
+        assert!(!backup_list_row(Lang::En, &r).contains('📌'));
+    }
+
+    #[test]
+    fn fmt_ts_is_local_dd_mm_yyyy() {
+        let s = fmt_ts(Lang::Ru, 1_756_861_200);
+        assert_eq!(s.len(), 16); // "03.09.2026 03:00"
+        assert_eq!(&s[2..3], ".");
+        assert_eq!(&s[10..11], " ");
     }
 
     #[test]

@@ -70,6 +70,14 @@ async fn main() {
     store.migrate_state_json(&cfg.state_file);
 
     tokio::spawn(awgram::collector::run(vpn.clone(), store.clone()));
+    // Планировщик автобэкапа: тикает раз в минуту, сам решает, пора ли
+    // снимать бэкап по расписанию или повторить попытку после сбоя.
+    tokio::spawn(awgram::backup::schedule::run(
+        bot.clone(),
+        cfg.clone(),
+        vpn.clone(),
+        store.clone(),
+    ));
 
     tracing::info!("запуск long polling");
     Dispatcher::builder(bot, handlers::schema())

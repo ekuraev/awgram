@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod backup;
 pub mod bot;
 pub mod collector;
 pub mod config;
