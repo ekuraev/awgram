@@ -129,17 +129,37 @@ fn row_from_meta(name: &str, size: u64, sha: Option<String>, m: &Meta) -> Backup
 pub fn reconcile(vpn: &Vpn, store: &Store) -> Vec<BackupRow> {
     let dir = vpn.bot_backups_dir();
     let mut on_disk: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
-    if let Ok(rd) = std::fs::read_dir(&dir) {
-        for e in rd.flatten() {
-            let name = e.file_name().to_string_lossy().into_owned();
-            if format::ts_from_bundle_name(&name).is_none() {
-                continue;
-            }
-            if let Ok(m) = e.metadata() {
-                if m.is_file() {
-                    on_disk.insert(name, m.len());
+    match std::fs::read_dir(&dir) {
+        Ok(rd) => {
+            for e in rd.flatten() {
+                let name = e.file_name().to_string_lossy().into_owned();
+                if format::ts_from_bundle_name(&name).is_none() {
+                    continue;
+                }
+                if let Ok(m) = e.metadata() {
+                    if m.is_file() {
+                        on_disk.insert(name, m.len());
+                    }
                 }
             }
+        }
+        // Каталога ещё нет — легитимно «файлов нет»: ниже все строки будут
+        // признаны осиротевшими и удалены (тот самый случай, когда бэкапов
+        // ещё не было).
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        // Каталог есть, но прочитать не вышло (например, на его месте
+        // оказался обычный файл — ENOTDIR, или временная проблема с
+        // правами/ФС). Это НЕ «файлов нет»: если считать иначе, ниже
+        // удалятся ВСЕ строки, включая закреплённые, и следующий rotate
+        // может снести закреплённые бэкапы просто потому, что reconcile не
+        // смог прочитать каталог. Строки не трогаем и возвращаем как есть.
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                dir = %dir.display(),
+                "не удалось прочитать каталог бэкапов, строки не трогаю"
+            );
+            return store.list_backup_rows();
         }
     }
     for r in store.list_backup_rows() {
@@ -279,12 +299,25 @@ pub async fn create(
     let name = format::bundle_name(&ts);
     let out = dir.join(&name);
     let tmp_out = dir.join(format!(".{name}.part"));
-    format::build_bundle(&tmp_out, &awg.path, db_path.as_deref(), &meta)?;
+    if let Err(e) = format::build_bundle(&tmp_out, &awg.path, db_path.as_deref(), &meta) {
+        // Частично записанный .part не должен остаться мусором.
+        let _ = std::fs::remove_file(&tmp_out);
+        return Err(e.into());
+    }
     std::fs::rename(&tmp_out, &out)?;
     // Архив инсталлера теперь внутри бандла; из backups/ убираем, чтобы он
-    // не считался снапшотом и не занимал место дважды.
-    if let Err(e) = std::fs::remove_file(&awg.path) {
-        tracing::warn!(error = %e, "не удалось убрать архив инсталлера после упаковки");
+    // не считался снапшотом и не занимал место дважды. Путь пришёл из JSON
+    // самого инсталлера — на всякий случай проверяем, что он и правда внутри
+    // ожидаемого каталога, прежде чем удалять чужой файл по чужому пути.
+    if awg.path.starts_with(vpn.backups_dir()) {
+        if let Err(e) = std::fs::remove_file(&awg.path) {
+            tracing::warn!(error = %e, "не удалось убрать архив инсталлера после упаковки");
+        }
+    } else {
+        tracing::warn!(
+            path = %awg.path.display(),
+            "архив инсталлера вне backups_dir — не удаляю"
+        );
     }
     let size = std::fs::metadata(&out)?.len();
     let sha = format::sha256_file(&out)?;
@@ -331,7 +364,10 @@ pub fn verify(vpn: &Vpn, store: &Store, ts: &str) -> Result<bool> {
 }
 
 /// Внутренний архив инсталлера во временной папке (для restore и «скачать
-/// архив AWG»). TempDir нужно держать живым, пока файл используется.
+/// архив AWG»). Сверяет SHA-256 распакованного архива с записанным в
+/// meta.json при сборке — порча бандла (битый диск, ручное вмешательство)
+/// не должна молча дойти до `restore_path`. TempDir нужно держать живым,
+/// пока файл используется.
 pub fn extract_inner(vpn: &Vpn, ts: &str) -> Result<(tempfile::TempDir, PathBuf)> {
     let path = bundle_path(vpn, ts);
     if !path.exists() {
@@ -345,6 +381,12 @@ pub fn extract_inner(vpn: &Vpn, ts: &str) -> Result<(tempfile::TempDir, PathBuf)
         &format!("{}/{}", format::AWG_DIR, insp.inner_name),
         &inner,
     )?;
+    let actual = format::sha256_file(&inner)?;
+    if actual != insp.meta.awg_sha256 {
+        return Err(Error::BackupInvalid(format::FormatError::BadEntry(
+            "awg_sha256 не совпадает".into(),
+        )));
+    }
     Ok((tmp, inner))
 }
 
@@ -359,20 +401,13 @@ pub async fn restore(vpn: &Vpn, store: &Store, key: &Key, with_db: bool) -> Resu
             })
         }
         Located::Bundle(row, path) => {
-            let insp = format::inspect_bundle(&path, Store::current_schema())?;
-            let tmp = tempfile::tempdir()?;
-            let inner = tmp.path().join(&insp.inner_name);
-            format::extract_entry(
-                &path,
-                &format!("{}/{}", format::AWG_DIR, insp.inner_name),
-                &inner,
-            )?;
+            let (tmp, inner) = extract_inner(vpn, key.ts())?;
             vpn.restore_path(&inner).await?;
             let mut out = RestoreOutcome {
                 awg: true,
                 db: false,
             };
-            if with_db && insp.has_db && row.has_db {
+            if with_db && row.has_db {
                 let db = tmp.path().join(DB_NAME);
                 format::extract_entry(&path, DB_NAME, &db)?;
                 store
@@ -383,6 +418,25 @@ pub async fn restore(vpn: &Vpn, store: &Store, key: &Key, with_db: bool) -> Resu
             Ok(out)
         }
     }
+}
+
+/// Кладёт `src` в `dir` под именем `awgram_backup_<ts>[-N].tar.gz`, подбирая
+/// свободное имя при коллизии (`-1`, `-2`, …). Копирует во временный
+/// `.<имя>.part` и переименовывает его в целевое одним rename — чтобы
+/// `reconcile` (или параллельный запрос) не увидел частично записанный
+/// файл. Возвращает итоговое имя.
+fn place_bundle(dir: &Path, ts: &str, src: &Path) -> Result<String> {
+    let mut name = format::bundle_name(ts);
+    let mut n = 0;
+    while dir.join(&name).exists() {
+        n += 1;
+        name = format!("awgram_backup_{ts}-{n}.tar.gz");
+    }
+    let dest = dir.join(&name);
+    let tmp = dir.join(format!(".{name}.part"));
+    std::fs::copy(src, &tmp)?;
+    std::fs::rename(&tmp, &dest)?;
+    Ok(name)
 }
 
 /// Принимает присланный файл: бандл кладётся как есть (имя по ts из meta),
@@ -397,13 +451,12 @@ pub fn accept_upload(
     let dir = vpn.bot_backups_dir();
     std::fs::create_dir_all(&dir)?;
     let kind = format::detect(tmp_file)?;
-    let (ts, staged): (String, PathBuf) = match kind {
+    match kind {
         FileKind::Bundle => {
             let insp = format::inspect_bundle(tmp_file, Store::current_schema())?;
-            let ts = format::ts_from_awg_name(&insp.inner_name)
-                .unwrap_or("upload")
-                .to_string();
-            (ts, tmp_file.to_path_buf())
+            let ts = format::ts_from_awg_name(&insp.inner_name).unwrap_or("upload");
+            let name = place_bundle(&dir, ts, tmp_file)?;
+            finish_upload(store, &dir.join(&name), &name, kind, actor)
         }
         FileKind::InstallerArchive => {
             let clients = format::validate_installer_archive(tmp_file)?;
@@ -419,6 +472,8 @@ pub fn accept_upload(
                         .to_string()
                 });
             let awg_name = format!("awg_backup_{ts}.tar.gz");
+            // Собираем бандл во временном каталоге — он должен жить, пока
+            // place_bundle не скопирует готовый файл в bot_backups_dir.
             let stage_dir = tempfile::tempdir()?;
             let awg_copy = stage_dir.path().join(&awg_name);
             std::fs::copy(tmp_file, &awg_copy)?;
@@ -437,27 +492,10 @@ pub fn accept_upload(
             };
             let staged = stage_dir.path().join("bundle.tar.gz");
             format::build_bundle(&staged, &awg_copy, None, &meta)?;
-            // stage_dir должен жить до переноса — переносим сразу и возвращаем путь
-            let mut name = format::bundle_name(&ts);
-            let mut n = 0;
-            while dir.join(&name).exists() {
-                n += 1;
-                name = format!("awgram_backup_{ts}-{n}.tar.gz");
-            }
-            let dest = dir.join(&name);
-            std::fs::copy(&staged, &dest)?;
-            return finish_upload(store, &dest, &name, kind, actor);
+            let name = place_bundle(&dir, &ts, &staged)?;
+            finish_upload(store, &dir.join(&name), &name, kind, actor)
         }
-    };
-    let mut name = format::bundle_name(&ts);
-    let mut n = 0;
-    while dir.join(&name).exists() {
-        n += 1;
-        name = format!("awgram_backup_{ts}-{n}.tar.gz");
     }
-    let dest = dir.join(&name);
-    std::fs::copy(&staged, &dest)?;
-    finish_upload(store, &dest, &name, kind, actor)
 }
 
 fn finish_upload(
@@ -825,6 +863,7 @@ exit 1
     }
 
     #[tokio::test]
+    #[serial]
     async fn create_fails_when_not_enough_space() {
         let dir = tempfile::tempdir().unwrap();
         let (_k, vpn, store) = stub(dir.path());
@@ -853,5 +892,67 @@ exit 1
         // ни бандла, ни архива инсталлера не появилось — скрипт не вызывался
         assert!(installer_snapshots(&vpn).is_empty());
         assert_eq!(std::fs::read_dir(vpn.bot_backups_dir()).unwrap().count(), 0);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn reconcile_keeps_pinned_row_when_dir_unreadable_but_drops_when_legitimately_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_k, vpn, store) = stub(dir.path());
+        let c = create(&vpn, &store, BackupKind::Manual, None, None, false, 7)
+            .await
+            .unwrap();
+        store.set_backup_pinned(&c.row.name, true);
+        let bot_dir = vpn.bot_backups_dir();
+        // Каталог awgram/ подменяем обычным файлом того же имени — read_dir
+        // провалится (ENOTDIR), а не вернёт «пусто».
+        std::fs::remove_dir_all(&bot_dir).unwrap();
+        std::fs::write(&bot_dir, b"not a directory").unwrap();
+        let rows = reconcile(&vpn, &store);
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].pinned);
+        assert!(store.backup_row(&c.row.name).unwrap().pinned);
+        // а вот легитимно пустой (существующий, но без файлов) каталог — уже
+        // повод удалить строку.
+        std::fs::remove_file(&bot_dir).unwrap();
+        std::fs::create_dir_all(&bot_dir).unwrap();
+        let rows2 = reconcile(&vpn, &store);
+        assert!(rows2.is_empty());
+        assert!(store.backup_row(&c.row.name).is_none());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn restore_and_extract_inner_reject_bundle_with_wrong_inner_sha() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_k, vpn, store) = stub(dir.path());
+        let awg = dir.path().join("awg_for_tamper.tar.gz");
+        crate::backup::format::tests_support::installer_archive_to(&awg);
+        let ts = "2026-01-02_00-00-00.000";
+        let meta = crate::backup::format::Meta {
+            format: crate::backup::format::FORMAT_VERSION,
+            awgram_version: "0.0.0-test".into(),
+            created_at: now_epoch(),
+            kind: "manual".into(),
+            actor: None,
+            comment: None,
+            has_db: false,
+            awg_archive: "awg_backup_2026-01-02_00-00-00.000.tar.gz".into(),
+            // сознательно не совпадает с реальным sha256 внутреннего архива
+            awg_sha256: "deadbeef".into(),
+            clients: 2,
+            groups: None,
+        };
+        std::fs::create_dir_all(vpn.bot_backups_dir()).unwrap();
+        format::build_bundle(&bundle_path(&vpn, ts), &awg, None, &meta).unwrap();
+
+        assert!(matches!(
+            extract_inner(&vpn, ts),
+            Err(crate::error::Error::BackupInvalid(_))
+        ));
+        assert!(matches!(
+            restore(&vpn, &store, &Key::Bundle(ts.into()), false).await,
+            Err(crate::error::Error::BackupInvalid(_))
+        ));
     }
 }
