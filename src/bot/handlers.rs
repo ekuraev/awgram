@@ -570,6 +570,58 @@ async fn progress(bot: &Bot, chat: ChatId, msg_id: MessageId, text: String) -> M
     }
 }
 
+/// Пресеты экрана автобэкапа: время суток (минуты всегда 0) и число
+/// хранимых копий. Значение вне пресета переключается на первый элемент.
+const SCHED_HOURS: [u8; 5] = [0, 3, 6, 12, 21];
+const SCHED_KEEP: [u32; 4] = [3, 7, 14, 30];
+
+/// Следующее значение из пресетов по кругу; текущее вне списка — первый элемент.
+fn next_preset<T: Copy + PartialEq>(presets: &[T], cur: T) -> T {
+    match presets.iter().position(|p| *p == cur) {
+        Some(i) => presets[(i + 1) % presets.len()],
+        None => presets[0],
+    }
+}
+
+/// Применяет нажатие одной кнопки экрана автобэкапа к расписанию —
+/// чистая функция без сайд-эффектов, легко тестируется отдельно от бота.
+fn apply_sched_field(
+    mut s: crate::store::BackupSchedule,
+    f: SchedField,
+) -> crate::store::BackupSchedule {
+    match f {
+        SchedField::Period => s.period = s.period.next(),
+        SchedField::Time => {
+            s.hour = next_preset(&SCHED_HOURS, s.hour);
+            s.minute = 0;
+        }
+        SchedField::Keep => s.keep = next_preset(&SCHED_KEEP, s.keep),
+        SchedField::NotifyOk => s.notify_ok = !s.notify_ok,
+        SchedField::IncludeDb => s.include_db = !s.include_db,
+    }
+    s
+}
+
+/// Рендер экрана «⚙️ Авто-бэкап»: текущее расписание, ближайший запуск
+/// (или «Выключен») и, если сейчас идёт серия сбоев, отдельная строка о ней.
+async fn show_backup_sched(bot: &Bot, chat: ChatId, msg_id: MessageId, lang: Lang, store: &Store) {
+    let s = store.backup_schedule();
+    let (_, local) = crate::backup::schedule::local_now();
+    let next = crate::backup::schedule::next_slot(&s, local)
+        .map(|t| i18n::fmt_ts(lang, crate::backup::schedule::local_to_epoch(t)));
+    let failure = store
+        .backup_failure()
+        .map(|f| (f.attempts, i18n::fmt_ts(lang, f.since)));
+    edit_or_send(
+        bot,
+        chat,
+        msg_id,
+        i18n::backup_sched_title(lang, &s, next, failure),
+        menu::backup_sched_menu(lang, &s),
+    )
+    .await;
+}
+
 /// Скачивает присланный документ во временный файл по его `FileId`.
 async fn download_document(
     bot: &Bot,
@@ -3855,17 +3907,14 @@ async fn callback_handler(
                 .update(State::AwaitingBackupUpload { prompt: msg_id })
                 .await?;
         }
-        // Ветки для расписания автобэкапа — заглушка на эту задачу,
-        // реальный обработчик появится в Task 11.
-        Action::BackupSchedule | Action::BackupSchedSet(_) => {
-            edit_or_send(
-                &bot,
-                chat,
-                msg_id,
-                i18n::backup_menu_title(lang),
-                menu::backup_menu(lang),
-            )
-            .await;
+        Action::BackupSchedule => {
+            dialogue.update(State::Idle).await?;
+            show_backup_sched(&bot, chat, msg_id, lang, &settings).await;
+        }
+        Action::BackupSchedSet(f) => {
+            let s = apply_sched_field(settings.backup_schedule(), f);
+            settings.set_backup_schedule(&s);
+            show_backup_sched(&bot, chat, msg_id, lang, &settings).await;
         }
         Action::Check => {
             let pid = progress(&bot, chat, msg_id, i18n::check_running(lang)).await;
@@ -4332,6 +4381,31 @@ mod tests {
             upload_precheck(Some("a.tar.gz"), (20 * 1024 * 1024) + 1),
             Err("too_large")
         );
+    }
+
+    #[test]
+    fn apply_sched_field_cycles_presets() {
+        use crate::store::{BackupSchedule, Period};
+        let s = BackupSchedule::default();
+        let s = apply_sched_field(s, SchedField::Period);
+        assert_eq!(s.period, Period::Daily);
+        let s = apply_sched_field(s, SchedField::Time);
+        assert_eq!((s.hour, s.minute), (6, 0));
+        let mut t = s.clone();
+        t.hour = 21;
+        assert_eq!(apply_sched_field(t, SchedField::Time).hour, 0);
+        let mut odd = s.clone();
+        odd.hour = 13;
+        assert_eq!(apply_sched_field(odd, SchedField::Time).hour, 0);
+        let s = apply_sched_field(s, SchedField::Keep);
+        assert_eq!(s.keep, 14);
+        let mut k = s.clone();
+        k.keep = 30;
+        assert_eq!(apply_sched_field(k, SchedField::Keep).keep, 3);
+        let s = apply_sched_field(s, SchedField::NotifyOk);
+        assert!(!s.notify_ok);
+        let s = apply_sched_field(s, SchedField::IncludeDb);
+        assert!(!s.include_db);
     }
 
     #[test]
