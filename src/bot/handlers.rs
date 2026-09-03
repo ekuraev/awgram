@@ -14,6 +14,15 @@ use crate::i18n::{self, Lang};
 use crate::store::{EventKind, ListScope, Store};
 use crate::vpn::Vpn;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SchedField {
+    Period,
+    Time,
+    Keep,
+    NotifyOk,
+    IncludeDb,
+}
+
 #[derive(Debug, PartialEq)]
 pub enum Action {
     Menu,
@@ -40,10 +49,21 @@ pub enum Action {
     Backup,
     BackupNew,
     BackupList,
-    BackupCard(usize),
-    BackupDownload(usize),
-    Restore(usize),
-    RestoreYes(usize),
+    BackupCard(crate::backup::Key),
+    BackupDownload(crate::backup::Key),
+    BackupDownloadAwg(crate::backup::Key),
+    BackupRestore(crate::backup::Key),
+    BackupRestoreYes(crate::backup::Key, bool), // true = вместе с БД бота
+    BackupDelete(crate::backup::Key),
+    BackupDeleteYes(crate::backup::Key),
+    BackupComment(String), // ts бандла
+    BackupCommentClear,
+    BackupNewSkip,
+    BackupPin(String, bool),
+    BackupVerify(String),
+    BackupUpload,
+    BackupSchedule,
+    BackupSchedSet(SchedField),
     Check,
     Diagnose,
     Modify(String),
@@ -108,6 +128,10 @@ fn parse_callback(data: &str) -> Action {
         "backup" => Action::Backup,
         "bk:new" => Action::BackupNew,
         "bk:list" => Action::BackupList,
+        "bk:upload" => Action::BackupUpload,
+        "bk:sched" => Action::BackupSchedule,
+        "bk:new_skip" => Action::BackupNewSkip,
+        "bk:comment_clear" => Action::BackupCommentClear,
         "check" => Action::Check,
         "diagnose" => Action::Diagnose,
         "regen_all" => Action::RegenAll,
@@ -295,15 +319,77 @@ fn parse_callback(data: &str) -> Action {
                 // Must be checked before "bk:restore:" — otherwise "bk:restore:"
                 // prefix-matches "bk:restore_yes:..." and confirmed restores get
                 // misparsed as restore-asks (same pattern as delyes:/del:).
-                v.parse().map(Action::RestoreYes).unwrap_or(Action::Unknown)
+                let (key, mode) = match v.rsplit_once(':') {
+                    Some(p) => p,
+                    None => return Action::Unknown,
+                };
+                let with_db = match mode {
+                    "db" => true,
+                    "awg" => false,
+                    _ => return Action::Unknown,
+                };
+                crate::backup::Key::parse(key)
+                    .map(|k| Action::BackupRestoreYes(k, with_db))
+                    .unwrap_or(Action::Unknown)
             } else if let Some(v) = data.strip_prefix("bk:restore:") {
-                v.parse().map(Action::Restore).unwrap_or(Action::Unknown)
+                crate::backup::Key::parse(v)
+                    .map(Action::BackupRestore)
+                    .unwrap_or(Action::Unknown)
             } else if let Some(v) = data.strip_prefix("bk:card:") {
-                v.parse().map(Action::BackupCard).unwrap_or(Action::Unknown)
+                crate::backup::Key::parse(v)
+                    .map(Action::BackupCard)
+                    .unwrap_or(Action::Unknown)
+            } else if let Some(v) = data.strip_prefix("bk:dlawg:") {
+                crate::backup::Key::parse(v)
+                    .map(Action::BackupDownloadAwg)
+                    .unwrap_or(Action::Unknown)
             } else if let Some(v) = data.strip_prefix("bk:dl:") {
-                v.parse()
+                crate::backup::Key::parse(v)
                     .map(Action::BackupDownload)
                     .unwrap_or(Action::Unknown)
+            } else if let Some(v) = data.strip_prefix("bk:del_yes:") {
+                crate::backup::Key::parse(v)
+                    .map(Action::BackupDeleteYes)
+                    .unwrap_or(Action::Unknown)
+            } else if let Some(v) = data.strip_prefix("bk:del:") {
+                crate::backup::Key::parse(v)
+                    .map(Action::BackupDelete)
+                    .unwrap_or(Action::Unknown)
+            } else if let Some(v) = data.strip_prefix("bk:comment:") {
+                match crate::backup::Key::parse(v) {
+                    Some(crate::backup::Key::Bundle(ts)) => Action::BackupComment(ts),
+                    _ => Action::Unknown,
+                }
+            } else if let Some(v) = data.strip_prefix("bk:pin:") {
+                match v.rsplit_once(':') {
+                    Some((ts, "on")) => crate::backup::Key::parse(ts)
+                        .and_then(|k| match k {
+                            crate::backup::Key::Bundle(t) => Some(Action::BackupPin(t, true)),
+                            _ => None,
+                        })
+                        .unwrap_or(Action::Unknown),
+                    Some((ts, "off")) => crate::backup::Key::parse(ts)
+                        .and_then(|k| match k {
+                            crate::backup::Key::Bundle(t) => Some(Action::BackupPin(t, false)),
+                            _ => None,
+                        })
+                        .unwrap_or(Action::Unknown),
+                    _ => Action::Unknown,
+                }
+            } else if let Some(v) = data.strip_prefix("bk:verify:") {
+                match crate::backup::Key::parse(v) {
+                    Some(crate::backup::Key::Bundle(ts)) => Action::BackupVerify(ts),
+                    _ => Action::Unknown,
+                }
+            } else if let Some(v) = data.strip_prefix("bk:sched:") {
+                match v {
+                    "period" => Action::BackupSchedSet(SchedField::Period),
+                    "time" => Action::BackupSchedSet(SchedField::Time),
+                    "keep" => Action::BackupSchedSet(SchedField::Keep),
+                    "notify" => Action::BackupSchedSet(SchedField::NotifyOk),
+                    "db" => Action::BackupSchedSet(SchedField::IncludeDb),
+                    _ => Action::Unknown,
+                }
             } else if let Some(v) = data.strip_prefix("modparam:") {
                 // ДО mod: — modparam:... тоже начинается с "mod", но другой разделитель.
                 let parts: Vec<&str> = v.splitn(2, ':').collect();
@@ -577,8 +663,19 @@ fn authorize(action: &Action, role: &Role, settings: &Store) -> bool {
         | BackupList
         | BackupCard(_)
         | BackupDownload(_)
-        | Restore(_)
-        | RestoreYes(_)
+        | BackupDownloadAwg(_)
+        | BackupRestore(_)
+        | BackupRestoreYes(_, _)
+        | BackupDelete(_)
+        | BackupDeleteYes(_)
+        | BackupComment(_)
+        | BackupCommentClear
+        | BackupNewSkip
+        | BackupPin(_, _)
+        | BackupVerify(_)
+        | BackupUpload
+        | BackupSchedule
+        | BackupSchedSet(_)
         | Check
         | Diagnose
         | Groups
@@ -3062,17 +3159,20 @@ async fn callback_handler(
             .await;
         }
         Action::BackupNew => {
+            // Временно: создаёт бэкап старым способом инсталлера, без
+            // диалога комментария и без бандла — полноценный сценарий
+            // (State::AwaitingBackupComment, backup::service::create)
+            // подключается в Task 9.
             let pid = progress(&bot, chat, msg_id, i18n::backup_creating(lang)).await;
             match vpn.backup().await {
                 Ok(bf) => {
                     settings.log_event(now_epoch(), EventKind::Backup, None, Some(uid), None);
-                    // Свежесозданный бэкап — самый новый по mtime, т.е. индекс 0 в list_backups().
                     edit_or_send(
                         &bot,
                         chat,
                         pid,
                         i18n::backup_done(lang, &bf.name),
-                        menu::backup_card(lang, 0),
+                        menu::backup_menu(lang),
                     )
                     .await;
                 }
@@ -3089,156 +3189,57 @@ async fn callback_handler(
                 }
             }
         }
-        Action::BackupList => match vpn.list_backups() {
-            Ok(list) if list.is_empty() => {
+        Action::BackupList => {
+            let rows = settings.list_backup_rows();
+            let snaps = vpn.list_backups().unwrap_or_default();
+            if rows.is_empty() && snaps.is_empty() {
                 edit_or_send(
                     &bot,
                     chat,
                     msg_id,
                     i18n::backups_empty(lang),
-                    menu::main_menu(lang),
-                )
-                .await;
-            }
-            Ok(list) => {
-                edit_or_send(
-                    &bot,
-                    chat,
-                    msg_id,
-                    i18n::backups_list_title(lang),
-                    menu::backups_list(lang, &list),
-                )
-                .await;
-            }
-            Err(e) => {
-                edit_or_send(
-                    &bot,
-                    chat,
-                    msg_id,
-                    i18n::error_text(lang, &e),
                     menu::backup_menu(lang),
                 )
                 .await;
-            }
-        },
-        Action::BackupCard(idx) => match vpn.list_backups() {
-            Ok(list) => match list.get(idx) {
-                Some(bf) => {
-                    let text = format!("<code>{}</code>", i18n::html_escape(&bf.name));
-                    edit_or_send(&bot, chat, msg_id, text, menu::backup_card(lang, idx)).await;
-                }
-                None => {
-                    edit_or_send(
-                        &bot,
-                        chat,
-                        msg_id,
-                        i18n::backup_not_found(lang),
-                        menu::main_menu(lang),
-                    )
-                    .await;
-                }
-            },
-            Err(e) => {
+            } else {
+                let kept = rows.len();
+                let keep = settings.backup_schedule().keep;
+                let pinned = rows.iter().filter(|r| r.pinned).count();
                 edit_or_send(
                     &bot,
                     chat,
                     msg_id,
-                    i18n::error_text(lang, &e),
-                    menu::backup_menu(lang),
+                    i18n::backups_list_title(lang, kept, keep, pinned),
+                    menu::backups_list(lang, &rows, &snaps),
                 )
                 .await;
             }
-        },
-        Action::BackupDownload(idx) => match vpn.list_backups() {
-            Ok(list) => match list.get(idx) {
-                Some(bf) => {
-                    if let Err(e) = bot.send_document(chat, InputFile::file(&bf.path)).await {
-                        tracing::error!(error = %e, "send_document провалился");
-                        let err = crate::error::Error::Telegram(e.to_string());
-                        edit_or_send(
-                            &bot,
-                            chat,
-                            msg_id,
-                            i18n::error_text(lang, &err),
-                            menu::backup_card(lang, idx),
-                        )
-                        .await;
-                    }
-                }
-                None => {
-                    edit_or_send(
-                        &bot,
-                        chat,
-                        msg_id,
-                        i18n::backup_not_found(lang),
-                        menu::backup_menu(lang),
-                    )
-                    .await;
-                }
-            },
-            Err(e) => {
-                edit_or_send(
-                    &bot,
-                    chat,
-                    msg_id,
-                    i18n::error_text(lang, &e),
-                    menu::backup_menu(lang),
-                )
-                .await;
-            }
-        },
-        Action::Restore(idx) => match vpn.list_backups() {
-            Ok(list) => match list.get(idx) {
-                Some(bf) => {
-                    edit_or_send(
-                        &bot,
-                        chat,
-                        msg_id,
-                        i18n::confirm_restore(lang, &bf.name),
-                        menu::confirm_restore(lang, idx),
-                    )
-                    .await;
-                }
-                None => {
-                    edit_or_send(
-                        &bot,
-                        chat,
-                        msg_id,
-                        i18n::backup_not_found(lang),
-                        menu::main_menu(lang),
-                    )
-                    .await;
-                }
-            },
-            Err(e) => {
-                edit_or_send(
-                    &bot,
-                    chat,
-                    msg_id,
-                    i18n::error_text(lang, &e),
-                    menu::backup_menu(lang),
-                )
-                .await;
-            }
-        },
-        Action::RestoreYes(idx) => {
-            let pid = progress(&bot, chat, msg_id, i18n::restoring(lang)).await;
-            // Временно: путь ищем через list_backups() по индексу — ветка целиком
-            // переписывается в Task 9.
-            let text = match vpn.list_backups().ok().and_then(|l| l.get(idx).cloned()) {
-                Some(bf) => match vpn.restore_path(&bf.path).await {
-                    Ok(()) => {
-                        settings.log_event(now_epoch(), EventKind::Restore, None, Some(uid), None);
-                        i18n::restore_done(lang)
-                    }
-                    Err(e) => {
-                        tracing::error!(error = %e, "restore провалился");
-                        i18n::error_text(lang, &e)
-                    }
-                },
-                None => i18n::backup_not_found(lang),
-            };
-            edit_or_send(&bot, chat, pid, text, menu::main_menu(lang)).await;
+        }
+        // Ветки для новых экранов бэкапов — заглушки на эту задачу, реальные
+        // обработчики появятся в Task 9–11.
+        Action::BackupCard(_)
+        | Action::BackupDownload(_)
+        | Action::BackupDownloadAwg(_)
+        | Action::BackupRestore(_)
+        | Action::BackupRestoreYes(_, _)
+        | Action::BackupDelete(_)
+        | Action::BackupDeleteYes(_)
+        | Action::BackupComment(_)
+        | Action::BackupCommentClear
+        | Action::BackupNewSkip
+        | Action::BackupPin(_, _)
+        | Action::BackupVerify(_)
+        | Action::BackupUpload
+        | Action::BackupSchedule
+        | Action::BackupSchedSet(_) => {
+            edit_or_send(
+                &bot,
+                chat,
+                msg_id,
+                i18n::backup_menu_title(lang),
+                menu::backup_menu(lang),
+            )
+            .await;
         }
         Action::Check => {
             let pid = progress(&bot, chat, msg_id, i18n::check_running(lang)).await;
@@ -3793,10 +3794,91 @@ mod tests {
         assert_eq!(parse_callback("backup"), Action::Backup);
         assert_eq!(parse_callback("bk:new"), Action::BackupNew);
         assert_eq!(parse_callback("bk:list"), Action::BackupList);
-        assert_eq!(parse_callback("bk:restore_yes:2"), Action::RestoreYes(2));
-        assert_eq!(parse_callback("bk:restore:2"), Action::Restore(2));
-        assert_eq!(parse_callback("bk:dl:1"), Action::BackupDownload(1));
-        assert_eq!(parse_callback("bk:card:0"), Action::BackupCard(0));
+        let k = crate::backup::Key::Bundle("2026-09-03_03-00-00.123".into());
+        let ik = crate::backup::Key::Installer("T".into());
+        assert_eq!(
+            parse_callback("bk:card:2026-09-03_03-00-00.123"),
+            Action::BackupCard(k.clone())
+        );
+        assert_eq!(
+            parse_callback("bk:card:i:T"),
+            Action::BackupCard(ik.clone())
+        );
+        assert_eq!(
+            parse_callback("bk:dl:i:T"),
+            Action::BackupDownload(ik.clone())
+        );
+        assert_eq!(
+            parse_callback("bk:dlawg:2026-09-03_03-00-00.123"),
+            Action::BackupDownloadAwg(k.clone())
+        );
+        assert_eq!(
+            parse_callback("bk:restore:i:T"),
+            Action::BackupRestore(ik.clone())
+        );
+        assert_eq!(
+            parse_callback("bk:restore_yes:2026-09-03_03-00-00.123:db"),
+            Action::BackupRestoreYes(k.clone(), true)
+        );
+        assert_eq!(
+            parse_callback("bk:restore_yes:i:T:awg"),
+            Action::BackupRestoreYes(ik.clone(), false)
+        );
+        assert_eq!(parse_callback("bk:restore_yes:i:T:zzz"), Action::Unknown);
+        assert_eq!(
+            parse_callback("bk:del:i:T"),
+            Action::BackupDelete(ik.clone())
+        );
+        assert_eq!(
+            parse_callback("bk:del_yes:2026-09-03_03-00-00.123"),
+            Action::BackupDeleteYes(k.clone())
+        );
+        assert_eq!(
+            parse_callback("bk:comment:T"),
+            Action::BackupComment("T".into())
+        );
+        assert_eq!(parse_callback("bk:comment:i:T"), Action::Unknown);
+        assert_eq!(
+            parse_callback("bk:pin:T:on"),
+            Action::BackupPin("T".into(), true)
+        );
+        assert_eq!(
+            parse_callback("bk:pin:T:off"),
+            Action::BackupPin("T".into(), false)
+        );
+        assert_eq!(
+            parse_callback("bk:verify:T"),
+            Action::BackupVerify("T".into())
+        );
+        assert_eq!(parse_callback("bk:upload"), Action::BackupUpload);
+        assert_eq!(parse_callback("bk:new_skip"), Action::BackupNewSkip);
+        assert_eq!(
+            parse_callback("bk:comment_clear"),
+            Action::BackupCommentClear
+        );
+        assert_eq!(parse_callback("bk:sched"), Action::BackupSchedule);
+        assert_eq!(
+            parse_callback("bk:sched:period"),
+            Action::BackupSchedSet(SchedField::Period)
+        );
+        assert_eq!(
+            parse_callback("bk:sched:time"),
+            Action::BackupSchedSet(SchedField::Time)
+        );
+        assert_eq!(
+            parse_callback("bk:sched:keep"),
+            Action::BackupSchedSet(SchedField::Keep)
+        );
+        assert_eq!(
+            parse_callback("bk:sched:notify"),
+            Action::BackupSchedSet(SchedField::NotifyOk)
+        );
+        assert_eq!(
+            parse_callback("bk:sched:db"),
+            Action::BackupSchedSet(SchedField::IncludeDb)
+        );
+        assert_eq!(parse_callback("bk:sched:nope"), Action::Unknown);
+        assert_eq!(parse_callback("bk:card:a/b"), Action::Unknown);
         assert_eq!(parse_callback("check"), Action::Check);
         assert_eq!(parse_callback("garbage"), Action::Unknown);
     }
@@ -4081,6 +4163,20 @@ mod tests {
             mtime: 1,
         };
 
+        let sample_row = crate::store::BackupRow {
+            name: "awgram_backup_T.tar.gz".into(),
+            created_at: 1,
+            kind: crate::store::BackupKind::Manual,
+            actor: None,
+            comment: Some("c".into()),
+            pinned: true,
+            size: 1,
+            sha256: None,
+            has_db: true,
+            clients: Some(1),
+            groups: Some(0),
+        };
+
         fn sample_group() -> crate::store::GroupRow {
             crate::store::GroupRow {
                 id: 1,
@@ -4114,9 +4210,18 @@ mod tests {
             menu::psk_step(Lang::Ru, false),
             menu::psk_step(Lang::Ru, true),
             menu::backup_menu(Lang::Ru),
-            menu::backups_list(Lang::Ru, &[sample_backup]),
-            menu::backup_card(Lang::Ru, 0),
-            menu::confirm_restore(Lang::Ru, 0),
+            menu::backups_list(Lang::Ru, &[sample_row], &[sample_backup]),
+            menu::backup_card(Lang::Ru, "T", true),
+            menu::backup_card(Lang::Ru, "T", false),
+            menu::installer_card(Lang::Ru, "T"),
+            menu::confirm_restore(Lang::Ru, &crate::backup::Key::Bundle("T".into()), true),
+            menu::confirm_restore(Lang::Ru, &crate::backup::Key::Installer("T".into()), false),
+            menu::confirm_backup_delete(Lang::Ru, &crate::backup::Key::Bundle("T".into())),
+            menu::backup_comment_menu(Lang::Ru, false),
+            menu::backup_comment_menu(Lang::Ru, true),
+            menu::backup_upload_menu(Lang::Ru),
+            menu::backup_sched_menu(Lang::Ru, &crate::store::BackupSchedule::default()),
+            menu::backup_notice_menu(Lang::Ru),
             menu::modify_param_menu(Lang::Ru, "alice"),
             menu::confirm_restart_menu(Lang::Ru),
             menu::groups_menu(Lang::Ru, &[(sample_group(), 2)]),
@@ -4167,6 +4272,8 @@ mod tests {
     /// поэтому здесь есть отдельная компайл-страховка (см. ниже).
     fn coverage_samples() -> Vec<Action> {
         use Action::*;
+        let k = crate::backup::Key::Bundle("T".into());
+        let ik = crate::backup::Key::Installer("T".into());
         let samples = vec![
             Menu,
             List,
@@ -4192,10 +4299,21 @@ mod tests {
             Backup,
             BackupNew,
             BackupList,
-            BackupCard(0),
-            BackupDownload(0),
-            Restore(0),
-            RestoreYes(0),
+            BackupCard(k.clone()),
+            BackupDownload(k.clone()),
+            BackupDownloadAwg(k.clone()),
+            BackupRestore(ik.clone()),
+            BackupRestoreYes(k.clone(), true),
+            BackupDelete(k.clone()),
+            BackupDeleteYes(k.clone()),
+            BackupComment("T".into()),
+            BackupCommentClear,
+            BackupNewSkip,
+            BackupPin("T".into(), true),
+            BackupVerify("T".into()),
+            BackupUpload,
+            BackupSchedule,
+            BackupSchedSet(SchedField::Period),
             Check,
             Diagnose,
             Modify("s".into()),
@@ -4275,8 +4393,19 @@ mod tests {
                 BackupList => {}
                 BackupCard(_) => {}
                 BackupDownload(_) => {}
-                Restore(_) => {}
-                RestoreYes(_) => {}
+                BackupDownloadAwg(_) => {}
+                BackupRestore(_) => {}
+                BackupRestoreYes(_, _) => {}
+                BackupDelete(_) => {}
+                BackupDeleteYes(_) => {}
+                BackupComment(_) => {}
+                BackupCommentClear => {}
+                BackupNewSkip => {}
+                BackupPin(_, _) => {}
+                BackupVerify(_) => {}
+                BackupUpload => {}
+                BackupSchedule => {}
+                BackupSchedSet(_) => {}
                 Check => {}
                 Diagnose => {}
                 Modify(_) => {}
@@ -4344,6 +4473,8 @@ mod tests {
         let owner = Role::Owner;
         let ga = Role::GroupAdmin(vec![ga_group]);
         let denied = Role::Denied;
+        let k = crate::backup::Key::Bundle("T".into());
+        let ik = crate::backup::Key::Installer("T".into());
 
         // (action, разрешено owner, разрешено ga)
         let table: Vec<(Action, bool, bool)> = vec![
@@ -4422,10 +4553,21 @@ mod tests {
             (Action::Backup, true, false),
             (Action::BackupNew, true, false),
             (Action::BackupList, true, false),
-            (Action::BackupCard(0), true, false),
-            (Action::BackupDownload(0), true, false),
-            (Action::Restore(0), true, false),
-            (Action::RestoreYes(0), true, false),
+            (Action::BackupCard(k.clone()), true, false),
+            (Action::BackupDownload(k.clone()), true, false),
+            (Action::BackupDownloadAwg(k.clone()), true, false),
+            (Action::BackupRestore(ik.clone()), true, false),
+            (Action::BackupRestoreYes(k.clone(), true), true, false),
+            (Action::BackupDelete(k.clone()), true, false),
+            (Action::BackupDeleteYes(k.clone()), true, false),
+            (Action::BackupComment("T".into()), true, false),
+            (Action::BackupCommentClear, true, false),
+            (Action::BackupNewSkip, true, false),
+            (Action::BackupPin("T".into(), true), true, false),
+            (Action::BackupVerify("T".into()), true, false),
+            (Action::BackupUpload, true, false),
+            (Action::BackupSchedule, true, false),
+            (Action::BackupSchedSet(SchedField::Period), true, false),
             (Action::Check, true, false),
             (Action::Diagnose, true, false),
             (Action::Groups, true, false),
