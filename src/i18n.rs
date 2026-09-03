@@ -748,6 +748,13 @@ pub fn backup_creating(lang: Lang) -> String {
     }
     .to_string()
 }
+pub fn backup_verifying(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "⏳ Проверяю контрольную сумму…",
+        Lang::En => "⏳ Verifying checksum…",
+    }
+    .to_string()
+}
 pub fn backup_done(lang: Lang, filename: &str) -> String {
     let f = html_escape(filename);
     match lang {
@@ -2382,6 +2389,7 @@ mod tests {
             assert!(!ask_expiry(l).is_empty());
             assert!(!settings_title(l, true, true, true, true, true).is_empty());
             assert!(!backups_empty(l).is_empty());
+            assert!(!backup_verifying(l).is_empty());
             assert!(!restore_done(l).is_empty());
             // карточка: имя экранируется
             let card = client_card(

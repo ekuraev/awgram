@@ -3609,7 +3609,7 @@ async fn callback_handler(
             .await;
         }
         Action::BackupVerify(ts) => {
-            let pid = progress(&bot, chat, msg_id, i18n::backup_creating(lang)).await;
+            let pid = progress(&bot, chat, msg_id, i18n::backup_verifying(lang)).await;
             match crate::backup::service::verify(&vpn, &settings, &ts) {
                 Ok(ok) => {
                     show_backup_card(
@@ -3626,6 +3626,7 @@ async fn callback_handler(
                     .await
                 }
                 Err(e) => {
+                    tracing::error!(error = %e, "verify провалился");
                     edit_or_send(
                         &bot,
                         chat,
@@ -3696,6 +3697,7 @@ async fn callback_handler(
                     }
                 }
                 Err(e) => {
+                    tracing::error!(error = %e, "extract_inner провалился");
                     show_backup_card(
                         &bot,
                         chat,
@@ -3773,6 +3775,7 @@ async fn callback_handler(
                 show_backup_list(&bot, chat, msg_id, lang, &vpn, &settings).await;
             }
             Err(e) => {
+                tracing::error!(error = %e, "delete бэкапа провалился");
                 edit_or_send(
                     &bot,
                     chat,
