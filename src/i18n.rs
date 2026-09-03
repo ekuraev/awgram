@@ -1021,10 +1021,10 @@ pub fn restore_done_detail(lang: Lang, awg: bool, db: bool) -> String {
 pub fn restore_db_failed(lang: Lang) -> String {
     match lang {
         Lang::Ru => {
-            "⚠️ БД бота восстановить не удалось: она осталась прежней. AmneziaWG восстановлен."
+            "⚠️ AmneziaWG восстановлен, но БД бота восстановить не удалось — проверьте группы и настройки."
         }
         Lang::En => {
-            "⚠️ The bot DB could not be restored and is unchanged. AmneziaWG has been restored."
+            "⚠️ AmneziaWG has been restored, but the bot DB could not be — check groups and settings."
         }
     }
     .to_string()

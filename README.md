@@ -82,16 +82,17 @@ Telegram-бот на Rust для управления клиентами [Amnezi
   напрямую недоступен; подробности и альтернатива через маршрутизацию —
   в [docs/proxy.md](docs/proxy.md).
 
-В hardened-режиме архивы самого инсталлера создаются с `chmod 600` и
-пользователю `awgram` недоступны; бэкапы через бота работают в
-root-режиме, в hardened — после ручного `chmod 640`/ACL на
-`backups/*.tar.gz` или обновления инсталлера. Ручное восстановление
-из бандла бота, если сам бот недоступен:
+- ⚠️ **Бэкапы в hardened-режиме**: архивы инсталлера создаются с `chmod 600`
+  и пользователю `awgram` недоступны, поэтому бэкапы через бота полноценно
+  работают в root-режиме. В hardened нужно вручную открыть архивы на чтение
+  (`setfacl -m u:awgram:r /root/awg/backups/*.tar.gz`) или дождаться
+  обновления инсталлера.
+- 🧰 **Ручное восстановление из бандла**, если сам бот недоступен:
 
-```bash
-tar -xzf awgram_backup_<ts>.tar.gz awg/ \
-  && sudo bash manage_amneziawg.sh restore awg/awg_backup_<ts>.tar.gz
-```
+  ```bash
+  tar -xzf awgram_backup_<ts>.tar.gz awg/ \
+    && sudo bash /root/awg/manage_amneziawg.sh restore awg/awg_backup_<ts>.tar.gz
+  ```
 
 ## Быстрый старт
 

@@ -82,16 +82,17 @@ tangible on budget VPS hosts.
   servers where the Bot API is unreachable directly; details and the
   routing-based alternative in [docs/proxy.en.md](docs/proxy.en.md).
 
-In hardened mode the installer's own archives are created with
-`chmod 600` and are unreadable by the `awgram` user; backups through
-the bot work in root mode, in hardened — only after manual
-`chmod 640`/ACL on `backups/*.tar.gz`, or an installer update. Manual
-restore from the bot's bundle, if the bot itself is unavailable:
+- ⚠️ **Backups in hardened mode**: the installer creates its archives with
+  `chmod 600`, unreadable by the `awgram` user, so backups through the bot
+  fully work in root mode. In hardened mode grant read access manually
+  (`setfacl -m u:awgram:r /root/awg/backups/*.tar.gz`) or wait for an
+  installer update.
+- 🧰 **Manual restore from a bundle** when the bot itself is unavailable:
 
-```bash
-tar -xzf awgram_backup_<ts>.tar.gz awg/ \
-  && sudo bash manage_amneziawg.sh restore awg/awg_backup_<ts>.tar.gz
-```
+  ```bash
+  tar -xzf awgram_backup_<ts>.tar.gz awg/ \
+    && sudo bash /root/awg/manage_amneziawg.sh restore awg/awg_backup_<ts>.tar.gz
+  ```
 
 ## Quick start
 
