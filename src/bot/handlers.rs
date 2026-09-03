@@ -5,6 +5,7 @@ use teloxide::dispatching::{HandlerExt, UpdateFilterExt};
 use teloxide::net::Download;
 use teloxide::prelude::*;
 use teloxide::types::{CallbackQuery, InlineKeyboardMarkup, InputFile, MessageId, ParseMode};
+use tokio::io::AsyncWriteExt;
 
 use crate::auth::{resolve_role, Role};
 use crate::bot::menu;
@@ -636,6 +637,11 @@ async fn download_document(
     bot.download_file(&file.path, &mut dst)
         .await
         .map_err(|e| crate::error::Error::Telegram(e.to_string()))?;
+    // download_file делает write_all по чанкам, но не гарантирует, что данные
+    // реально дошли до файла на диске (буферизация tokio::fs::File) — без
+    // явного flush accept_upload (обычный std::fs) может прочитать
+    // укороченный файл, а поздняя ошибка записи потеряется.
+    dst.flush().await?;
     Ok(())
 }
 
@@ -1789,10 +1795,18 @@ async fn message_handler(
                 .await;
                 return Ok(());
             }
-            let pid = progress(&bot, msg.chat.id, prompt, i18n::backup_creating(lang)).await;
+            let pid = progress(&bot, msg.chat.id, prompt, i18n::upload_processing(lang)).await;
+            // Индикатор мог уйти в новое сообщение (edit не удался) — дальше
+            // редактируем именно его, поэтому синхронизируем диалог: иначе
+            // следующая попытка (или сообщение об ошибке ниже) отредактирует
+            // устаревший prompt.
+            dialogue
+                .update(State::AwaitingBackupUpload { prompt: pid })
+                .await?;
             let tmp = match tempfile::tempdir() {
                 Ok(t) => t,
                 Err(e) => {
+                    tracing::error!(error = %e, "не удалось создать временную папку для загрузки бэкапа");
                     edit_or_send(
                         &bot,
                         msg.chat.id,
@@ -1815,6 +1829,7 @@ async fn message_handler(
                 .unwrap_or_else(|| "upload.tar.gz".into());
             let local = tmp.path().join(local_name);
             if let Err(e) = download_document(&bot, &doc.file.id, &local).await {
+                tracing::error!(error = %e, "скачивание присланного бэкапа провалилось");
                 edit_or_send(
                     &bot,
                     msg.chat.id,
@@ -1852,6 +1867,7 @@ async fn message_handler(
                     .await;
                 }
                 Err(e) => {
+                    tracing::error!(error = %e, "загрузка бэкапа не прошла проверку");
                     // Остаёмся в состоянии: пользователь может прислать другой файл.
                     edit_or_send(
                         &bot,
@@ -4378,7 +4394,17 @@ mod tests {
         assert_eq!(upload_precheck(Some("a.zip"), 10), Err("not_targz"));
         assert_eq!(upload_precheck(None, 10), Err("not_targz"));
         assert_eq!(
-            upload_precheck(Some("a.tar.gz"), (20 * 1024 * 1024) + 1),
+            upload_precheck(
+                Some("a.tar.gz"),
+                crate::backup::format::MAX_FILE_BYTES as u32
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            upload_precheck(
+                Some("a.tar.gz"),
+                (crate::backup::format::MAX_FILE_BYTES + 1) as u32
+            ),
             Err("too_large")
         );
     }

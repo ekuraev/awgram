@@ -464,7 +464,12 @@ pub fn accept_upload(
                 .file_name()
                 .map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_default();
+            // ts из имени файла принимаем только если он же пройдёт Key::parse
+            // (та же проверка `ts_ok`) — иначе, например, `awg_backup_.tar.gz`
+            // даёт пустой ts, бандл с именем `awgram_backup_.tar.gz` и ключ,
+            // который потом не парсится обратно — мёртвые кнопки в карточке.
             let ts = format::ts_from_awg_name(&fname)
+                .filter(|t| ts_ok(t))
                 .map(str::to_string)
                 .unwrap_or_else(|| {
                     chrono::Local::now()
@@ -847,6 +852,14 @@ exit 1
         assert_eq!(row3.name, c.row.name);
         assert_eq!(row3.comment.as_deref(), Some("moved"));
         assert!(row3.has_db);
+        // имя без ts (`awg_backup_.tar.gz`) даёт пустой ts_from_awg_name — он
+        // не должен дойти до имени бандла как есть (иначе ключ карточки не
+        // парсится обратно, и кнопки мертвы); должен подставиться сгенерированный.
+        let empty_ts = dir.path().join("awg_backup_.tar.gz");
+        crate::backup::format::tests_support::installer_archive_to(&empty_ts);
+        let row4 = accept_upload(&vpn, &store, &empty_ts, Some(5)).unwrap();
+        let ts4 = crate::backup::format::ts_from_bundle_name(&row4.name).unwrap();
+        assert!(Key::parse(ts4).is_some());
         // мусор отклоняется
         std::fs::write(&copy, b"junk").unwrap();
         assert!(matches!(

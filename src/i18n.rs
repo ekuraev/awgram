@@ -1017,6 +1017,16 @@ pub fn ask_backup_upload(lang: Lang) -> String {
     }
     .to_string()
 }
+/// Индикатор прогресса после того, как файл прошёл `upload_precheck` и
+/// скачивается/проверяется — отличается от `backup_creating` (тот про
+/// упаковку нового бэкапа, этот про приём чужого файла).
+pub fn upload_processing(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "⏳ Проверяю файл…",
+        Lang::En => "⏳ Checking the file…",
+    }
+    .to_string()
+}
 pub fn upload_not_a_file(lang: Lang) -> String {
     match lang {
         Lang::Ru => "⚠️ Нужен файл .tar.gz. Пришлите документом или нажмите «Назад».",
@@ -1026,8 +1036,8 @@ pub fn upload_not_a_file(lang: Lang) -> String {
 }
 pub fn upload_rejected(lang: Lang, reason: &str) -> String {
     match lang {
-        Lang::Ru => format!("❌ Файл отклонён: {reason}"),
-        Lang::En => format!("❌ File rejected: {reason}"),
+        Lang::Ru => format!("❌ Файл отклонён.\n{reason}"),
+        Lang::En => format!("❌ File rejected.\n{reason}"),
     }
 }
 pub fn upload_accepted(lang: Lang, name: &str) -> String {
@@ -2431,6 +2441,7 @@ mod tests {
             assert!(!restore_done_detail(l, true, true).is_empty());
             assert!(!restore_done_detail(l, true, false).is_empty());
             assert!(!ask_backup_upload(l).is_empty());
+            assert!(!upload_processing(l).is_empty());
             assert!(!upload_not_a_file(l).is_empty());
             assert!(!upload_rejected(l, "r").is_empty());
             assert!(!upload_accepted(l, "n").is_empty());
