@@ -226,14 +226,12 @@ pub enum TickEvent {
 }
 
 pub async fn run(bot: Bot, cfg: Arc<Config>, vpn: Arc<Vpn>, store: Arc<Store>) {
-    // рассылка подключается в notify
-    let _ = (&bot, &cfg);
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(TICK_SECS));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         interval.tick().await;
         if let Some(ev) = tick(&vpn, &store).await {
-            let _ = ev;
+            crate::backup::notify::on_tick(&bot, &cfg, &store, &vpn, ev).await;
         }
     }
 }

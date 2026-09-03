@@ -700,6 +700,15 @@ pub fn confirm_restore(lang: Lang, idx: usize) -> InlineKeyboardMarkup {
     ]])
 }
 
+/// Клавиатура под уведомлением планировщика: к списку бэкапов или к
+/// настройкам автобэкапа.
+pub fn backup_notice_menu(lang: Lang) -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![vec![
+        cb(&i18n::btn_backup_list(lang), "bk:list"),
+        cb(&i18n::btn_backup_sched(lang), "bk:sched"),
+    ]])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1432,6 +1441,12 @@ mod tests {
         assert!(data.contains(&"bk:new".to_string()));
         assert!(data.contains(&"bk:list".to_string()));
         assert!(data.contains(&"menu".to_string()));
+    }
+
+    #[test]
+    fn backup_notice_menu_links_list_and_schedule() {
+        let data = all_callback_data(&backup_notice_menu(Lang::Ru));
+        assert_eq!(data, vec!["bk:list", "bk:sched"]);
     }
 
     #[test]

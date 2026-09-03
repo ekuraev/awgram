@@ -813,6 +813,85 @@ pub fn restore_done(lang: Lang) -> String {
     }
     .to_string()
 }
+pub fn btn_backup_sched(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "⚙️ Авто-бэкап",
+        Lang::En => "⚙️ Auto-backup",
+    }
+    .to_string()
+}
+
+// --- backup: уведомления планировщика ---
+/// Локальное время (`chrono::Local`) в формате `дд.мм.гггг чч:мм`.
+pub fn fmt_ts(_lang: Lang, epoch: i64) -> String {
+    use chrono::TimeZone;
+    chrono::Local
+        .timestamp_opt(epoch, 0)
+        .single()
+        .map(|d| d.format("%d.%m.%Y %H:%M").to_string())
+        .unwrap_or_else(|| epoch.to_string())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn backup_auto_ok(
+    lang: Lang,
+    name: &str,
+    size_h: &str,
+    secs: u64,
+    kept: usize,
+    keep: u32,
+    pinned: usize,
+    free_h: Option<&str>,
+) -> String {
+    let n = html_escape(name);
+    let free = match (lang, free_h) {
+        (_, None) => String::new(),
+        (Lang::Ru, Some(f)) => format!("\n💽 Свободно на диске: {f}"),
+        (Lang::En, Some(f)) => format!("\n💽 Free disk space: {f}"),
+    };
+    match lang {
+        Lang::Ru => format!(
+            "✅ <b>Автобэкап создан</b>\n<code>{n}</code>\n📁 Размер: {size_h}\n⏱ Время: {secs} с{free}\n\nХранится {kept} из {keep}, закреплено {pinned}."
+        ),
+        Lang::En => format!(
+            "✅ <b>Scheduled backup created</b>\n<code>{n}</code>\n📁 Size: {size_h}\n⏱ Took: {secs} s{free}\n\nKeeping {kept} of {keep}, pinned {pinned}."
+        ),
+    }
+}
+
+pub fn backup_auto_failed(
+    lang: Lang,
+    err_text: &str,
+    attempt: u32,
+    since_fmt: &str,
+    free_h: Option<&str>,
+) -> String {
+    let free = match (lang, free_h) {
+        (_, None) => String::new(),
+        (Lang::Ru, Some(f)) => format!("\n💽 Свободно на диске: {f}"),
+        (Lang::En, Some(f)) => format!("\n💽 Free disk space: {f}"),
+    };
+    match lang {
+        Lang::Ru => format!(
+            "⚠️ <b>Сбой автобэкапа</b>\n{err_text}\n\nПопытка №{attempt}, сбои с {since_fmt}.{free}\nПовтор через час; напоминание раз в 6 часов, пока бэкап не пройдёт."
+        ),
+        Lang::En => format!(
+            "⚠️ <b>Scheduled backup failed</b>\n{err_text}\n\nAttempt #{attempt}, failing since {since_fmt}.{free}\nRetrying hourly; reminder every 6 hours until a backup succeeds."
+        ),
+    }
+}
+
+pub fn backup_recovered(lang: Lang, attempts: u32, name: &str) -> String {
+    let n = html_escape(name);
+    match lang {
+        Lang::Ru => format!(
+            "✅ <b>Автобэкап снова работает</b> после {attempts} неудачных попыток.\n<code>{n}</code>"
+        ),
+        Lang::En => format!(
+            "✅ <b>Scheduled backups are back</b> after {attempts} failed attempts.\n<code>{n}</code>"
+        ),
+    }
+}
 
 // --- check ---
 pub fn check_running(lang: Lang) -> String {
@@ -1814,7 +1893,20 @@ mod tests {
             assert!(card.contains("a&lt;b&gt;"));
             assert!(!card.contains("a<b>"));
             assert!(card.contains("🟢")); // цвет статуса передан напрямую (mark)
+
+            assert!(!backup_auto_ok(l, "a<b>", "2.3 MB", 3, 5, 7, 1, Some("38.0 GB")).is_empty());
+            assert!(backup_auto_ok(l, "a<b>", "2.3 MB", 3, 5, 7, 1, None).contains("&lt;b&gt;"));
+            assert!(!backup_auto_failed(l, "boom", 3, "03.09.2026 03:00", None).is_empty());
+            assert!(!backup_recovered(l, 4, "x").is_empty());
         }
+    }
+
+    #[test]
+    fn fmt_ts_is_local_dd_mm_yyyy() {
+        let s = fmt_ts(Lang::Ru, 1_756_861_200);
+        assert_eq!(s.len(), 16); // "03.09.2026 03:00"
+        assert_eq!(&s[2..3], ".");
+        assert_eq!(&s[10..11], " ");
     }
 
     #[test]
