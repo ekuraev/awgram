@@ -432,6 +432,18 @@ fn now_epoch() -> i64 {
         .unwrap_or(0)
 }
 
+/// Нормализует ввод комментария: trim, пустое → None, длиннее лимита → Err.
+fn normalize_comment(raw: &str) -> Result<Option<String>, ()> {
+    let t = raw.trim();
+    if t.is_empty() {
+        return Ok(None);
+    }
+    if t.chars().count() > crate::backup::MAX_COMMENT_CHARS {
+        return Err(());
+    }
+    Ok(Some(t.to_string()))
+}
+
 /// Обрезает вывод скрипта до лимита Telegram-сообщения (3500 байт, с запасом
 /// на HTML-обёртку), округляя вниз до границы UTF-8-символа — байтовый индекс
 /// может попасть внутрь многобайтового символа (кириллица в выводе скрипта).
@@ -825,6 +837,158 @@ async fn show_group_card(
         menu::group_card_menu(lang, id, has_invite),
     )
     .await;
+}
+
+/// Перерисовывает экран списка бэкапов: сводит таблицу `backups` с
+/// файловой системой (`reconcile`) и добавляет снапшоты инсталлера отдельным
+/// блоком под основным списком.
+async fn show_backup_list(
+    bot: &Bot,
+    chat: ChatId,
+    msg_id: MessageId,
+    lang: Lang,
+    vpn: &Vpn,
+    store: &Store,
+) {
+    let rows = crate::backup::service::reconcile(vpn, store);
+    let snaps = crate::backup::service::installer_snapshots(vpn);
+    if rows.is_empty() && snaps.is_empty() {
+        edit_or_send(
+            bot,
+            chat,
+            msg_id,
+            i18n::backups_empty(lang),
+            menu::backup_menu(lang),
+        )
+        .await;
+        return;
+    }
+    let keep = store.backup_schedule().keep;
+    let pinned = rows.iter().filter(|r| r.pinned).count();
+    let mut title = i18n::backups_list_title(lang, rows.len(), keep, pinned);
+    if !snaps.is_empty() {
+        title.push('\n');
+        title.push_str(&i18n::installer_snapshots_label(lang));
+    }
+    edit_or_send(
+        bot,
+        chat,
+        msg_id,
+        title,
+        menu::backups_list(lang, &rows, &snaps),
+    )
+    .await;
+}
+
+/// Перерисовывает карточку одного бэкапа (бандл бота или снапшот инсталлера)
+/// по ключу. `notice` — строка результата только что выполненного действия
+/// (комментарий сохранён, пин переключён, проверка выполнена) — первой
+/// строкой карточки, как в `show_group_card`. `verify` — результат последней
+/// проверки sha256, если карточка открыта сразу после неё.
+#[allow(clippy::too_many_arguments)]
+async fn show_backup_card(
+    bot: &Bot,
+    chat: ChatId,
+    msg_id: MessageId,
+    lang: Lang,
+    vpn: &Vpn,
+    store: &Store,
+    key: &crate::backup::Key,
+    notice: Option<String>,
+    verify: Option<bool>,
+) {
+    use crate::backup::service::{find, Located};
+    let Some(located) = find(vpn, store, key) else {
+        edit_or_send(
+            bot,
+            chat,
+            msg_id,
+            i18n::backup_not_found(lang),
+            menu::backup_menu(lang),
+        )
+        .await;
+        return;
+    };
+    let (card, kb) = match located {
+        Located::Bundle(row, _) => (
+            i18n::backup_card(lang, &row, verify),
+            menu::backup_card(lang, key.ts(), row.pinned),
+        ),
+        Located::Installer(bf) => (
+            i18n::installer_card_text(lang, &bf),
+            menu::installer_card(lang, key.ts()),
+        ),
+    };
+    let text = match notice {
+        Some(n) => format!("{n}\n\n{card}"),
+        None => card,
+    };
+    edit_or_send(bot, chat, msg_id, text, kb).await;
+}
+
+/// Создаёт бэкап (ручной, с опциональным комментарием) и показывает карточку
+/// результата. Общий путь для «пропустить комментарий» и для ответа текстом
+/// в `State::AwaitingBackupComment`.
+#[allow(clippy::too_many_arguments)]
+async fn run_backup_create(
+    bot: &Bot,
+    chat: ChatId,
+    msg_id: MessageId,
+    lang: Lang,
+    vpn: &Vpn,
+    store: &Store,
+    uid: i64,
+    comment: Option<String>,
+) {
+    let pid = progress(bot, chat, msg_id, i18n::backup_creating(lang)).await;
+    let s = store.backup_schedule();
+    match crate::backup::service::create(
+        vpn,
+        store,
+        crate::store::BackupKind::Manual,
+        Some(uid),
+        comment,
+        s.include_db,
+        s.keep,
+    )
+    .await
+    {
+        Ok(c) => {
+            store.log_event(
+                now_epoch(),
+                EventKind::Backup,
+                None,
+                Some(uid),
+                Some(&c.row.name),
+            );
+            let ts = crate::backup::format::ts_from_bundle_name(&c.row.name)
+                .unwrap_or_default()
+                .to_string();
+            show_backup_card(
+                bot,
+                chat,
+                pid,
+                lang,
+                vpn,
+                store,
+                &crate::backup::Key::Bundle(ts),
+                Some(i18n::backup_done(lang, &c.row.name)),
+                None,
+            )
+            .await;
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "backup провалился");
+            edit_or_send(
+                bot,
+                chat,
+                pid,
+                i18n::error_text(lang, &e),
+                menu::backup_menu(lang),
+            )
+            .await;
+        }
+    }
 }
 
 async fn message_handler(
@@ -1452,6 +1616,59 @@ async fn message_handler(
                         prompt,
                         i18n::bad_admin_id(lang),
                         menu::cancel_menu(lang),
+                    )
+                    .await;
+                }
+            }
+        }
+        State::AwaitingBackupComment { target, prompt } => {
+            if !role.is_owner() {
+                dialogue.update(State::Idle).await?;
+                return Ok(());
+            }
+            let raw = msg.text().unwrap_or_default();
+            let comment = match normalize_comment(raw) {
+                Ok(c) => c,
+                Err(()) => {
+                    edit_or_send(
+                        &bot,
+                        msg.chat.id,
+                        prompt,
+                        i18n::comment_too_long(lang, crate::backup::MAX_COMMENT_CHARS),
+                        menu::backup_comment_menu(lang, target.is_some()),
+                    )
+                    .await;
+                    return Ok(());
+                }
+            };
+            dialogue.update(State::Idle).await?;
+            match target {
+                None => {
+                    run_backup_create(
+                        &bot,
+                        msg.chat.id,
+                        prompt,
+                        lang,
+                        &vpn,
+                        &settings,
+                        uid,
+                        comment,
+                    )
+                    .await
+                }
+                Some(ts) => {
+                    let name = crate::backup::format::bundle_name(&ts);
+                    settings.set_backup_comment(&name, comment.as_deref());
+                    show_backup_card(
+                        &bot,
+                        msg.chat.id,
+                        prompt,
+                        lang,
+                        &vpn,
+                        &settings,
+                        &crate::backup::Key::Bundle(ts),
+                        Some(i18n::comment_saved(lang)),
+                        None,
                     )
                     .await;
                 }
@@ -3149,6 +3366,7 @@ async fn callback_handler(
             .await;
         }
         Action::Backup => {
+            dialogue.update(State::Idle).await?;
             edit_or_send(
                 &bot,
                 chat,
@@ -3159,25 +3377,117 @@ async fn callback_handler(
             .await;
         }
         Action::BackupNew => {
-            // Временно: создаёт бэкап старым способом инсталлера, без
-            // диалога комментария и без бандла — полноценный сценарий
-            // (State::AwaitingBackupComment, backup::service::create)
-            // подключается в Task 9.
+            edit_or_send(
+                &bot,
+                chat,
+                msg_id,
+                i18n::ask_backup_comment(lang),
+                menu::backup_comment_menu(lang, false),
+            )
+            .await;
+            dialogue
+                .update(State::AwaitingBackupComment {
+                    target: None,
+                    prompt: msg_id,
+                })
+                .await?;
+        }
+        Action::BackupNewSkip => {
+            dialogue.update(State::Idle).await?;
+            run_backup_create(&bot, chat, msg_id, lang, &vpn, &settings, uid, None).await;
+        }
+        Action::BackupList => {
+            dialogue.update(State::Idle).await?;
+            show_backup_list(&bot, chat, msg_id, lang, &vpn, &settings).await;
+        }
+        Action::BackupCard(key) => {
+            dialogue.update(State::Idle).await?;
+            show_backup_card(&bot, chat, msg_id, lang, &vpn, &settings, &key, None, None).await;
+        }
+        Action::BackupComment(ts) => {
+            edit_or_send(
+                &bot,
+                chat,
+                msg_id,
+                i18n::ask_backup_comment(lang),
+                menu::backup_comment_menu(lang, true),
+            )
+            .await;
+            dialogue
+                .update(State::AwaitingBackupComment {
+                    target: Some(ts),
+                    prompt: msg_id,
+                })
+                .await?;
+        }
+        Action::BackupCommentClear => {
+            let st = dialogue.get().await?.unwrap_or_default();
+            dialogue.update(State::Idle).await?;
+            if let State::AwaitingBackupComment {
+                target: Some(ts), ..
+            } = st
+            {
+                let name = crate::backup::format::bundle_name(&ts);
+                settings.set_backup_comment(&name, None);
+                show_backup_card(
+                    &bot,
+                    chat,
+                    msg_id,
+                    lang,
+                    &vpn,
+                    &settings,
+                    &crate::backup::Key::Bundle(ts),
+                    Some(i18n::comment_saved(lang)),
+                    None,
+                )
+                .await;
+            } else {
+                edit_or_send(
+                    &bot,
+                    chat,
+                    msg_id,
+                    i18n::backup_menu_title(lang),
+                    menu::backup_menu(lang),
+                )
+                .await;
+            }
+        }
+        Action::BackupPin(ts, on) => {
+            let name = crate::backup::format::bundle_name(&ts);
+            if settings.backup_row(&name).is_some() {
+                settings.set_backup_pinned(&name, on);
+            }
+            show_backup_card(
+                &bot,
+                chat,
+                msg_id,
+                lang,
+                &vpn,
+                &settings,
+                &crate::backup::Key::Bundle(ts),
+                Some(i18n::pinned_toggled(lang, on)),
+                None,
+            )
+            .await;
+        }
+        Action::BackupVerify(ts) => {
             let pid = progress(&bot, chat, msg_id, i18n::backup_creating(lang)).await;
-            match vpn.backup().await {
-                Ok(bf) => {
-                    settings.log_event(now_epoch(), EventKind::Backup, None, Some(uid), None);
-                    edit_or_send(
+            match crate::backup::service::verify(&vpn, &settings, &ts) {
+                Ok(ok) => {
+                    show_backup_card(
                         &bot,
                         chat,
                         pid,
-                        i18n::backup_done(lang, &bf.name),
-                        menu::backup_menu(lang),
+                        lang,
+                        &vpn,
+                        &settings,
+                        &crate::backup::Key::Bundle(ts),
+                        Some(i18n::verify_result(lang, ok)),
+                        Some(ok),
                     )
-                    .await;
+                    .await
                 }
                 Err(e) => {
-                    tracing::error!(error = %e, "backup провалился");
                     edit_or_send(
                         &bot,
                         chat,
@@ -3185,50 +3495,160 @@ async fn callback_handler(
                         i18n::error_text(lang, &e),
                         menu::backup_menu(lang),
                     )
-                    .await;
+                    .await
                 }
             }
         }
-        Action::BackupList => {
-            let rows = settings.list_backup_rows();
-            let snaps = vpn.list_backups().unwrap_or_default();
-            if rows.is_empty() && snaps.is_empty() {
-                edit_or_send(
+        Action::BackupDownload(key) => {
+            use crate::backup::service::{find, Located};
+            let path = match find(&vpn, &settings, &key) {
+                Some(Located::Bundle(_, p)) => p,
+                Some(Located::Installer(bf)) => bf.path,
+                None => {
+                    edit_or_send(
+                        &bot,
+                        chat,
+                        msg_id,
+                        i18n::backup_not_found(lang),
+                        menu::backup_menu(lang),
+                    )
+                    .await;
+                    return Ok(());
+                }
+            };
+            if let Err(e) = bot.send_document(chat, InputFile::file(&path)).await {
+                tracing::error!(error = %e, "send_document провалился");
+                let err = crate::error::Error::Telegram(e.to_string());
+                show_backup_card(
                     &bot,
                     chat,
                     msg_id,
-                    i18n::backups_empty(lang),
-                    menu::backup_menu(lang),
-                )
-                .await;
-            } else {
-                let kept = rows.len();
-                let keep = settings.backup_schedule().keep;
-                let pinned = rows.iter().filter(|r| r.pinned).count();
-                edit_or_send(
-                    &bot,
-                    chat,
-                    msg_id,
-                    i18n::backups_list_title(lang, kept, keep, pinned),
-                    menu::backups_list(lang, &rows, &snaps),
+                    lang,
+                    &vpn,
+                    &settings,
+                    &key,
+                    Some(i18n::error_text(lang, &err)),
+                    None,
                 )
                 .await;
             }
         }
-        // Ветки для новых экранов бэкапов — заглушки на эту задачу, реальные
-        // обработчики появятся в Task 9–11.
-        Action::BackupCard(_)
-        | Action::BackupDownload(_)
-        | Action::BackupDownloadAwg(_)
-        | Action::BackupRestore(_)
+        Action::BackupDownloadAwg(key) => {
+            let crate::backup::Key::Bundle(ts) = &key else {
+                show_backup_card(&bot, chat, msg_id, lang, &vpn, &settings, &key, None, None).await;
+                return Ok(());
+            };
+            match crate::backup::service::extract_inner(&vpn, ts) {
+                Ok((_tmp, inner)) => {
+                    if let Err(e) = bot.send_document(chat, InputFile::file(&inner)).await {
+                        tracing::error!(error = %e, "send_document провалился");
+                        let err = crate::error::Error::Telegram(e.to_string());
+                        show_backup_card(
+                            &bot,
+                            chat,
+                            msg_id,
+                            lang,
+                            &vpn,
+                            &settings,
+                            &key,
+                            Some(i18n::error_text(lang, &err)),
+                            None,
+                        )
+                        .await;
+                    }
+                }
+                Err(e) => {
+                    show_backup_card(
+                        &bot,
+                        chat,
+                        msg_id,
+                        lang,
+                        &vpn,
+                        &settings,
+                        &key,
+                        Some(i18n::error_text(lang, &e)),
+                        None,
+                    )
+                    .await
+                }
+            }
+        }
+        Action::BackupDelete(key) => {
+            use crate::backup::service::{find, Located};
+            match find(&vpn, &settings, &key) {
+                Some(Located::Bundle(row, _)) if row.pinned => {
+                    show_backup_card(
+                        &bot,
+                        chat,
+                        msg_id,
+                        lang,
+                        &vpn,
+                        &settings,
+                        &key,
+                        Some(i18n::pinned_toggled(lang, true)),
+                        None,
+                    )
+                    .await;
+                }
+                Some(Located::Bundle(row, _)) => {
+                    edit_or_send(
+                        &bot,
+                        chat,
+                        msg_id,
+                        i18n::confirm_backup_delete(lang, &row.name, row.comment.as_deref()),
+                        menu::confirm_backup_delete(lang, &key),
+                    )
+                    .await
+                }
+                Some(Located::Installer(bf)) => {
+                    edit_or_send(
+                        &bot,
+                        chat,
+                        msg_id,
+                        i18n::confirm_backup_delete(lang, &bf.name, None),
+                        menu::confirm_backup_delete(lang, &key),
+                    )
+                    .await
+                }
+                None => {
+                    edit_or_send(
+                        &bot,
+                        chat,
+                        msg_id,
+                        i18n::backup_not_found(lang),
+                        menu::backup_menu(lang),
+                    )
+                    .await
+                }
+            }
+        }
+        Action::BackupDeleteYes(key) => match crate::backup::service::delete(&vpn, &settings, &key)
+        {
+            Ok(()) => {
+                settings.log_event(
+                    now_epoch(),
+                    EventKind::BackupDelete,
+                    None,
+                    Some(uid),
+                    Some(key.ts()),
+                );
+                show_backup_list(&bot, chat, msg_id, lang, &vpn, &settings).await;
+            }
+            Err(e) => {
+                edit_or_send(
+                    &bot,
+                    chat,
+                    msg_id,
+                    i18n::error_text(lang, &e),
+                    menu::backup_menu(lang),
+                )
+                .await
+            }
+        },
+        // Ветки для восстановления, загрузки и расписания — заглушки на эту
+        // задачу, реальные обработчики появятся в Task 10–11.
+        Action::BackupRestore(_)
         | Action::BackupRestoreYes(_, _)
-        | Action::BackupDelete(_)
-        | Action::BackupDeleteYes(_)
-        | Action::BackupComment(_)
-        | Action::BackupCommentClear
-        | Action::BackupNewSkip
-        | Action::BackupPin(_, _)
-        | Action::BackupVerify(_)
         | Action::BackupUpload
         | Action::BackupSchedule
         | Action::BackupSchedSet(_) => {
@@ -3682,6 +4102,20 @@ pub fn schema() -> teloxide::dispatching::UpdateHandler<Box<dyn std::error::Erro
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normalize_comment_rules() {
+        assert_eq!(normalize_comment("  "), Ok(None));
+        assert_eq!(
+            normalize_comment(" до апдейта "),
+            Ok(Some("до апдейта".into()))
+        );
+        assert_eq!(
+            normalize_comment(&"я".repeat(200)),
+            Ok(Some("я".repeat(200)))
+        );
+        assert_eq!(normalize_comment(&"я".repeat(201)), Err(()));
+    }
 
     #[test]
     fn group_for_new_client_recreate_preserves_binding() {
