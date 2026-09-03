@@ -434,6 +434,23 @@ fn now_epoch() -> i64 {
         .unwrap_or(0)
 }
 
+/// Уводит синхронную работу с реактора — как `collector` уводит запись
+/// статистики. Операции с бэкапами это tar/gzip, sha256 по сотням мегабайт и
+/// SQLite: секунды заблокированного потока, за которые бот перестал бы
+/// отвечать всем остальным. `JoinError` (паника внутри задачи или её отмена)
+/// приходит наружу как `Error::Io`, а не роняет диспетчер.
+async fn blocking<T, F>(f: F) -> crate::error::Result<T>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(f).await.map_err(|e| {
+        crate::error::Error::Io(std::io::Error::other(format!(
+            "фоновая задача прервана: {e}"
+        )))
+    })
+}
+
 /// Нормализует ввод комментария: trim, пустое → None, длиннее лимита → Err.
 fn normalize_comment(raw: &str) -> Result<Option<String>, ()> {
     let t = raw.trim();
@@ -448,7 +465,7 @@ fn normalize_comment(raw: &str) -> Result<Option<String>, ()> {
 
 /// Предварительная проверка документа до скачивания: расширение и размер.
 fn upload_precheck(file_name: Option<&str>, size: u32) -> Result<(), &'static str> {
-    if size as u64 > crate::backup::format::MAX_FILE_BYTES {
+    if size as u64 > crate::backup::format::MAX_UPLOAD_BYTES {
         return Err("too_large");
     }
     match file_name {
@@ -934,11 +951,26 @@ async fn show_backup_list(
     chat: ChatId,
     msg_id: MessageId,
     lang: Lang,
-    vpn: &Vpn,
-    store: &Store,
+    vpn: &Arc<Vpn>,
+    store: &Arc<Store>,
 ) {
-    let rows = crate::backup::service::reconcile(vpn, store);
-    let snaps = crate::backup::service::installer_snapshots(vpn);
+    let (v, s) = (vpn.clone(), store.clone());
+    let (mut rows, snaps) = blocking(move || {
+        (
+            crate::backup::service::reconcile(&v, &s),
+            crate::backup::service::installer_snapshots(&v),
+        )
+    })
+    .await
+    .unwrap_or_default();
+    // Строку, ts которой не разбирается обратно в Key, нарисовать нельзя:
+    // кнопка карточки была бы мёртвой. `backups_list` такие пропускает, так
+    // что и в счётчике заголовка их быть не должно.
+    rows.retain(|r| {
+        crate::backup::format::ts_from_bundle_name(&r.name)
+            .and_then(crate::backup::Key::parse)
+            .is_some()
+    });
     if rows.is_empty() && snaps.is_empty() {
         edit_or_send(
             bot,
@@ -978,14 +1010,15 @@ async fn show_backup_card(
     chat: ChatId,
     msg_id: MessageId,
     lang: Lang,
-    vpn: &Vpn,
-    store: &Store,
+    vpn: &Arc<Vpn>,
+    store: &Arc<Store>,
     key: &crate::backup::Key,
     notice: Option<String>,
     verify: Option<bool>,
 ) {
     use crate::backup::service::{find, Located};
-    let Some(located) = find(vpn, store, key) else {
+    let (v, s, k) = (vpn.clone(), store.clone(), key.clone());
+    let Some(located) = blocking(move || find(&v, &s, &k)).await.ok().flatten() else {
         edit_or_send(
             bot,
             chat,
@@ -1022,8 +1055,9 @@ async fn run_backup_create(
     chat: ChatId,
     msg_id: MessageId,
     lang: Lang,
-    vpn: &Vpn,
-    store: &Store,
+    cfg: &Arc<Config>,
+    vpn: &Arc<Vpn>,
+    store: &Arc<Store>,
     uid: i64,
     comment: Option<String>,
 ) {
@@ -1048,6 +1082,21 @@ async fn run_backup_create(
                 Some(uid),
                 Some(&c.row.name),
             );
+            // Удачный ручной бэкап закрывает серию сбоев так же, как удачный
+            // автоматический: иначе планировщик продолжит ретраить по бэкоффу
+            // и слать напоминания о сбое, хотя бэкап только что прошёл.
+            let prev = store.backup_failure();
+            store.set_backup_failure(None);
+            if let Some(n) = crate::backup::schedule::after_success(prev.as_ref()) {
+                let name = c.row.name.clone();
+                crate::backup::notify::owners(bot, cfg, store, |l| {
+                    (
+                        i18n::backup_recovered(l, n, &name),
+                        menu::backup_notice_menu(l),
+                    )
+                })
+                .await;
+            }
             let ts = crate::backup::format::ts_from_bundle_name(&c.row.name)
                 .unwrap_or_default()
                 .to_string();
@@ -1736,6 +1785,7 @@ async fn message_handler(
                         msg.chat.id,
                         prompt,
                         lang,
+                        &cfg,
                         &vpn,
                         &settings,
                         uid,
@@ -1840,7 +1890,12 @@ async fn message_handler(
                 .await;
                 return Ok(());
             }
-            match crate::backup::service::accept_upload(&vpn, &settings, &local, Some(uid)) {
+            let (v, s, l) = (vpn.clone(), settings.clone(), local.clone());
+            let accepted =
+                blocking(move || crate::backup::service::accept_upload(&v, &s, &l, Some(uid)))
+                    .await
+                    .and_then(|r| r);
+            match accepted {
                 Ok(row) => {
                     dialogue.update(State::Idle).await?;
                     settings.log_event(
@@ -3600,7 +3655,7 @@ async fn callback_handler(
         }
         Action::BackupNewSkip => {
             dialogue.update(State::Idle).await?;
-            run_backup_create(&bot, chat, msg_id, lang, &vpn, &settings, uid, None).await;
+            run_backup_create(&bot, chat, msg_id, lang, &cfg, &vpn, &settings, uid, None).await;
         }
         Action::BackupList => {
             dialogue.update(State::Idle).await?;
@@ -3678,7 +3733,11 @@ async fn callback_handler(
         }
         Action::BackupVerify(ts) => {
             let pid = progress(&bot, chat, msg_id, i18n::backup_verifying(lang)).await;
-            match crate::backup::service::verify(&vpn, &settings, &ts) {
+            let (v, s, t) = (vpn.clone(), settings.clone(), ts.clone());
+            let res = blocking(move || crate::backup::service::verify(&v, &s, &t))
+                .await
+                .and_then(|r| r);
+            match res {
                 Ok(ok) => {
                     show_backup_card(
                         &bot,
@@ -3708,7 +3767,9 @@ async fn callback_handler(
         }
         Action::BackupDownload(key) => {
             use crate::backup::service::{find, Located};
-            let path = match find(&vpn, &settings, &key) {
+            let (v, s, k) = (vpn.clone(), settings.clone(), key.clone());
+            let located = blocking(move || find(&v, &s, &k)).await.ok().flatten();
+            let path = match located {
                 Some(Located::Bundle(_, p)) => p,
                 Some(Located::Installer(bf)) => bf.path,
                 None => {
@@ -3745,7 +3806,11 @@ async fn callback_handler(
                 show_backup_card(&bot, chat, msg_id, lang, &vpn, &settings, &key, None, None).await;
                 return Ok(());
             };
-            match crate::backup::service::extract_inner(&vpn, ts) {
+            let (v, t) = (vpn.clone(), ts.clone());
+            let res = blocking(move || crate::backup::service::extract_inner(&v, &t))
+                .await
+                .and_then(|r| r);
+            match res {
                 Ok((_tmp, inner)) => {
                     if let Err(e) = bot.send_document(chat, InputFile::file(&inner)).await {
                         tracing::error!(error = %e, "send_document провалился");
@@ -3783,7 +3848,9 @@ async fn callback_handler(
         }
         Action::BackupDelete(key) => {
             use crate::backup::service::{find, Located};
-            match find(&vpn, &settings, &key) {
+            let (v, s, k) = (vpn.clone(), settings.clone(), key.clone());
+            let located = blocking(move || find(&v, &s, &k)).await.ok().flatten();
+            match located {
                 Some(Located::Bundle(row, _)) if row.pinned => {
                     show_backup_card(
                         &bot,
@@ -3793,7 +3860,7 @@ async fn callback_handler(
                         &vpn,
                         &settings,
                         &key,
-                        Some(i18n::pinned_toggled(lang, true)),
+                        Some(i18n::unpin_first(lang)),
                         None,
                     )
                     .await;
@@ -3830,33 +3897,40 @@ async fn callback_handler(
                 }
             }
         }
-        Action::BackupDeleteYes(key) => match crate::backup::service::delete(&vpn, &settings, &key)
-        {
-            Ok(()) => {
-                settings.log_event(
-                    now_epoch(),
-                    EventKind::BackupDelete,
-                    None,
-                    Some(uid),
-                    Some(key.ts()),
-                );
-                show_backup_list(&bot, chat, msg_id, lang, &vpn, &settings).await;
-            }
-            Err(e) => {
-                tracing::error!(error = %e, "delete бэкапа провалился");
-                edit_or_send(
-                    &bot,
-                    chat,
-                    msg_id,
-                    i18n::error_text(lang, &e),
-                    menu::backup_menu(lang),
-                )
+        Action::BackupDeleteYes(key) => {
+            let (v, s, k) = (vpn.clone(), settings.clone(), key.clone());
+            let res = blocking(move || crate::backup::service::delete(&v, &s, &k))
                 .await
+                .and_then(|r| r);
+            match res {
+                Ok(()) => {
+                    settings.log_event(
+                        now_epoch(),
+                        EventKind::BackupDelete,
+                        None,
+                        Some(uid),
+                        Some(key.ts()),
+                    );
+                    show_backup_list(&bot, chat, msg_id, lang, &vpn, &settings).await;
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "delete бэкапа провалился");
+                    edit_or_send(
+                        &bot,
+                        chat,
+                        msg_id,
+                        i18n::error_text(lang, &e),
+                        menu::backup_menu(lang),
+                    )
+                    .await
+                }
             }
-        },
+        }
         Action::BackupRestore(key) => {
             use crate::backup::service::{find, Located};
-            match find(&vpn, &settings, &key) {
+            let (v, s, k) = (vpn.clone(), settings.clone(), key.clone());
+            let located = blocking(move || find(&v, &s, &k)).await.ok().flatten();
+            match located {
                 Some(Located::Bundle(row, _)) => {
                     edit_or_send(
                         &bot,
@@ -3893,15 +3967,27 @@ async fn callback_handler(
             let pid = progress(&bot, chat, msg_id, i18n::restoring(lang)).await;
             let text = match crate::backup::service::restore(&vpn, &settings, &key, with_db).await {
                 Ok(out) => {
+                    let db_err = if out.db_error.is_some() {
+                        " db_err=1"
+                    } else {
+                        ""
+                    };
                     // Событие пишем ПОСЛЕ restore БД — попадает в восстановленную БД.
                     settings.log_event(
                         now_epoch(),
                         EventKind::Restore,
                         None,
                         Some(uid),
-                        Some(&format!("{} db={}", key.encode(), out.db)),
+                        Some(&format!("{} db={}{db_err}", key.encode(), out.db)),
                     );
-                    i18n::restore_done_detail(lang, out.awg, out.db)
+                    let mut text = i18n::restore_done_detail(lang, out.awg, out.db);
+                    // AWG восстановлен, а БД — нет: это не общий провал, но и
+                    // молчать нельзя, иначе владелец будет думать, что вернулось всё.
+                    if out.db_error.is_some() {
+                        text.push('\n');
+                        text.push_str(&i18n::restore_db_failed(lang));
+                    }
+                    text
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "restore провалился");
@@ -4396,14 +4482,14 @@ mod tests {
         assert_eq!(
             upload_precheck(
                 Some("a.tar.gz"),
-                crate::backup::format::MAX_FILE_BYTES as u32
+                crate::backup::format::MAX_UPLOAD_BYTES as u32
             ),
             Ok(())
         );
         assert_eq!(
             upload_precheck(
                 Some("a.tar.gz"),
-                (crate::backup::format::MAX_FILE_BYTES + 1) as u32
+                (crate::backup::format::MAX_UPLOAD_BYTES + 1) as u32
             ),
             Err("too_large")
         );

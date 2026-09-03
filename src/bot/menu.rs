@@ -675,10 +675,16 @@ pub fn backup_menu(lang: Lang) -> InlineKeyboardMarkup {
 }
 
 /// Бандлы бота (по ключу `<ts>`), затем снапшоты инсталлера (`i:<ts>`).
+/// Строки, ts которых не разбирается обратно в `Key`, пропускаются: их
+/// `bk:card:<ts>` либо не влезет в 64 байта лимита callback'а Telegram, либо
+/// не распарсится на приёме — кнопка была бы мёртвой, а с ней и весь экран.
 pub fn backups_list(lang: Lang, rows: &[BackupRow], snaps: &[BackupFile]) -> InlineKeyboardMarkup {
     let mut out: Vec<Vec<InlineKeyboardButton>> = Vec::new();
     for r in rows {
         if let Some(ts) = crate::backup::format::ts_from_bundle_name(&r.name) {
+            if Key::parse(ts).is_none() {
+                continue;
+            }
             out.push(vec![cb(
                 &i18n::backup_list_row(lang, r),
                 &format!("bk:card:{}", Key::Bundle(ts.into()).encode()),
@@ -687,6 +693,9 @@ pub fn backups_list(lang: Lang, rows: &[BackupRow], snaps: &[BackupFile]) -> Inl
     }
     for s in snaps {
         if let Some(ts) = crate::backup::format::ts_from_awg_name(&s.name) {
+            if Key::parse(ts).is_none() {
+                continue;
+            }
             out.push(vec![cb(
                 &i18n::snapshot_row(lang, s),
                 &format!("bk:card:{}", Key::Installer(ts.into()).encode()),
@@ -1579,6 +1588,24 @@ mod tests {
         );
         for t in all_button_texts(&kb) {
             assert!(t.chars().count() <= 64, "{t}");
+        }
+
+        // ts, который не разбирается обратно в Key (длиннее лимита), в
+        // клавиатуру не попадает: callback не влез бы в 64 байта Telegram.
+        let long = "z".repeat(70);
+        let kb2 = backups_list(
+            Lang::Ru,
+            &[row(&format!("awgram_backup_{long}.tar.gz"))],
+            &[BackupFile {
+                name: format!("awg_backup_{long}.tar.gz"),
+                path: "p".into(),
+                size: 1,
+                mtime: 1,
+            }],
+        );
+        assert_eq!(all_callback_data(&kb2), vec!["backup"]);
+        for d in all_callback_data(&kb) {
+            assert!(d.len() <= 64, "callback длиннее лимита Telegram: {d}");
         }
     }
 

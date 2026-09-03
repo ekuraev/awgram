@@ -30,10 +30,11 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
   поэтому на старом инсталлере шага маршрутов просто нет.
 - **Умные бэкапы** (#35, #53): автобэкап по расписанию (ежедневно / еженедельно /
   ежемесячно, время из пресетов), ротация «хранить N» с закреплением важных копий,
-  отчёты владельцам об успехе и сбое; при сбое бот повторяет попытку каждый час и
-  напоминает раз в 6 часов, пока бэкап не пройдёт. Список с датой, размером и
-  комментарием, карточка с проверкой целостности по SHA-256, удаление,
-  восстановление из карточки, загрузка бэкапа файлом через Telegram.
+  отчёты владельцам об успехе и сбое; при сбое бот повторяет попытки с
+  нарастающим интервалом (до суток) и напоминает не чаще раза в 6 часов, пока
+  бэкап не пройдёт. Список с датой, размером и комментарием, карточка с
+  проверкой целостности по SHA-256, удаление, восстановление из карточки,
+  загрузка бэкапа файлом через Telegram.
 - **Бандл с БД бота**: бот хранит бэкапы в `backups/awgram/` как
   `awgram_backup_<ts>.tar.gz` — архив инсталлера байт в байт, `meta.json` и, если
   включено в настройках, снимок БД бота (группы, инвайты, статистика). При
@@ -102,9 +103,10 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
 - **Smart backups** (#35, #53): scheduled auto-backup (daily / weekly /
   monthly, time from presets), "keep N" rotation with pinning for important
   copies, owner reports on success and failure; on failure the bot retries
-  every hour and reminds every 6 hours until a backup succeeds. A list with
-  date, size and comment, a card with SHA-256 integrity verification,
-  deletion, restore from the card, backup download as a file via Telegram.
+  with increasing intervals (up to a day) and reminds at most every 6 hours
+  until a backup succeeds. A list with date, size and comment, a card with
+  SHA-256 integrity verification, deletion, restore from the card, backup
+  download as a file via Telegram.
 - **Bundle with the bot's database**: the bot stores backups in
   `backups/awgram/` as `awgram_backup_<ts>.tar.gz` — the installer's archive
   byte for byte, a `meta.json`, and, if enabled in settings, a snapshot of the

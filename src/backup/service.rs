@@ -2,7 +2,9 @@
 //! сводится с ней в `reconcile`. Тексты для пользователя здесь не
 //! формируются — только структуры результата и `crate::error::Error`.
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::backup::format::{self, FileKind, Meta, DB_NAME};
 use crate::error::{Error, Result};
@@ -57,9 +59,15 @@ pub enum Located {
     Installer(BackupFile),
 }
 
+/// Результат восстановления. `db_error` заполняется, только если AWG уже
+/// восстановлен, а БД бота — нет: возвращать в этом случае `Err` нельзя,
+/// иначе пользователь видит общую ошибку и повторяет всю операцию, хотя
+/// главная её часть уже прошла.
+#[derive(Debug)]
 pub struct RestoreOutcome {
     pub awg: bool,
     pub db: bool,
+    pub db_error: Option<String>,
 }
 
 fn now_epoch() -> i64 {
@@ -176,6 +184,17 @@ pub fn reconcile(vpn: &Vpn, store: &Store) -> Vec<BackupRow> {
         if known.contains(name) {
             continue;
         }
+        // Файл с ts, который не парсится обратно в Key (слишком длинный,
+        // посторонние символы), заводить нельзя: callback `bk:card:<ts>` не
+        // влезет в 64 байта лимита Telegram или не разберётся, и карточка со
+        // списком станут мёртвыми кнопками.
+        if format::ts_from_bundle_name(name)
+            .and_then(Key::parse)
+            .is_none()
+        {
+            tracing::warn!(file = %name, "ts бандла не годится для callback, не подхватываю");
+            continue;
+        }
         let path = dir.join(name);
         match format::inspect_bundle(&path, Store::current_schema()) {
             Ok(insp) => {
@@ -233,42 +252,71 @@ fn unreadable(e: std::io::Error, path: &Path) -> Error {
     }
 }
 
-pub async fn create(
+/// Ошибка разбора архива: `PermissionDenied` — это не «битый бэкап», а
+/// недоступный файл (hardened-режим инсталлера, root:600), и текст для
+/// пользователя должен быть другим.
+fn format_err(e: format::FormatError, path: &Path) -> Error {
+    match e {
+        format::FormatError::Io(io) => unreadable(io, path),
+        other => Error::BackupInvalid(other),
+    }
+}
+
+/// `JoinError` бывает только при панике в блокирующей задаче или её отмене:
+/// наружу это ошибка ввода-вывода, а не отдельный класс сбоя.
+fn blocking_err(e: tokio::task::JoinError) -> Error {
+    Error::Io(std::io::Error::other(format!(
+        "фоновая задача бэкапа прервана: {e}"
+    )))
+}
+
+/// Метка времени для бандла, когда взять её из имени архива не вышло.
+fn generated_ts() -> String {
+    chrono::Local::now()
+        .format("%Y-%m-%d_%H-%M-%S.000")
+        .to_string()
+}
+
+/// Проверка места: грубая оценка «нужно примерно вдвое больше веса
+/// последнего бэкапа» — неточная (новый может оказаться больше), но
+/// дешёвая и достаточная, чтобы не запускать заведомо провальную
+/// операцию. Нет ни одного бэкапа (need==0) — проверять нечего.
+fn check_space(vpn: &Vpn, store: &Store) -> Result<()> {
+    let Some(free) = free_bytes(&vpn.bot_backups_dir()).or_else(|| free_bytes(&vpn.backups_dir()))
+    else {
+        return Ok(());
+    };
+    let last = store
+        .list_backup_rows()
+        .first()
+        .map(|r| r.size)
+        .unwrap_or(0);
+    let need = last.saturating_mul(2);
+    if need > 0 && free < need {
+        return Err(Error::BackupNoSpace { need, free });
+    }
+    Ok(())
+}
+
+/// Синхронная половина `create`: всё после того, как инсталлер отдал архив.
+/// Здесь tar/gzip, sha256 по двум файлам и запись в SQLite — секунды
+/// заблокированного потока, поэтому вызывается только из `spawn_blocking`.
+#[allow(clippy::too_many_arguments)]
+fn pack_bundle(
     vpn: &Vpn,
     store: &Store,
+    awg: BackupFile,
     kind: BackupKind,
     actor: Option<i64>,
     comment: Option<String>,
     include_db: bool,
     keep: u32,
-) -> Result<Created> {
-    // Проверка места: грубая оценка «нужно примерно вдвое больше веса
-    // последнего бэкапа» — неточная (новый может оказаться больше), но
-    // дешёвая и достаточная, чтобы не запускать заведомо провальную
-    // операцию. Нет ни одного бэкапа (need==0) — проверять нечего.
-    if let Some(free) =
-        free_bytes(&vpn.bot_backups_dir()).or_else(|| free_bytes(&vpn.backups_dir()))
-    {
-        let last = store
-            .list_backup_rows()
-            .first()
-            .map(|r| r.size)
-            .unwrap_or(0);
-        let need = last.saturating_mul(2);
-        if need > 0 && free < need {
-            return Err(Error::BackupNoSpace { need, free });
-        }
-    }
-
-    let started = std::time::Instant::now();
-    let awg = vpn.backup().await?;
+) -> Result<(BackupRow, usize)> {
     let ts = format::ts_from_awg_name(&awg.name)
         .ok_or_else(|| Error::Parse(format!("неожиданное имя архива {}", awg.name)))?
         .to_string();
-    let clients = format::validate_installer_archive(&awg.path).map_err(|e| match e {
-        format::FormatError::Io(io) => unreadable(io, &awg.path),
-        other => Error::BackupInvalid(other),
-    })?;
+    let clients =
+        format::validate_installer_archive(&awg.path).map_err(|e| format_err(e, &awg.path))?;
     let awg_sha = format::sha256_file(&awg.path).map_err(|e| unreadable(e, &awg.path))?;
 
     let tmp = tempfile::tempdir()?;
@@ -320,6 +368,14 @@ pub async fn create(
         );
     }
     let size = std::fs::metadata(&out)?.len();
+    if size > format::MAX_UPLOAD_BYTES {
+        tracing::warn!(
+            size,
+            limit = format::MAX_UPLOAD_BYTES,
+            file = %name,
+            "бандл больше лимита Telegram — скачать его через бота не выйдет"
+        );
+    }
     let sha = format::sha256_file(&out)?;
     let mut row = row_from_meta(&name, size, Some(sha), &meta);
     row.kind = kind;
@@ -329,6 +385,36 @@ pub async fn create(
     }
     let rotated = rotate(vpn, store, keep);
     let row = store.backup_row(&name).unwrap_or(row);
+    Ok((row, rotated))
+}
+
+/// Создаёт бэкап: спрашивает архив у инсталлера (async) и упаковывает бандл
+/// (sync, в `spawn_blocking` — как `collector` уводит запись статистики).
+pub async fn create(
+    vpn: &Arc<Vpn>,
+    store: &Arc<Store>,
+    kind: BackupKind,
+    actor: Option<i64>,
+    comment: Option<String>,
+    include_db: bool,
+    keep: u32,
+) -> Result<Created> {
+    {
+        // `df` — это запуск процесса, а чтение таблицы — SQLite: обе операции
+        // блокирующие, на реакторе им не место.
+        let (v, s) = (vpn.clone(), store.clone());
+        tokio::task::spawn_blocking(move || check_space(&v, &s))
+            .await
+            .map_err(blocking_err)??;
+    }
+    let started = std::time::Instant::now();
+    let awg = vpn.backup().await?;
+    let (v, s) = (vpn.clone(), store.clone());
+    let (row, rotated) = tokio::task::spawn_blocking(move || {
+        pack_bundle(&v, &s, awg, kind, actor, comment, include_db, keep)
+    })
+    .await
+    .map_err(blocking_err)??;
     Ok(Created {
         row,
         elapsed_ms: started.elapsed().as_millis() as u64,
@@ -353,7 +439,7 @@ pub fn verify(vpn: &Vpn, store: &Store, ts: &str) -> Result<bool> {
     let Some(Located::Bundle(row, path)) = find(vpn, store, &Key::Bundle(ts.into())) else {
         return Err(Error::BackupNotFound);
     };
-    let actual = format::sha256_file(&path)?;
+    let actual = format::sha256_file(&path).map_err(|e| unreadable(e, &path))?;
     match row.sha256 {
         Some(stored) => Ok(stored == actual),
         None => {
@@ -373,15 +459,17 @@ pub fn extract_inner(vpn: &Vpn, ts: &str) -> Result<(tempfile::TempDir, PathBuf)
     if !path.exists() {
         return Err(Error::BackupNotFound);
     }
-    let insp = format::inspect_bundle(&path, Store::current_schema())?;
+    let insp =
+        format::inspect_bundle(&path, Store::current_schema()).map_err(|e| format_err(e, &path))?;
     let tmp = tempfile::tempdir()?;
     let inner = tmp.path().join(&insp.inner_name);
     format::extract_entry(
         &path,
         &format!("{}/{}", format::AWG_DIR, insp.inner_name),
         &inner,
-    )?;
-    let actual = format::sha256_file(&inner)?;
+    )
+    .map_err(|e| format_err(e, &path))?;
+    let actual = format::sha256_file(&inner).map_err(|e| unreadable(e, &inner))?;
     if actual != insp.meta.awg_sha256 {
         return Err(Error::BackupInvalid(format::FormatError::BadEntry(
             "awg_sha256 не совпадает".into(),
@@ -390,30 +478,77 @@ pub fn extract_inner(vpn: &Vpn, ts: &str) -> Result<(tempfile::TempDir, PathBuf)
     Ok((tmp, inner))
 }
 
-pub async fn restore(vpn: &Vpn, store: &Store, key: &Key, with_db: bool) -> Result<RestoreOutcome> {
-    match find(vpn, store, key).ok_or(Error::BackupNotFound)? {
+/// Достаёт снимок БД из бандла и накатывает его. Ошибку возвращает текстом,
+/// а не `Error`: вызывается уже ПОСЛЕ восстановления AWG, и наверх она едет
+/// как поле `RestoreOutcome::db_error`, а не как провал всей операции.
+fn restore_db(store: &Store, bundle: &Path, tmp_dir: &Path) -> std::result::Result<(), String> {
+    let db = tmp_dir.join(DB_NAME);
+    format::extract_entry(bundle, DB_NAME, &db).map_err(|e| e.to_string())?;
+    store.restore_from(&db).map_err(|e| e.to_string())
+}
+
+pub async fn restore(
+    vpn: &Arc<Vpn>,
+    store: &Arc<Store>,
+    key: &Key,
+    with_db: bool,
+) -> Result<RestoreOutcome> {
+    let located = {
+        let (v, s, k) = (vpn.clone(), store.clone(), key.clone());
+        tokio::task::spawn_blocking(move || find(&v, &s, &k))
+            .await
+            .map_err(blocking_err)?
+    };
+    match located.ok_or(Error::BackupNotFound)? {
         Located::Installer(bf) => {
-            format::validate_installer_archive(&bf.path)?;
+            {
+                let p = bf.path.clone();
+                tokio::task::spawn_blocking(move || {
+                    format::validate_installer_archive(&p).map_err(|e| format_err(e, &p))
+                })
+                .await
+                .map_err(blocking_err)??;
+            }
             vpn.restore_path(&bf.path).await?;
             Ok(RestoreOutcome {
                 awg: true,
                 db: false,
+                db_error: None,
             })
         }
         Located::Bundle(row, path) => {
-            let (tmp, inner) = extract_inner(vpn, key.ts())?;
+            let (tmp, inner) = {
+                let (v, ts) = (vpn.clone(), key.ts().to_string());
+                tokio::task::spawn_blocking(move || extract_inner(&v, &ts))
+                    .await
+                    .map_err(blocking_err)??
+            };
             vpn.restore_path(&inner).await?;
             let mut out = RestoreOutcome {
                 awg: true,
                 db: false,
+                db_error: None,
             };
             if with_db && row.has_db {
-                let db = tmp.path().join(DB_NAME);
-                format::extract_entry(&path, DB_NAME, &db)?;
-                store
-                    .restore_from(&db)
-                    .map_err(|e| Error::Parse(format!("restore БД: {e}")))?;
-                out.db = true;
+                let s = store.clone();
+                // `tmp` переезжает в задачу: временный каталог должен жить,
+                // пока в него распаковывают снимок БД.
+                let res = tokio::task::spawn_blocking(move || restore_db(&s, &path, tmp.path()))
+                    .await
+                    .map_err(blocking_err)?;
+                match res {
+                    Ok(()) => out.db = true,
+                    // AWG уже восстановлен — откатывать нечего и незачем.
+                    // Сообщаем ровно то, что произошло, отдельной строкой.
+                    Err(e) => {
+                        tracing::error!(
+                            error = %e,
+                            backup = %row.name,
+                            "БД бота не восстановлена, AmneziaWG уже восстановлен"
+                        );
+                        out.db_error = Some(e);
+                    }
+                }
             }
             Ok(out)
         }
@@ -434,7 +569,11 @@ fn place_bundle(dir: &Path, ts: &str, src: &Path) -> Result<String> {
     }
     let dest = dir.join(&name);
     let tmp = dir.join(format!(".{name}.part"));
+    // `fs::copy` переносит режим исходника — а он пришёл из временной папки
+    // после скачивания из Telegram. Бандл содержит ключи сервера, поэтому
+    // режим выставляем свой ещё до появления файла под целевым именем.
     std::fs::copy(src, &tmp)?;
+    std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
     std::fs::rename(&tmp, &dest)?;
     Ok(name)
 }
@@ -454,8 +593,16 @@ pub fn accept_upload(
     match kind {
         FileKind::Bundle => {
             let insp = format::inspect_bundle(tmp_file, Store::current_schema())?;
-            let ts = format::ts_from_awg_name(&insp.inner_name).unwrap_or("upload");
-            let name = place_bundle(&dir, ts, tmp_file)?;
+            // Имя внутреннего архива — из чужого файла: там может быть что
+            // угодно по длине и составу. Ровно как в ветке архива инсталлера,
+            // берём ts только если он пройдёт `Key::parse` (иначе
+            // `bk:card:<ts>` не влезет в 64 байта callback'а Telegram и
+            // карточка окажется недостижимой).
+            let ts = format::ts_from_awg_name(&insp.inner_name)
+                .filter(|t| ts_ok(t))
+                .map(str::to_string)
+                .unwrap_or_else(generated_ts);
+            let name = place_bundle(&dir, &ts, tmp_file)?;
             finish_upload(store, &dir.join(&name), &name, kind, actor)
         }
         FileKind::InstallerArchive => {
@@ -471,11 +618,7 @@ pub fn accept_upload(
             let ts = format::ts_from_awg_name(&fname)
                 .filter(|t| ts_ok(t))
                 .map(str::to_string)
-                .unwrap_or_else(|| {
-                    chrono::Local::now()
-                        .format("%Y-%m-%d_%H-%M-%S.000")
-                        .to_string()
-                });
+                .unwrap_or_else(generated_ts);
             let awg_name = format!("awg_backup_{ts}.tar.gz");
             // Собираем бандл во временном каталоге — он должен жить, пока
             // place_bundle не скопирует готовый файл в bot_backups_dir.
@@ -539,7 +682,7 @@ mod tests {
     /// restore_called. Метка времени — своя дробная часть (RANDOM % 1000),
     /// а не `%3N` (macOS `date` его не понимает): важна только уникальность
     /// имени файла между быстрыми последовательными вызовами.
-    fn stub(dir: &Path) -> (tempfile::TempDir, Vpn, Store) {
+    fn stub(dir: &Path) -> (tempfile::TempDir, Arc<Vpn>, Arc<Store>) {
         let awg = dir.join("fixture_awg.tar.gz");
         crate::backup::format::tests_support::installer_archive_to(&awg);
         let script = dir.join("fake.sh");
@@ -568,7 +711,7 @@ exit 1
         std::fs::set_permissions(&script, p).unwrap();
         let keep = tempfile::tempdir().unwrap();
         let vpn = Vpn::test_with_script(script, dir.to_path_buf());
-        (keep, vpn, Store::open_in_memory())
+        (keep, Arc::new(vpn), Arc::new(Store::open_in_memory()))
     }
 
     #[test]
@@ -866,6 +1009,154 @@ exit 1
             accept_upload(&vpn, &store, &copy, None),
             Err(crate::error::Error::BackupInvalid(_))
         ));
+    }
+
+    /// Meta для бандлов, которые тест собирает руками.
+    fn handmade_meta(awg: &Path, has_db: bool) -> Meta {
+        Meta {
+            format: format::FORMAT_VERSION,
+            awgram_version: "0.0.0-test".into(),
+            created_at: now_epoch(),
+            kind: "manual".into(),
+            actor: None,
+            comment: None,
+            has_db,
+            awg_archive: awg.file_name().unwrap().to_string_lossy().into_owned(),
+            awg_sha256: format::sha256_file(awg).unwrap(),
+            clients: 2,
+            groups: None,
+        }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn accept_upload_replaces_unusable_ts_from_bundle_inner_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_k, vpn, store) = stub(dir.path());
+        // Бандл собран не нами: внутренний архив назван так, что ts из его
+        // имени не годится для callback — `bk:card:<70 символов>` уходит за
+        // 64-байтный лимит Telegram, и карточка со списком стали бы мёртвыми.
+        let stage = tempfile::tempdir().unwrap();
+        let long = "a".repeat(70);
+        let awg = stage.path().join(format!("awg_backup_{long}.tar.gz"));
+        crate::backup::format::tests_support::installer_archive_to(&awg);
+        let bundle = stage.path().join("weird_bundle.tar.gz");
+        format::build_bundle(&bundle, &awg, None, &handmade_meta(&awg, false)).unwrap();
+
+        let row = accept_upload(&vpn, &store, &bundle, Some(7)).unwrap();
+        let ts = format::ts_from_bundle_name(&row.name).unwrap();
+        assert!(Key::parse(ts).is_some(), "ts {ts} не разбирается обратно");
+        assert!(
+            format!("bk:card:{}", Key::Bundle(ts.into()).encode()).len() <= 64,
+            "callback не влезает в лимит: {ts}"
+        );
+        assert!(
+            !row.name.contains(&long),
+            "длинный ts утёк в имя {}",
+            row.name
+        );
+        // и по этому ключу бэкап находится
+        assert!(find(&vpn, &store, &Key::Bundle(ts.into())).is_some());
+        // принятый файл лежит с правами 0600: внутри ключи сервера
+        let mode = std::fs::metadata(bundle_path(&vpn, ts))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600, "принятый бандл должен быть 0600");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn reconcile_skips_file_with_unusable_ts() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_k, vpn, store) = stub(dir.path());
+        let stage = tempfile::tempdir().unwrap();
+        let awg = stage
+            .path()
+            .join("awg_backup_2026-01-01_00-00-00.000.tar.gz");
+        crate::backup::format::tests_support::installer_archive_to(&awg);
+        // Файл подброшен в каталог руками, ts в имени — 70 символов.
+        let bot_dir = vpn.bot_backups_dir();
+        std::fs::create_dir_all(&bot_dir).unwrap();
+        let bad = bot_dir.join(format::bundle_name(&"b".repeat(70)));
+        format::build_bundle(&bad, &awg, None, &handmade_meta(&awg, false)).unwrap();
+        assert!(reconcile(&vpn, &store).is_empty());
+        assert!(
+            bad.exists(),
+            "чужой файл не трогаем, только не подхватываем"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn restore_reports_db_failure_instead_of_failing_whole_restore() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_k, vpn, store) = stub(dir.path());
+        let awg = dir.path().join("awg_no_db.tar.gz");
+        crate::backup::format::tests_support::installer_archive_to(&awg);
+        // meta обещает БД, а записи awgram.db в бандле нет: извлечение
+        // сорвётся уже ПОСЛЕ восстановления AWG.
+        let ts = "2026-03-04_05-06-07.000";
+        std::fs::create_dir_all(vpn.bot_backups_dir()).unwrap();
+        format::build_bundle(
+            &bundle_path(&vpn, ts),
+            &awg,
+            None,
+            &handmade_meta(&awg, true),
+        )
+        .unwrap();
+        store.set_psk_default(true);
+
+        let out = restore(&vpn, &store, &Key::Bundle(ts.into()), true)
+            .await
+            .unwrap();
+        assert!(out.awg, "AWG должен быть восстановлен");
+        assert!(!out.db);
+        assert!(
+            out.db_error.is_some(),
+            "провал БД должен быть виден вызывающему"
+        );
+        // живая БД не тронута
+        assert!(store.psk_default());
+        // и инсталлер действительно звали
+        assert!(dir.path().join("restore_called").exists());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn restore_reports_db_failure_when_snapshot_breaks_migration() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_k, vpn, store) = stub(dir.path());
+        let awg = dir.path().join("awg_bad_db.tar.gz");
+        crate::backup::format::tests_support::installer_archive_to(&awg);
+        // Снимок проходит проверки формата (integrity_check ok, схема не
+        // новее текущей), но `Store::restore_from` на нём падает: батч v1
+        // создаёт `settings` без IF NOT EXISTS, а таблица уже есть.
+        let db = dir.path().join("broken_snapshot.db");
+        {
+            let c = rusqlite::Connection::open(&db).unwrap();
+            c.execute_batch(
+                "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 INSERT INTO meta VALUES('schema_version','0');
+                 CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+            )
+            .unwrap();
+        }
+        let ts = "2026-03-04_05-06-08.000";
+        std::fs::create_dir_all(vpn.bot_backups_dir()).unwrap();
+        format::build_bundle(
+            &bundle_path(&vpn, ts),
+            &awg,
+            Some(&db),
+            &handmade_meta(&awg, true),
+        )
+        .unwrap();
+
+        let out = restore(&vpn, &store, &Key::Bundle(ts.into()), true)
+            .await
+            .unwrap();
+        assert!(out.awg && !out.db);
+        assert!(out.db_error.is_some());
     }
 
     #[test]

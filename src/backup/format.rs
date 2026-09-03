@@ -4,13 +4,25 @@
 //! каталоги, относительные пути, без `..`), чтобы отказать раньше и понятнее.
 
 use std::io::{Read, Write};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub const FORMAT_VERSION: u32 = 1;
-pub const MAX_FILE_BYTES: u64 = 20 * 1024 * 1024;
+/// Лимит переноса файла через Telegram (Bot API не отдаёт и не принимает
+/// больше). Касается только загрузки/скачивания, а не чтения с диска.
+pub const MAX_UPLOAD_BYTES: u64 = 20 * 1024 * 1024;
+/// Лимит на локальный архив при разборе: сам файл, отдельная запись и сумма
+/// заявленных размеров записей. Бэкап сервера с сотнями клиентов легко
+/// перерастает лимит Telegram, но читать и восстанавливать его бот обязан —
+/// поэтому потолок здесь свой, на порядок больше.
+pub const MAX_ARCHIVE_BYTES: u64 = 512 * 1024 * 1024;
+/// Потолок числа записей в архиве. Гигабайты нулевых заголовков сжимаются в
+/// десятки килобайт, поэтому лимит по весу от такой «бомбы» не спасает: без
+/// счётчика разбор миллиона записей занял бы минуты процессорного времени.
+pub const MAX_ENTRIES: usize = 10_000;
 pub const META_NAME: &str = "meta.json";
 pub const DB_NAME: &str = "awgram.db";
 pub const AWG_DIR: &str = "awg";
@@ -36,7 +48,7 @@ pub enum FormatError {
     Io(#[from] std::io::Error),
     #[error("meta.json: {0}")]
     Json(#[from] serde_json::Error),
-    #[error("файл больше лимита: {0} байт")]
+    #[error("файл больше допустимого размера: {0} байт")]
     TooLarge(u64),
     #[error("недопустимая запись архива: {0}")]
     BadEntry(String),
@@ -87,11 +99,15 @@ pub fn sha256_file(path: &Path) -> std::io::Result<String> {
     Ok(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
+/// `max_bytes` вынесен в параметр только ради тестов: продакшен всегда зовёт
+/// с `MAX_ARCHIVE_BYTES`, а тесту нужен крошечный лимит, чтобы не гонять
+/// через gzip сотни мегабайт нулей.
 fn open_targz(
     path: &Path,
+    max_bytes: u64,
 ) -> Result<tar::Archive<flate2::read::GzDecoder<std::fs::File>>, FormatError> {
     let len = std::fs::metadata(path)?.len();
-    if len > MAX_FILE_BYTES {
+    if len > max_bytes {
         return Err(FormatError::TooLarge(len));
     }
     let f = std::fs::File::open(path)?;
@@ -101,23 +117,24 @@ fn open_targz(
 /// Имя записи без ведущего `./`. Отклоняет ссылки, устройства, абсолютные
 /// пути и `..` — ровно то, что режет `restore` инсталлера. Также проверяет
 /// заявленный в заголовке размер записи: поодиночке и нарастающим итогом по
-/// архиву (`total_bytes`) он не должен превышать `MAX_FILE_BYTES` — иначе
+/// архиву (`total_bytes`) он не должен превышать `max_bytes` — иначе
 /// компактный по весу (сжатому) архив может заявить гигабайты содержимого
 /// и уронить бота по памяти при чтении записи в `Vec`.
 fn checked_entry_name<R: Read>(
     e: &tar::Entry<'_, R>,
     total_bytes: &mut u64,
+    max_bytes: u64,
 ) -> Result<String, FormatError> {
     let et = e.header().entry_type();
     if !(et.is_file() || et.is_dir()) {
         return Err(FormatError::BadEntry(format!("{et:?}")));
     }
     let size = e.size();
-    if size > MAX_FILE_BYTES {
+    if size > max_bytes {
         return Err(FormatError::TooLarge(size));
     }
-    *total_bytes += size;
-    if *total_bytes > MAX_FILE_BYTES {
+    *total_bytes = total_bytes.saturating_add(size);
+    if *total_bytes > max_bytes {
         return Err(FormatError::TooLarge(*total_bytes));
     }
     let p = e.path().map_err(|e| FormatError::BadEntry(e.to_string()))?;
@@ -137,15 +154,22 @@ fn checked_entry_name<R: Read>(
 /// Список записей архива после проверки каждой. gzip-мусор даёт `Io`.
 /// Отклоняет повторяющиеся имена записей: GNU tar при распаковке берёт
 /// последнюю запись с таким именем, а наше чтение — первую, так что дубликат
-/// не должен молча пройти.
-fn list_entries(path: &Path) -> Result<Vec<String>, FormatError> {
-    let mut ar = open_targz(path)?;
+/// не должен молча пройти. Дубликаты ищем через `HashSet`, а не линейным
+/// поиском: на архиве инсталлера с тысячами клиентов квадрат заметен.
+fn list_entries(path: &Path, max_bytes: u64) -> Result<Vec<String>, FormatError> {
+    let mut ar = open_targz(path, max_bytes)?;
     let mut names = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut total_bytes: u64 = 0;
     for e in ar.entries()? {
         let e = e?;
-        let name = checked_entry_name(&e, &mut total_bytes)?;
-        if names.contains(&name) {
+        if names.len() >= MAX_ENTRIES {
+            return Err(FormatError::BadEntry(
+                "слишком много записей в архиве".into(),
+            ));
+        }
+        let name = checked_entry_name(&e, &mut total_bytes, max_bytes)?;
+        if !seen.insert(name.clone()) {
             return Err(FormatError::BadEntry(format!("дубликат записи {name}")));
         }
         names.push(name);
@@ -161,7 +185,7 @@ fn count_clients(names: &[String]) -> u32 {
 }
 
 pub fn validate_installer_archive(path: &Path) -> Result<u32, FormatError> {
-    let names = list_entries(path)?;
+    let names = list_entries(path, MAX_ARCHIVE_BYTES)?;
     let has_server = names
         .iter()
         .any(|n| n.starts_with("server/") && n.ends_with(".conf"));
@@ -172,7 +196,7 @@ pub fn validate_installer_archive(path: &Path) -> Result<u32, FormatError> {
 }
 
 pub fn detect(path: &Path) -> Result<FileKind, FormatError> {
-    let names = list_entries(path)?;
+    let names = list_entries(path, MAX_ARCHIVE_BYTES)?;
     if names.iter().any(|n| n == META_NAME) {
         return Ok(FileKind::Bundle);
     }
@@ -187,13 +211,20 @@ pub fn detect(path: &Path) -> Result<FileKind, FormatError> {
     ))
 }
 
-/// Читает одну запись бандла в память (meta.json, ≤ MAX_FILE_BYTES по построению).
+/// Читает одну запись бандла в память (meta.json, ≤ MAX_ARCHIVE_BYTES по
+/// построению). Счётчик записей — тот же, что в `list_entries`: `read_entry`
+/// вызывается и напрямую (`extract_entry`), без предварительного обхода.
 fn read_entry(path: &Path, name: &str) -> Result<Vec<u8>, FormatError> {
-    let mut ar = open_targz(path)?;
+    let mut ar = open_targz(path, MAX_ARCHIVE_BYTES)?;
     let mut total_bytes: u64 = 0;
-    for e in ar.entries()? {
+    for (seen, e) in ar.entries()?.enumerate() {
         let mut e = e?;
-        if checked_entry_name(&e, &mut total_bytes)? == name {
+        if seen >= MAX_ENTRIES {
+            return Err(FormatError::BadEntry(
+                "слишком много записей в архиве".into(),
+            ));
+        }
+        if checked_entry_name(&e, &mut total_bytes, MAX_ARCHIVE_BYTES)? == name {
             let mut buf = Vec::new();
             e.read_to_end(&mut buf)?;
             return Ok(buf);
@@ -238,7 +269,7 @@ fn check_db_snapshot(db: &Path, current_schema: i64) -> Result<(), FormatError> 
 }
 
 pub fn inspect_bundle(path: &Path, current_schema: i64) -> Result<Inspection, FormatError> {
-    let names = list_entries(path)?;
+    let names = list_entries(path, MAX_ARCHIVE_BYTES)?;
     if !names.iter().any(|n| n == META_NAME) {
         return Err(FormatError::NotBundle("нет meta.json".into()));
     }
@@ -283,7 +314,18 @@ pub fn build_bundle(
     db_snapshot: Option<&Path>,
     meta: &Meta,
 ) -> Result<(), FormatError> {
-    let f = std::fs::File::create(out)?;
+    // Бандл содержит приватные ключи сервера и клиентов и снимок БД бота —
+    // создаём его сразу с правами 0600, а не после записи: иначе между
+    // create и chmod есть окно, в котором файл читает кто угодно.
+    let f = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(out)?;
+    // `mode` действует только при создании файла; если он уже был (недописанный
+    // `.part` с прошлого раза), режим у него мог остаться чужим — правим по fd.
+    f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
     let enc = flate2::write::GzEncoder::new(f, flate2::Compression::default());
     let mut ar = tar::Builder::new(enc);
     let mj = serde_json::to_vec_pretty(meta)?;
@@ -455,19 +497,65 @@ mod tests {
 
     #[test]
     fn validate_rejects_too_large_and_not_gzip() {
+        // Продакшен-лимит на файл — 512 МиБ; гонять столько байт через gzip в
+        // тесте незачем, поэтому размер проверяем на `list_entries` с
+        // крошечным лимитом, а публичную функцию — на «это не gzip».
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("big.tar.gz");
         let f = std::fs::File::create(&p).unwrap();
-        f.set_len(MAX_FILE_BYTES + 1).unwrap();
+        f.set_len(1025).unwrap();
         assert!(matches!(
-            validate_installer_archive(&p),
-            Err(FormatError::TooLarge(_))
+            list_entries(&p, 1024),
+            Err(FormatError::TooLarge(1025))
         ));
         std::fs::write(&p, b"not a gzip").unwrap();
         assert!(matches!(
             validate_installer_archive(&p),
             Err(FormatError::Io(_))
         ));
+        // лимит переноса через Telegram строго меньше лимита разбора: бандл,
+        // который не пролезет в чат, всё равно должен читаться и
+        // восстанавливаться
+        const { assert!(MAX_UPLOAD_BYTES < MAX_ARCHIVE_BYTES) };
+    }
+
+    #[test]
+    fn list_entries_rejects_too_many_entries() {
+        // gzip сжимает нулевые заголовки почти в ничто: без счётчика записей
+        // такой архив прошёл бы все проверки по весу.
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("many.tar.gz");
+        let f = std::fs::File::create(&p).unwrap();
+        let enc = flate2::write::GzEncoder::new(f, flate2::Compression::default());
+        let mut ar = tar::Builder::new(enc);
+        for i in 0..=MAX_ENTRIES {
+            let mut h = tar::Header::new_gnu();
+            h.set_size(0);
+            h.set_mode(0o600);
+            h.set_cksum();
+            ar.append_data(&mut h, format!("f{i}"), std::io::empty())
+                .unwrap();
+        }
+        ar.into_inner().unwrap().finish().unwrap();
+        assert!(matches!(
+            list_entries(&p, MAX_ARCHIVE_BYTES),
+            Err(FormatError::BadEntry(m)) if m.contains("слишком много")
+        ));
+    }
+
+    #[test]
+    fn bundle_file_is_created_with_mode_600() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let awg = installer_archive(d.path());
+        let out = d.path().join("perm.tar.gz");
+        // заранее создаём файл с широкими правами — build_bundle должен
+        // перезаписать его, а не унаследовать чужой режим
+        std::fs::write(&out, b"").unwrap();
+        std::fs::set_permissions(&out, std::fs::Permissions::from_mode(0o644)).unwrap();
+        build_bundle(&out, &awg, None, &meta(false)).unwrap();
+        let mode = std::fs::metadata(&out).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "бандл должен быть 0600, а не {mode:o}");
     }
 
     #[test]
@@ -589,28 +677,41 @@ mod tests {
         // Заголовок заявляет размер записи больше лимита, но сама запись —
         // поток нулей, который gzip сжимает до пары килобайт: сжатый файл
         // проходит проверку размера в `open_targz`, а вот заявленный размер
-        // записи — нет.
+        // записи — нет. Лимит берём тестовый (2 КиБ), чтобы не писать через
+        // gzip полгигабайта нулей.
+        const LIMIT: u64 = 2048;
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("bomb.tar.gz");
         let f = std::fs::File::create(&p).unwrap();
         let enc = flate2::write::GzEncoder::new(f, flate2::Compression::default());
         let mut ar = tar::Builder::new(enc);
         let mut h = tar::Header::new_gnu();
-        h.set_size(MAX_FILE_BYTES + 1);
+        h.set_size(LIMIT + 1);
         h.set_mode(0o600);
         h.set_cksum();
         ar.append_data(
             &mut h,
             "server/awg0.conf",
-            std::io::repeat(0).take(MAX_FILE_BYTES + 1),
+            std::io::repeat(0).take(LIMIT + 1),
         )
         .unwrap();
         ar.into_inner().unwrap().finish().unwrap();
 
         assert!(matches!(
-            validate_installer_archive(&p),
+            list_entries(&p, LIMIT),
             Err(FormatError::TooLarge(_))
         ));
+        // нарастающий итог: две записи по 3/4 лимита поодиночке проходят, а
+        // вместе — нет
+        let p2 = d.path().join("sum.tar.gz");
+        let body = vec![0u8; (LIMIT as usize / 4) * 3];
+        make_targz(&p2, &[("server/a.conf", &body), ("server/b.conf", &body)]);
+        assert!(matches!(
+            list_entries(&p2, LIMIT),
+            Err(FormatError::TooLarge(_))
+        ));
+        // а с продакшен-лимитом тот же архив читается
+        assert_eq!(list_entries(&p2, MAX_ARCHIVE_BYTES).unwrap().len(), 2);
     }
 
     #[test]

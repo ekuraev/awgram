@@ -33,8 +33,19 @@ pub async fn owners(
     }
 }
 
-pub async fn on_tick(bot: &Bot, cfg: &Config, store: &Store, vpn: &Vpn, ev: TickEvent) {
-    let free = service::free_bytes(&vpn.bot_backups_dir()).map(human_bytes);
+pub async fn on_tick(
+    bot: &Bot,
+    cfg: &Config,
+    store: &std::sync::Arc<Store>,
+    vpn: &std::sync::Arc<Vpn>,
+    ev: TickEvent,
+) {
+    // `df` (запуск процесса) и `reconcile` (tar/gzip + SQLite) блокируют
+    // поток — уводим их с реактора, как в collector.
+    let dir = vpn.bot_backups_dir();
+    let free = tokio::task::spawn_blocking(move || service::free_bytes(&dir).map(human_bytes))
+        .await
+        .unwrap_or_default();
     match ev {
         TickEvent::Ok {
             created,
@@ -52,7 +63,10 @@ pub async fn on_tick(bot: &Bot, cfg: &Config, store: &Store, vpn: &Vpn, ev: Tick
                 .await;
             }
             if notify_ok {
-                let rows = service::reconcile(vpn, store);
+                let (v, s) = (vpn.clone(), store.clone());
+                let rows = tokio::task::spawn_blocking(move || service::reconcile(&v, &s))
+                    .await
+                    .unwrap_or_default();
                 let kept = rows.len();
                 let pinned = rows.iter().filter(|r| r.pinned).count();
                 let keep = store.backup_schedule().keep;

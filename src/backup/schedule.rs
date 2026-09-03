@@ -1,7 +1,8 @@
 //! Расписание автобэкапа: чистые функции над локальным NaiveDateTime (без
 //! TZ — так тесты не зависят от TZ машины) и фоновый таск по образцу
 //! collector::run. Пока серия сбоев открыта, слоты расписания не важны:
-//! повтор каждые RETRY_SECS, уведомление не чаще RENOTIFY_SECS.
+//! повтор с нарастающим интервалом (`retry_interval`), уведомление не чаще
+//! RENOTIFY_SECS.
 
 use std::sync::Arc;
 
@@ -14,8 +15,20 @@ use crate::store::{BackupFailure, BackupKind, BackupSchedule, Period, Store};
 use crate::vpn::Vpn;
 
 pub const RETRY_SECS: i64 = 3600;
+pub const MAX_RETRY_SECS: i64 = 86_400;
 pub const RENOTIFY_SECS: i64 = 21_600;
 const TICK_SECS: u64 = 60;
+
+/// Пауза до следующей попытки после `attempts` неудач: `RETRY_SECS × 2^(n−1)`,
+/// но не больше суток. Часть сбоев неустранима без вмешательства человека
+/// (архивы инсталлера в hardened-режиме — root:600), и ежечасный повтор в
+/// таком случае вечно молотит диск, создавая каждый раз новый архив
+/// инсталлера. Нарастающий интервал оставляет шанс на самовосстановление
+/// (место на диске освободилось), но перестаёт быть фоновой нагрузкой.
+pub fn retry_interval(attempts: u32) -> i64 {
+    let shift = attempts.saturating_sub(1).min(31);
+    RETRY_SECS.saturating_mul(1i64 << shift).min(MAX_RETRY_SECS)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Decision {
@@ -99,7 +112,7 @@ pub fn decide(
         return Decision::Idle;
     }
     if let Some(f) = failure {
-        return if now_epoch - f.last_attempt >= RETRY_SECS {
+        return if now_epoch - f.last_attempt >= retry_interval(f.attempts) {
             Decision::Run
         } else {
             Decision::Idle
@@ -163,7 +176,7 @@ pub fn local_to_epoch(t: NaiveDateTime) -> i64 {
 
 /// Один тик: решение, запуск, учёт результата. Возвращает событие для
 /// рассылки (подключается в notify), чтобы сам тик оставался тестируемым.
-pub async fn tick(vpn: &Vpn, store: &Store) -> Option<TickEvent> {
+pub async fn tick(vpn: &Arc<Vpn>, store: &Arc<Store>) -> Option<TickEvent> {
     let s = store.backup_schedule();
     let (now, local) = local_now();
     let failure = store.backup_failure();
@@ -355,13 +368,27 @@ mod tests {
     }
 
     #[test]
-    fn decide_retries_hourly_while_failing() {
+    fn retry_interval_doubles_and_caps_at_a_day() {
+        assert_eq!(retry_interval(1), 3600);
+        assert_eq!(retry_interval(2), 7200);
+        assert_eq!(retry_interval(5), 57_600);
+        assert_eq!(retry_interval(6), 86_400);
+        assert_eq!(retry_interval(10), 86_400);
+        // без переполнения на любой глубине серии
+        assert_eq!(retry_interval(u32::MAX), MAX_RETRY_SECS);
+        // attempts=0 в БД не появляется, но и он не должен ломать арифметику
+        assert_eq!(retry_interval(0), RETRY_SECS);
+    }
+
+    #[test]
+    fn decide_retries_with_backoff_while_failing() {
         let s = sched(Period::Daily);
         let now = dt(2026, 9, 3, 12, 0);
+        // две неудачи подряд → следующая попытка не раньше чем через 2 часа
         let f = BackupFailure {
             since: epoch(now) - 7200,
             attempts: 2,
-            last_attempt: epoch(now) - 3599,
+            last_attempt: epoch(now) - 7199,
             last_notified: 0,
         };
         assert_eq!(
@@ -375,8 +402,24 @@ mod tests {
             ),
             Decision::Idle
         );
-        let f2 = BackupFailure {
+        // час после второй неудачи — ещё рано (при прежнем поведении был бы Run)
+        let hour_ago = BackupFailure {
             last_attempt: epoch(now) - 3600,
+            ..f.clone()
+        };
+        assert_eq!(
+            decide(
+                &s,
+                Some(epoch(now) - 86_400 * 2),
+                Some(&hour_ago),
+                epoch(now),
+                now,
+                epoch
+            ),
+            Decision::Idle
+        );
+        let f2 = BackupFailure {
+            last_attempt: epoch(now) - 7200,
             ..f.clone()
         };
         assert_eq!(

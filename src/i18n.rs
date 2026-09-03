@@ -975,6 +975,15 @@ pub fn comment_saved(lang: Lang) -> String {
     }
     .to_string()
 }
+/// Отказ удалить закреплённый бэкап: закрепление и есть защита от удаления,
+/// так что подсказываем снять его, а не повторяем статус «закреплён».
+pub fn unpin_first(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => "📌 Бэкап закреплён: сначала снимите закрепление.",
+        Lang::En => "📌 This backup is pinned: unpin it first.",
+    }
+    .to_string()
+}
 pub fn pinned_toggled(lang: Lang, on: bool) -> String {
     match (lang, on) {
         (Lang::Ru, true) => "📌 Закреплён: не участвует в ротации.",
@@ -1005,6 +1014,20 @@ pub fn restore_done_detail(lang: Lang, awg: bool, db: bool) -> String {
         Lang::Ru => format!("✅ Восстановлено: {joined}."),
         Lang::En => format!("✅ Restored: {joined}."),
     }
+}
+/// Приписка к результату восстановления, когда AWG вернулся, а БД бота — нет.
+/// Повторять восстановление целиком не нужно и вредно, поэтому говорим прямо,
+/// что именно не получилось и в каком состоянии всё осталось.
+pub fn restore_db_failed(lang: Lang) -> String {
+    match lang {
+        Lang::Ru => {
+            "⚠️ БД бота восстановить не удалось: она осталась прежней. AmneziaWG восстановлен."
+        }
+        Lang::En => {
+            "⚠️ The bot DB could not be restored and is unchanged. AmneziaWG has been restored."
+        }
+    }
+    .to_string()
 }
 pub fn ask_backup_upload(lang: Lang) -> String {
     match lang {
@@ -1269,8 +1292,17 @@ pub fn btn_sched_db(lang: Lang, on: bool) -> String {
 pub fn format_error(lang: Lang, e: &crate::backup::format::FormatError) -> String {
     use crate::backup::format::FormatError;
     match (lang, e) {
-        (Lang::Ru, FormatError::TooLarge(_)) => "файл больше 20 МБ".to_string(),
-        (Lang::En, FormatError::TooLarge(_)) => "file is larger than 20 MB".to_string(),
+        // Лимит зависит от того, где сработала проверка: перенос через
+        // Telegram — 20 МБ, разбор локального архива — 512 МиБ. Поэтому
+        // называем не потолок, а размер самого файла.
+        (Lang::Ru, FormatError::TooLarge(n)) => {
+            let h = crate::vpn::model::human_bytes(*n);
+            format!("файл больше допустимого размера ({h})")
+        }
+        (Lang::En, FormatError::TooLarge(n)) => {
+            let h = crate::vpn::model::human_bytes(*n);
+            format!("file is larger than the allowed size ({h})")
+        }
         (Lang::Ru, FormatError::BadEntry(_)) => {
             "в архиве недопустимые записи (ссылки, абсолютные пути или ..)".to_string()
         }
@@ -1354,10 +1386,10 @@ pub fn backup_auto_failed(
     };
     match lang {
         Lang::Ru => format!(
-            "⚠️ <b>Сбой автобэкапа</b>\n{err_text}\n\nПопытка №{attempt}, сбои с {since_fmt}.{free}\nПовтор через час; напоминание раз в 6 часов, пока бэкап не пройдёт."
+            "⚠️ <b>Сбой автобэкапа</b>\n{err_text}\n\nПопытка №{attempt}, сбои с {since_fmt}.{free}\nПовторные попытки с нарастающим интервалом (до суток); напоминание не чаще раза в 6 часов, пока бэкап не пройдёт."
         ),
         Lang::En => format!(
-            "⚠️ <b>Scheduled backup failed</b>\n{err_text}\n\nAttempt #{attempt}, failing since {since_fmt}.{free}\nRetrying hourly; reminder every 6 hours until a backup succeeds."
+            "⚠️ <b>Scheduled backup failed</b>\n{err_text}\n\nAttempt #{attempt}, failing since {since_fmt}.{free}\nRetrying with increasing intervals (up to a day); reminder at most every 6 hours until a backup succeeds."
         ),
     }
 }
@@ -2437,9 +2469,11 @@ mod tests {
             assert!(!verify_result(l, true).is_empty() && !verify_result(l, false).is_empty());
             assert!(!comment_saved(l).is_empty());
             assert!(!pinned_toggled(l, true).is_empty());
+            assert!(!unpin_first(l).is_empty());
             assert!(!confirm_restore(l, "n", true).is_empty());
             assert!(!restore_done_detail(l, true, true).is_empty());
             assert!(!restore_done_detail(l, true, false).is_empty());
+            assert!(!restore_db_failed(l).is_empty());
             assert!(!ask_backup_upload(l).is_empty());
             assert!(!upload_processing(l).is_empty());
             assert!(!upload_not_a_file(l).is_empty());
@@ -2472,6 +2506,12 @@ mod tests {
                 !format_error(l, &crate::backup::format::FormatError::NotInstallerArchive)
                     .is_empty()
             );
+            // размер называется по-человечески, а не в байтах
+            let too_large = format_error(
+                l,
+                &crate::backup::format::FormatError::TooLarge(30 * 1024 * 1024),
+            );
+            assert!(too_large.contains("30.0 MB"), "{too_large}");
             assert!(!error_text(l, &Error::BackupUnreadable("p".into())).is_empty());
         }
     }

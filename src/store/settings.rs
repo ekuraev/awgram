@@ -202,9 +202,14 @@ impl Store {
         match f {
             Some(f) => self.set_json("backup_failure", f),
             None => {
-                let _ = self.with_conn(|c| {
-                    c.execute("DELETE FROM settings WHERE key='backup_failure'", [])
-                });
+                // Если ключ не удалился, бот продолжит считать серию сбоев
+                // открытой: ретраи по бэкоффу вместо расписания и повторные
+                // уведомления. Это надо видеть в логах, а не глотать.
+                if let Err(e) = self
+                    .with_conn(|c| c.execute("DELETE FROM settings WHERE key='backup_failure'", []))
+                {
+                    tracing::error!(error = %e, "не удалось закрыть серию сбоев автобэкапа");
+                }
             }
         }
     }
