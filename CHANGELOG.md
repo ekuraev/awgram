@@ -28,6 +28,19 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
   он отвергает, ничего не создавая, поэтому откат безопасен. У массовой
   генерации отката нет — там `modify` пришлось бы звать на каждого клиента,
   поэтому на старом инсталлере шага маршрутов просто нет.
+- **Умные бэкапы** (#35, #53): автобэкап по расписанию (ежедневно / еженедельно /
+  ежемесячно, время из пресетов), ротация «хранить N» с закреплением важных копий,
+  отчёты владельцам об успехе и сбое; при сбое бот повторяет попытку каждый час и
+  напоминает раз в 6 часов, пока бэкап не пройдёт. Список с датой, размером и
+  комментарием, карточка с проверкой целостности по SHA-256, удаление,
+  восстановление из карточки, загрузка бэкапа файлом через Telegram.
+- **Бандл с БД бота**: бот хранит бэкапы в `backups/awgram/` как
+  `awgram_backup_<ts>.tar.gz` — архив инсталлера байт в байт, `meta.json` и, если
+  включено в настройках, снимок БД бота (группы, инвайты, статистика). При
+  восстановлении можно выбрать «AWG и БД бота» или «только AWG». Чистые архивы
+  инсталлера принимаются и оборачиваются в бандл.
+- **Комментарии к бэкапам** (#53): опциональный вопрос при создании, правка и
+  очистка с карточки, показ в списке.
 
 #### 🔧 Изменено
 
@@ -56,6 +69,11 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
   шлёт `0.0.0.0/0, ::/0`, так что предупреждение не срабатывает. Конверты
   `--json` не изменились, новые сообщения уходят в stderr); минимальная —
   по-прежнему v5.21.0.
+- **Старые архивы в `backups/`** показываются как «снапшоты инсталлера»:
+  восстановить и удалить можно, комментария и пина у них нет.
+- **Hardened-режим**: `install.sh` выдаёт пользователю `awgram` права на
+  `backups/`; архивы самого инсталлера (`chmod 600`) для него нечитаемы,
+  см. README.
 
 ### 🇬🇧 English
 
@@ -81,6 +99,20 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
   creating anything, which makes the fallback safe. Bulk creation has no
   fallback, because `modify` would have to run once per client, so on an older
   installer the routes step is simply not offered.
+- **Smart backups** (#35, #53): scheduled auto-backup (daily / weekly /
+  monthly, time from presets), "keep N" rotation with pinning for important
+  copies, owner reports on success and failure; on failure the bot retries
+  every hour and reminds every 6 hours until a backup succeeds. A list with
+  date, size and comment, a card with SHA-256 integrity verification,
+  deletion, restore from the card, backup download as a file via Telegram.
+- **Bundle with the bot's database**: the bot stores backups in
+  `backups/awgram/` as `awgram_backup_<ts>.tar.gz` — the installer's archive
+  byte for byte, a `meta.json`, and, if enabled in settings, a snapshot of the
+  bot's own database (groups, invites, stats). Restore offers a choice of
+  "AWG and the bot's DB" or "AWG only". Plain installer archives are accepted
+  and wrapped into a bundle.
+- **Comments on backups** (#53): an optional prompt at creation time, editing
+  and clearing from the card, shown in the list.
 
 #### 🔧 Changed
 
@@ -109,6 +141,11 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
   sends `0.0.0.0/0, ::/0`, so that warning never fires. The `--json`
   envelopes are unchanged and new messages go to stderr); the minimum is
   still v5.21.0.
+- **Old archives in `backups/`** are shown as "installer snapshots": they can
+  be restored and deleted, but have no comment or pin.
+- **Hardened mode**: `install.sh` grants the `awgram` user access to
+  `backups/`; the installer's own archives (`chmod 600`) remain unreadable to
+  it, see the README.
 
 ## [0.9.0] — 2026-08-21
 
