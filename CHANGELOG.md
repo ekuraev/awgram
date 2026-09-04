@@ -3,6 +3,29 @@
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версионирование — [SemVer](https://semver.org/lang/ru/).
 Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning — [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### 🇷🇺 Русский
+
+#### 🐛 Исправлено
+
+- **Ширина инлайн-кнопок больше не «плавает» между экранами.** Клиент Telegram
+  подгоняет клавиатуру под ширину пузыря сообщения: короткий заголовок давал
+  широкое меню, а многострочный текст (статистика, карточка) — узкое, с
+  обрезанными подписями вроде «Поч…модуля». Теперь к тексту каждого экрана с
+  клавиатурой добавляется невидимая строка-распорка, и пузырь с кнопками везде
+  одной ширины.
+
+### 🇬🇧 English
+
+#### 🐛 Fixed
+
+- **Inline button width no longer drifts between screens.** Telegram clients
+  size the keyboard to the message bubble: a short title produced a wide menu,
+  while multi-line text (stats, client card) squeezed it and truncated labels.
+  Every screen with a keyboard now carries an invisible spacer line, so the
+  bubble and buttons have the same width everywhere.
+
 ## [0.10.0] — 2026-09-03
 
 ### 🇷🇺 Русский
