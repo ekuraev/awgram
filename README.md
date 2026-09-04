@@ -15,8 +15,11 @@
 Telegram-бот на Rust для управления клиентами [AmneziaWG](https://amnezia.org/) прямо
 с телефона: добавить/удалить клиента, посмотреть список и трафик — без SSH.
 
+https://github.com/user-attachments/assets/35af60f4-c7d8-44d5-9c90-bcd06b20c864
+
 <p align="center">
-  <img src="docs/media/awgram-tg.webp" alt="awgram в Telegram" width="420">
+  <img src="docs/media/menu-ru.png" alt="Главное меню awgram, русский" width="360">
+  <img src="docs/media/menu-en.png" alt="Главное меню awgram, английский" width="360">
 </p>
 
 **awgram управляет нативным AmneziaWG** — kernel-модулем для Linux
