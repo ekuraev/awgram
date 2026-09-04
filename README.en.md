@@ -40,8 +40,11 @@ tangible on budget VPS hosts.
   confirmation; menus, lists, prompts and operation results all live in one
   message — the chat never piles up duplicates.
 - 🔗 **AllowedIPs from presets** — at creation, in bulk creation and when
-  editing a client: RFC 1918 local networks, the VPN subnet, a full tunnel or
-  your own CIDR list; you can also keep the server's routing mode. When the
+  editing a client: RFC 1918 local networks and typical home-router /24s, the
+  VPN subnet, a full tunnel or your own CIDR list; you can also keep the
+  server's routing mode. The "exclude from VPN" mode sends everything through
+  the tunnel except the marked networks, so the client stays reachable on its
+  LAN. When the
   installer supports `add --allowed-ips`, the routes are set by the same call
   that creates the client, otherwise by a separate edit right after it.
 - ⚙️ **Modify client parameters**: Keepalive, DNS, AllowedIPs, Endpoint.

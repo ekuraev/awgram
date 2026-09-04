@@ -29,6 +29,7 @@ pub fn html_escape(s: &str) -> String {
 }
 
 use crate::error::Error;
+use crate::vpn::validate::RouteMode;
 
 // --- экран выбора языка (без lang: показывает оба варианта) ---
 pub fn choose_language() -> String {
@@ -1568,20 +1569,41 @@ pub fn modify_param_select_title(lang: Lang) -> String {
 
 // --- экран маршрутов (AllowedIPs) ---
 
+/// Что даст текущий набор тумблеров: готовый список маршрутов или, в режиме
+/// исключений, перечень сетей, которые пойдут мимо туннеля. Полный список
+/// «всё, кроме» — два десятка CIDR, в заголовке он читался бы хуже сводки.
+#[derive(Debug, Clone, Copy)]
+pub enum RoutePending<'a> {
+    Routes(&'a str),
+    AllExcept(&'a str),
+}
+
 /// Заголовок экрана выбора AllowedIPs. `current` — значение, уже прописанное
 /// в конфиге клиента (при редактировании), `pending` — что даст текущий набор
 /// тумблеров. Пустой набор объясняем прямо в заголовке, чтобы «Применить» не
-/// выглядела сломанной.
+/// выглядела сломанной; в режиме исключений подсказка своя — тумблеры там
+/// значат обратное.
 pub fn routes_title(
     lang: Lang,
     name: &str,
     current: Option<&str>,
-    pending: Option<&str>,
+    pending: Option<RoutePending<'_>>,
+    mode: RouteMode,
 ) -> String {
     let n = html_escape(name);
-    let mut out = match lang {
-        Lang::Ru => format!("🔗 <b>AllowedIPs</b> · {n}\nКуда клиент направляет трафик."),
-        Lang::En => format!("🔗 <b>AllowedIPs</b> · {n}\nWhere the client routes traffic."),
+    let mut out = match (lang, mode) {
+        (Lang::Ru, RouteMode::Include) => {
+            format!("🔗 <b>AllowedIPs</b> · {n}\nКуда клиент направляет трафик.")
+        }
+        (Lang::En, RouteMode::Include) => {
+            format!("🔗 <b>AllowedIPs</b> · {n}\nWhere the client routes traffic.")
+        }
+        (Lang::Ru, RouteMode::Exclude) => format!(
+            "🔗 <b>AllowedIPs</b> · {n}\nВесь трафик в VPN, отмеченные сети — исключаются (остаются доступны напрямую)."
+        ),
+        (Lang::En, RouteMode::Exclude) => format!(
+            "🔗 <b>AllowedIPs</b> · {n}\nAll traffic via VPN; the marked networks are excluded (stay reachable directly)."
+        ),
     };
     if let Some(cur) = current {
         let c = html_escape(&truncate_routes(cur));
@@ -1591,18 +1613,33 @@ pub fn routes_title(
         });
     }
     match pending {
-        Some(v) => {
+        Some(RoutePending::Routes(v)) => {
             let v = html_escape(v);
             out.push_str(&match lang {
                 Lang::Ru => format!("\nБудет: <code>{v}</code>"),
                 Lang::En => format!("\nWill be: <code>{v}</code>"),
             });
         }
-        None => out.push_str(&match lang {
-            Lang::Ru => {
-                "\n\nНичего не выбрано — отметьте сети или оставьте режим сервера.".to_string()
+        Some(RoutePending::AllExcept(v)) => {
+            let v = html_escape(v);
+            out.push_str(&match lang {
+                Lang::Ru => format!("\nБудет: всё, кроме <code>{v}</code>"),
+                Lang::En => format!("\nWill be: all except <code>{v}</code>"),
+            });
+        }
+        None => out.push_str(match (lang, mode) {
+            (Lang::Ru, RouteMode::Include) => {
+                "\n\nНичего не выбрано — отметьте сети или оставьте режим сервера."
             }
-            Lang::En => "\n\nNothing selected — pick networks or keep the server mode.".to_string(),
+            (Lang::En, RouteMode::Include) => {
+                "\n\nNothing selected — pick networks or keep the server mode."
+            }
+            (Lang::Ru, RouteMode::Exclude) => {
+                "\n\nНичего не выбрано — отметьте сети, которые нужно исключить."
+            }
+            (Lang::En, RouteMode::Exclude) => {
+                "\n\nNothing selected — pick the networks to exclude."
+            }
         }),
     }
     out
@@ -1620,6 +1657,16 @@ fn truncate_routes(v: &str) -> String {
     format!("{head}…")
 }
 
+/// Переключатель режима экрана; подпись называет ТЕКУЩИЙ режим.
+pub fn btn_route_mode(lang: Lang, mode: RouteMode) -> String {
+    match (lang, mode) {
+        (Lang::Ru, RouteMode::Include) => "🔁 Режим: направлять в VPN",
+        (Lang::En, RouteMode::Include) => "🔁 Mode: route via VPN",
+        (Lang::Ru, RouteMode::Exclude) => "🔁 Режим: исключать из VPN",
+        (Lang::En, RouteMode::Exclude) => "🔁 Mode: exclude from VPN",
+    }
+    .to_string()
+}
 pub fn btn_route_all(lang: Lang) -> String {
     match lang {
         Lang::Ru => "🌐 Весь трафик",
@@ -2902,7 +2949,13 @@ mod tests {
         let long = std::iter::repeat_n("10.0.0.0/8", 60)
             .collect::<Vec<_>>()
             .join(", ");
-        let t = routes_title(Lang::Ru, "alice", Some(&long), Some("10.0.0.0/8"));
+        let t = routes_title(
+            Lang::Ru,
+            "alice",
+            Some(&long),
+            Some(RoutePending::Routes("10.0.0.0/8")),
+            RouteMode::Include,
+        );
         assert!(
             t.chars().count() < 500,
             "заголовок слишком длинный: {}",
@@ -2913,18 +2966,55 @@ mod tests {
 
     #[test]
     fn routes_title_escapes_name_and_reports_empty_selection() {
-        let t = routes_title(Lang::Ru, "<x>", None, None);
+        let t = routes_title(Lang::Ru, "<x>", None, None, RouteMode::Include);
         assert!(t.contains("&lt;x&gt;"));
         assert!(t.contains("Ничего не выбрано"));
-        let en = routes_title(Lang::En, "a", None, None);
+        let en = routes_title(Lang::En, "a", None, None, RouteMode::Include);
         assert!(en.contains("Nothing selected"));
     }
 
     #[test]
     fn routes_title_shows_current_and_pending() {
-        let t = routes_title(Lang::Ru, "a", Some("0.0.0.0/0"), Some("10.0.0.0/8"));
+        let t = routes_title(
+            Lang::Ru,
+            "a",
+            Some("0.0.0.0/0"),
+            Some(RoutePending::Routes("10.0.0.0/8")),
+            RouteMode::Include,
+        );
         assert!(t.contains("Сейчас"));
         assert!(t.contains("Будет"));
         assert!(t.contains("10.0.0.0/8"));
+    }
+
+    #[test]
+    fn routes_title_exclude_pending_is_a_summary_not_a_cidr_dump() {
+        let t = routes_title(
+            Lang::Ru,
+            "a",
+            None,
+            Some(RoutePending::AllExcept("10.0.0.0/8, 192.168.1.0/24")),
+            RouteMode::Exclude,
+        );
+        assert!(t.contains("всё, кроме"), "{t}");
+        assert!(t.contains("<code>10.0.0.0/8, 192.168.1.0/24</code>"), "{t}");
+        assert!(!t.contains("0.0.0.0/5"), "{t}");
+        let en = routes_title(
+            Lang::En,
+            "a",
+            None,
+            Some(RoutePending::AllExcept("10.0.0.0/8")),
+            RouteMode::Exclude,
+        );
+        assert!(en.contains("all except"), "{en}");
+    }
+
+    #[test]
+    fn routes_title_hints_which_mode_is_active() {
+        let inc = routes_title(Lang::Ru, "a", None, None, RouteMode::Include);
+        assert!(inc.contains("Ничего не выбрано"));
+        let exc = routes_title(Lang::Ru, "a", None, None, RouteMode::Exclude);
+        assert!(exc.contains("исключ"), "{exc}");
+        assert!(exc.contains("Ничего не выбрано"), "{exc}");
     }
 }
