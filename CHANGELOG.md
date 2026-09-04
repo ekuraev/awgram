@@ -3,6 +3,42 @@
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версионирование — [SemVer](https://semver.org/lang/ru/).
 Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning — [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### 🇷🇺 Русский
+
+#### ✨ Добавлено
+
+- **Режим «исключать из VPN» на экране AllowedIPs.** Переключатель режима
+  меняет смысл тумблеров: весь трафик идёт в туннель, а отмеченные сети —
+  мимо него, так что клиент остаётся доступен в своей локальной сети.
+  WireGuard не знает исключений, поэтому бот сам считает дополнение
+  `0.0.0.0/0` минус выбранные сети и всегда возвращает в список подсеть VPN
+  (иначе исключение `10.0.0.0/8` отрезало бы сам туннель). В заголовке
+  показывается сводка «всё, кроме …», при правке такое значение распознаётся
+  и предзаполняет тумблеры.
+- **Узкие пресеты локальных сетей**: к трём диапазонам RFC 1918 добавлены
+  типовые /24 домашних роутеров — `10.0.0.0/24`, `10.0.1.0/24`,
+  `192.168.0.0/24`, `192.168.1.0/24`, `192.168.10.0/24`, `192.168.100.0/24`.
+  Работают в обоих режимах.
+
+### 🇬🇧 English
+
+#### ✨ Added
+
+- **"Exclude from VPN" mode on the AllowedIPs screen.** The mode switch flips
+  the meaning of the toggles: all traffic goes through the tunnel and the
+  marked networks bypass it, so the client stays reachable on its LAN.
+  WireGuard has no notion of exclusions, so the bot computes the complement
+  `0.0.0.0/0` minus the selected networks itself and always puts the VPN
+  subnet back (otherwise excluding `10.0.0.0/8` would cut the tunnel itself).
+  The title shows an "all except …" summary; when editing, such a value is
+  recognised and pre-fills the toggles.
+- **Narrow local-network presets**: besides the three RFC 1918 ranges, the
+  typical home-router /24s — `10.0.0.0/24`, `10.0.1.0/24`, `192.168.0.0/24`,
+  `192.168.1.0/24`, `192.168.10.0/24`, `192.168.100.0/24`. Available in both
+  modes.
+
 ## [0.10.1] — 2026-09-04
 
 ### 🇷🇺 Русский
@@ -742,6 +778,7 @@ config paths have changed. On a running VPS, perform once:
 - Environment diagnostics (🔬 button), ⏳ client expiry badges.
 - RU/EN localization, PSK default, backup/restore, persistent state.
 
+[Unreleased]: https://github.com/ekuraev/awgram/compare/v0.10.1...HEAD
 [0.10.1]: https://github.com/ekuraev/awgram/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/ekuraev/awgram/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/ekuraev/awgram/compare/v0.8.2...v0.9.0

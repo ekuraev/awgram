@@ -284,6 +284,14 @@ pub fn parse_modify_value(p: ModifyParam, input: &str) -> Result<String, Validat
 // собирает строку сам, из набора готовых подсетей, и применяет её отдельным
 // вызовом `modify`. Здесь — только сборка/разбор строки: чистая логика,
 // пригодная для юнит-тестов.
+//
+// Два режима экрана. «Направлять»: AllowedIPs = выбранные сети (+ подсеть
+// VPN). «Исключать»: AllowedIPs = весь трафик минус выбранные сети — WireGuard
+// не знает исключений, поэтому дополнение считается явно (см. `cidr`), а
+// подсеть VPN всегда возвращается в список: исключение 10.0.0.0/8 иначе
+// отрезало бы сам туннель.
+
+use crate::vpn::cidr::{self, Ipv4Net};
 
 /// Приватные диапазоны RFC 1918 — «локальные сети» в терминах экрана выбора.
 pub const NET_10: &str = "10.0.0.0/8";
@@ -292,77 +300,195 @@ pub const NET_192: &str = "192.168.0.0/16";
 /// Полный туннель: весь IPv4 и весь IPv6.
 pub const ROUTE_ALL: &str = "0.0.0.0/0, ::/0";
 
+/// Сетевые пресеты экрана: три диапазона RFC 1918 целиком и типовые /24
+/// домашних роутеров. Порядок — порядок в собранной строке и на клавиатуре.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetPreset {
+    Net10,
+    Net172,
+    Net192,
+    Net10_0,
+    Net10_1,
+    Net192_0,
+    Net192_1,
+    Net192_10,
+    Net192_100,
+}
+
+impl NetPreset {
+    pub const ALL: [NetPreset; 9] = [
+        NetPreset::Net10,
+        NetPreset::Net172,
+        NetPreset::Net192,
+        NetPreset::Net10_0,
+        NetPreset::Net10_1,
+        NetPreset::Net192_0,
+        NetPreset::Net192_1,
+        NetPreset::Net192_10,
+        NetPreset::Net192_100,
+    ];
+    /// Три диапазона RFC 1918 — состав группового тумблера «все локальные».
+    pub const WIDE: [NetPreset; 3] = [NetPreset::Net10, NetPreset::Net172, NetPreset::Net192];
+
+    pub fn cidr(self) -> &'static str {
+        match self {
+            NetPreset::Net10 => NET_10,
+            NetPreset::Net172 => NET_172,
+            NetPreset::Net192 => NET_192,
+            NetPreset::Net10_0 => "10.0.0.0/24",
+            NetPreset::Net10_1 => "10.0.1.0/24",
+            NetPreset::Net192_0 => "192.168.0.0/24",
+            NetPreset::Net192_1 => "192.168.1.0/24",
+            NetPreset::Net192_10 => "192.168.10.0/24",
+            NetPreset::Net192_100 => "192.168.100.0/24",
+        }
+    }
+
+    /// Ключ в callback-data (`aip:t:<key>`); «10»/«172»/«192» — исторические.
+    pub fn key(self) -> &'static str {
+        match self {
+            NetPreset::Net10 => "10",
+            NetPreset::Net172 => "172",
+            NetPreset::Net192 => "192",
+            NetPreset::Net10_0 => "10.0",
+            NetPreset::Net10_1 => "10.1",
+            NetPreset::Net192_0 => "192.0",
+            NetPreset::Net192_1 => "192.1",
+            NetPreset::Net192_10 => "192.10",
+            NetPreset::Net192_100 => "192.100",
+        }
+    }
+
+    fn from_key(s: &str) -> Option<NetPreset> {
+        NetPreset::ALL.into_iter().find(|p| p.key() == s)
+    }
+
+    fn from_cidr(s: &str) -> Option<NetPreset> {
+        NetPreset::ALL.into_iter().find(|p| p.cidr() == s)
+    }
+
+    fn net(self) -> Ipv4Net {
+        Ipv4Net::parse(self.cidr()).expect("preset CIDRs are valid")
+    }
+
+    fn bit(self) -> u16 {
+        1 << (NetPreset::ALL
+            .iter()
+            .position(|p| *p == self)
+            .expect("preset in ALL"))
+    }
+}
+
 /// Кнопки экрана выбора маршрутов (одна на пресет).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RouteKey {
     All,
-    Net10,
-    Net172,
-    Net192,
     Vpn,
     /// Групповой тумблер «все локальные сети» — три диапазона RFC 1918 разом.
     Local,
+    Net(NetPreset),
 }
 
 impl RouteKey {
     pub fn as_str(self) -> &'static str {
         match self {
             RouteKey::All => "all",
-            RouteKey::Net10 => "10",
-            RouteKey::Net172 => "172",
-            RouteKey::Net192 => "192",
             RouteKey::Vpn => "vpn",
             RouteKey::Local => "local",
+            RouteKey::Net(p) => p.key(),
         }
     }
 
     pub fn parse_str(s: &str) -> Option<RouteKey> {
         match s {
             "all" => Some(RouteKey::All),
-            "10" => Some(RouteKey::Net10),
-            "172" => Some(RouteKey::Net172),
-            "192" => Some(RouteKey::Net192),
             "vpn" => Some(RouteKey::Vpn),
             "local" => Some(RouteKey::Local),
-            _ => None,
+            _ => NetPreset::from_key(s).map(RouteKey::Net),
         }
     }
 }
 
+/// Режим экрана: выбранные сети идут в туннель или мимо него.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RouteMode {
+    #[default]
+    Include,
+    Exclude,
+}
+
 /// Набор включённых пресетов. `all` эксклюзивен: 0.0.0.0/0 поглощает любую
 /// подсеть, поэтому его включение гасит остальные тумблеры (и наоборот) —
-/// иначе экран показывал бы взаимоисключающие галки.
+/// иначе экран показывал бы взаимоисключающие галки. В режиме исключений
+/// `all` и `vpn` смысла не имеют и всегда сброшены.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RouteSelection {
+    pub mode: RouteMode,
     pub all: bool,
-    pub net10: bool,
-    pub net172: bool,
-    pub net192: bool,
     pub vpn: bool,
+    nets: u16,
 }
 
 impl RouteSelection {
+    /// Набор из перечня сетевых пресетов (для тестов и предзаполнения).
+    pub fn with_nets(mode: RouteMode, nets: &[NetPreset]) -> RouteSelection {
+        let mut sel = RouteSelection {
+            mode,
+            ..RouteSelection::default()
+        };
+        for p in nets {
+            sel.set_net(*p, true);
+        }
+        sel
+    }
+
+    /// «Весь трафик»: единственный тумблер, остальные сброшены.
+    pub fn all_traffic() -> RouteSelection {
+        RouteSelection {
+            all: true,
+            ..RouteSelection::default()
+        }
+    }
+
     pub fn is_empty(self) -> bool {
-        !(self.all || self.net10 || self.net172 || self.net192 || self.vpn)
+        !(self.all || self.vpn || self.nets != 0)
+    }
+
+    pub fn net(self, p: NetPreset) -> bool {
+        self.nets & p.bit() != 0
+    }
+
+    pub fn set_net(&mut self, p: NetPreset, on: bool) {
+        if on {
+            self.nets |= p.bit();
+        } else {
+            self.nets &= !p.bit();
+        }
+    }
+
+    /// Выбранные сетевые пресеты в каноническом порядке.
+    pub fn nets(self) -> impl Iterator<Item = NetPreset> {
+        NetPreset::ALL.into_iter().filter(move |p| self.net(*p))
     }
 
     /// Все три диапазона RFC 1918 включены (состояние группового тумблера).
     pub fn local_all(self) -> bool {
-        self.net10 && self.net172 && self.net192
+        NetPreset::WIDE.iter().all(|p| self.net(*p))
     }
 
     pub fn get(self, key: RouteKey) -> bool {
         match key {
             RouteKey::All => self.all,
-            RouteKey::Net10 => self.net10,
-            RouteKey::Net172 => self.net172,
-            RouteKey::Net192 => self.net192,
             RouteKey::Vpn => self.vpn,
             RouteKey::Local => self.local_all(),
+            RouteKey::Net(p) => self.net(p),
         }
     }
 
-    /// Переключает пресет с учётом эксклюзивности «весь трафик».
+    /// Переключает пресет с учётом эксклюзивности «весь трафик». В режиме
+    /// исключений «весь трафик» и «сеть VPN» на экране отсутствуют, но
+    /// устаревший callback их всё же может прислать — тогда возвращаемся
+    /// в режим «направлять», где они имеют смысл.
     pub fn toggle(&mut self, key: RouteKey) {
         match key {
             RouteKey::All => {
@@ -372,30 +498,34 @@ impl RouteSelection {
                     ..RouteSelection::default()
                 };
             }
-            RouteKey::Local => {
-                let on = !self.local_all();
-                self.all = false;
-                self.net10 = on;
-                self.net172 = on;
-                self.net192 = on;
-            }
-            RouteKey::Net10 => {
-                self.all = false;
-                self.net10 = !self.net10;
-            }
-            RouteKey::Net172 => {
-                self.all = false;
-                self.net172 = !self.net172;
-            }
-            RouteKey::Net192 => {
-                self.all = false;
-                self.net192 = !self.net192;
-            }
             RouteKey::Vpn => {
+                self.mode = RouteMode::Include;
                 self.all = false;
                 self.vpn = !self.vpn;
             }
+            RouteKey::Local => {
+                let on = !self.local_all();
+                self.all = false;
+                for p in NetPreset::WIDE {
+                    self.set_net(p, on);
+                }
+            }
+            RouteKey::Net(p) => {
+                self.all = false;
+                self.set_net(p, !self.net(p));
+            }
         }
+    }
+
+    /// Смена режима: сетевые тумблеры сохраняются, «весь трафик» и «сеть VPN»
+    /// сбрасываются — в режиме исключений их нет.
+    pub fn toggle_mode(&mut self) {
+        self.mode = match self.mode {
+            RouteMode::Include => RouteMode::Exclude,
+            RouteMode::Exclude => RouteMode::Include,
+        };
+        self.all = false;
+        self.vpn = false;
     }
 }
 
@@ -403,19 +533,17 @@ impl RouteSelection {
 /// выбрано (применять нечего). Подсеть VPN участвует только если она известна
 /// (её отдаёт `check`, при недоступном интерфейсе кнопки просто нет).
 pub fn build_allowed_ips(sel: RouteSelection, vpn_subnet: Option<&str>) -> Option<String> {
+    match sel.mode {
+        RouteMode::Include => build_include(sel, vpn_subnet),
+        RouteMode::Exclude => build_exclude(sel, vpn_subnet),
+    }
+}
+
+fn build_include(sel: RouteSelection, vpn_subnet: Option<&str>) -> Option<String> {
     if sel.all {
         return Some(ROUTE_ALL.to_string());
     }
-    let mut parts: Vec<&str> = Vec::new();
-    if sel.net10 {
-        parts.push(NET_10);
-    }
-    if sel.net172 {
-        parts.push(NET_172);
-    }
-    if sel.net192 {
-        parts.push(NET_192);
-    }
+    let mut parts: Vec<&str> = sel.nets().map(NetPreset::cidr).collect();
     if let (true, Some(subnet)) = (sel.vpn, vpn_subnet) {
         parts.push(subnet);
     }
@@ -426,10 +554,30 @@ pub fn build_allowed_ips(sel: RouteSelection, vpn_subnet: Option<&str>) -> Optio
     }
 }
 
+fn build_exclude(sel: RouteSelection, vpn_subnet: Option<&str>) -> Option<String> {
+    let cut: Vec<Ipv4Net> = sel.nets().map(NetPreset::net).collect();
+    if cut.is_empty() {
+        return None;
+    }
+    let everything = Ipv4Net::parse("0.0.0.0/0").expect("literal");
+    let mut nets = cidr::subtract(&[everything], &cut);
+    if let Some(vpn) = vpn_subnet.and_then(Ipv4Net::parse) {
+        nets.push(vpn);
+        nets = cidr::aggregate(&nets);
+    }
+    let mut parts: Vec<String> = nets.iter().map(ToString::to_string).collect();
+    parts.push("::/0".to_string());
+    Some(parts.join(", "))
+}
+
 /// Разбирает текущее значение AllowedIPs в набор тумблеров. `None` — значение
 /// не выражается пресетами (задано вручную): экран покажет его как есть и
 /// оставит тумблеры пустыми, чтобы не подменять чужую настройку.
 pub fn selection_from_value(value: &str, vpn_subnet: Option<&str>) -> Option<RouteSelection> {
+    selection_from_include(value, vpn_subnet).or_else(|| selection_from_exclude(value, vpn_subnet))
+}
+
+fn selection_from_include(value: &str, vpn_subnet: Option<&str>) -> Option<RouteSelection> {
     let mut sel = RouteSelection::default();
     let mut seen = false;
     for raw in value.split(',') {
@@ -440,18 +588,63 @@ pub fn selection_from_value(value: &str, vpn_subnet: Option<&str>) -> Option<Rou
         seen = true;
         match token {
             "0.0.0.0/0" | "::/0" => sel.all = true,
-            NET_10 => sel.net10 = true,
-            NET_172 => sel.net172 = true,
-            NET_192 => sel.net192 = true,
             t if Some(t) == vpn_subnet => sel.vpn = true,
-            _ => return None,
+            t => sel.set_net(NetPreset::from_cidr(t)?, true),
         }
     }
     // «Весь трафик» несовместим с подсетями: такое значение собрано не нами.
-    if sel.all && (sel.net10 || sel.net172 || sel.net192 || sel.vpn) {
+    if sel.all && (sel.nets != 0 || sel.vpn) {
         return None;
     }
     if seen {
+        Some(sel)
+    } else {
+        None
+    }
+}
+
+/// Значение вида «всё, кроме…»: пресет считается исключённым, если в списке
+/// нет ничего из него (за вычетом подсети VPN — её сборка возвращает всегда).
+/// Вложенные исключения (192.168.1.0/24 внутри 192.168.0.0/16) сворачиваются
+/// в широкий тумблер. Итог сверяется пересборкой: не совпало — значение чужое.
+fn selection_from_exclude(value: &str, vpn_subnet: Option<&str>) -> Option<RouteSelection> {
+    let mut have_v6 = false;
+    let mut v4: Vec<Ipv4Net> = Vec::new();
+    for raw in value.split(',') {
+        let token = raw.trim();
+        if token.is_empty() {
+            continue;
+        }
+        if token == "::/0" {
+            have_v6 = true;
+            continue;
+        }
+        v4.push(Ipv4Net::parse(token)?);
+    }
+    if !have_v6 || v4.is_empty() {
+        return None;
+    }
+    let vpn: Vec<Ipv4Net> = vpn_subnet.and_then(Ipv4Net::parse).into_iter().collect();
+    let excluded: Vec<NetPreset> = NetPreset::ALL
+        .into_iter()
+        .filter(|p| {
+            let body = cidr::subtract(&[p.net()], &vpn);
+            !body.is_empty() && !body.iter().any(|b| v4.iter().any(|v| b.overlaps(*v)))
+        })
+        .collect();
+    let outer: Vec<NetPreset> = excluded
+        .iter()
+        .copied()
+        .filter(|p| !excluded.iter().any(|q| q != p && q.net().contains(p.net())))
+        .collect();
+    let sel = RouteSelection::with_nets(RouteMode::Exclude, &outer);
+    let rebuilt = build_allowed_ips(sel, vpn_subnet)?;
+    let rebuilt_v4: Vec<Ipv4Net> = rebuilt
+        .split(',')
+        .map(str::trim)
+        .filter_map(Ipv4Net::parse)
+        .collect();
+    if cidr::aggregate(&v4) == rebuilt_v4 {
         Some(sel)
     } else {
         None
@@ -823,17 +1016,34 @@ mod tests {
 
     // --- пресеты AllowedIPs ---
 
+    fn inc(nets: &[NetPreset]) -> RouteSelection {
+        RouteSelection::with_nets(RouteMode::Include, nets)
+    }
+
+    fn exc(nets: &[NetPreset]) -> RouteSelection {
+        RouteSelection::with_nets(RouteMode::Exclude, nets)
+    }
+
     #[test]
     fn build_allowed_ips_joins_selected_nets_in_order() {
-        let sel = RouteSelection {
-            net10: true,
-            net192: true,
-            vpn: true,
-            ..RouteSelection::default()
-        };
+        let mut sel = inc(&[NetPreset::Net192, NetPreset::Net10]);
+        sel.vpn = true;
         assert_eq!(
             build_allowed_ips(sel, Some("10.9.9.0/24")).unwrap(),
             "10.0.0.0/8, 192.168.0.0/16, 10.9.9.0/24"
+        );
+    }
+
+    #[test]
+    fn build_allowed_ips_narrow_presets_have_expected_cidrs() {
+        let sel = inc(&[
+            NetPreset::Net192_1,
+            NetPreset::Net10_0,
+            NetPreset::Net192_100,
+        ]);
+        assert_eq!(
+            build_allowed_ips(sel, None).unwrap(),
+            "10.0.0.0/24, 192.168.1.0/24, 192.168.100.0/24"
         );
     }
 
@@ -861,11 +1071,8 @@ mod tests {
 
     #[test]
     fn toggle_all_is_exclusive_both_ways() {
-        let mut sel = RouteSelection {
-            net10: true,
-            vpn: true,
-            ..RouteSelection::default()
-        };
+        let mut sel = inc(&[NetPreset::Net10]);
+        sel.vpn = true;
         sel.toggle(RouteKey::All);
         assert_eq!(
             sel,
@@ -875,15 +1082,16 @@ mod tests {
             }
         );
         // Любой другой тумблер снимает «весь трафик».
-        sel.toggle(RouteKey::Net172);
-        assert!(!sel.all && sel.net172);
+        sel.toggle(RouteKey::Net(NetPreset::Net172));
+        assert!(!sel.all && sel.net(NetPreset::Net172));
     }
 
     #[test]
     fn toggle_local_sets_and_clears_all_three_rfc1918() {
         let mut sel = RouteSelection::default();
         sel.toggle(RouteKey::Local);
-        assert!(sel.net10 && sel.net172 && sel.net192 && sel.local_all());
+        assert!(sel.local_all());
+        assert_eq!(sel.nets().collect::<Vec<_>>(), NetPreset::WIDE);
         sel.toggle(RouteKey::Local);
         assert!(sel.is_empty());
     }
@@ -891,18 +1099,42 @@ mod tests {
     #[test]
     fn toggle_local_turns_on_when_only_part_selected() {
         // Частичный выбор — групповой тумблер добирает остальные, а не гасит.
-        let mut sel = RouteSelection {
-            net10: true,
-            ..RouteSelection::default()
-        };
+        let mut sel = inc(&[NetPreset::Net10]);
         sel.toggle(RouteKey::Local);
         assert!(sel.local_all());
     }
 
     #[test]
+    fn toggle_local_leaves_narrow_presets_alone() {
+        let mut sel = inc(&[NetPreset::Net192_1]);
+        sel.toggle(RouteKey::Local);
+        assert!(sel.local_all() && sel.net(NetPreset::Net192_1));
+    }
+
+    #[test]
+    fn route_key_roundtrips_all_presets() {
+        for p in NetPreset::ALL {
+            assert_eq!(RouteKey::parse_str(p.key()), Some(RouteKey::Net(p)));
+        }
+        assert_eq!(
+            RouteKey::parse_str("10"),
+            Some(RouteKey::Net(NetPreset::Net10))
+        );
+        assert_eq!(
+            RouteKey::parse_str("192.1"),
+            Some(RouteKey::Net(NetPreset::Net192_1))
+        );
+        assert_eq!(RouteKey::parse_str("local"), Some(RouteKey::Local));
+        assert_eq!(RouteKey::parse_str("0.0.0.0/0"), None);
+        assert_eq!(RouteKey::parse_str(""), None);
+    }
+
+    #[test]
     fn selection_from_value_roundtrips_presets() {
         let sel = selection_from_value("10.0.0.0/8, 172.16.0.0/12", None).unwrap();
-        assert!(sel.net10 && sel.net172 && !sel.net192);
+        assert!(sel.net(NetPreset::Net10) && sel.net(NetPreset::Net172));
+        assert!(!sel.net(NetPreset::Net192));
+        assert_eq!(sel.mode, RouteMode::Include);
         assert_eq!(
             build_allowed_ips(sel, None).unwrap(),
             "10.0.0.0/8, 172.16.0.0/12"
@@ -911,6 +1143,8 @@ mod tests {
         assert!(all.all);
         let vpn = selection_from_value("10.9.9.0/24", Some("10.9.9.0/24")).unwrap();
         assert!(vpn.vpn);
+        let narrow = selection_from_value("192.168.1.0/24", None).unwrap();
+        assert!(narrow.net(NetPreset::Net192_1));
     }
 
     #[test]
@@ -926,16 +1160,124 @@ mod tests {
     #[test]
     fn build_allowed_ips_output_passes_parse_allowed_ips() {
         // Всё, что собирает экран, обязано пройти валидатор перед modify.
-        let sel = RouteSelection {
-            all: false,
-            net10: true,
-            net172: true,
-            net192: true,
-            vpn: true,
-        };
+        let mut sel = inc(&NetPreset::ALL);
+        sel.vpn = true;
         let v = build_allowed_ips(sel, Some("10.9.9.0/24")).unwrap();
         assert!(parse_allowed_ips(&v).is_ok());
         assert!(parse_allowed_ips(ROUTE_ALL).is_ok());
+        let v = build_allowed_ips(exc(&NetPreset::ALL), Some("10.9.9.0/24")).unwrap();
+        assert!(parse_allowed_ips(&v).is_ok());
+    }
+
+    // --- режим исключений ---
+
+    #[test]
+    fn exclude_net10_gives_complement_plus_ipv6() {
+        assert_eq!(
+            build_allowed_ips(exc(&[NetPreset::Net10]), None).unwrap(),
+            "0.0.0.0/5, 8.0.0.0/7, 11.0.0.0/8, 12.0.0.0/6, 16.0.0.0/4, 32.0.0.0/3, 64.0.0.0/2, 128.0.0.0/1, ::/0"
+        );
+    }
+
+    #[test]
+    fn exclude_keeps_vpn_subnet_inside_excluded_range() {
+        let v = build_allowed_ips(exc(&[NetPreset::Net10]), Some("10.9.9.0/24")).unwrap();
+        assert!(v.contains("10.9.9.0/24"), "{v}");
+        assert!(!v.contains("10.0.0.0/8"), "{v}");
+        assert!(v.ends_with("::/0"), "{v}");
+    }
+
+    #[test]
+    fn exclude_with_nothing_selected_is_none() {
+        assert!(build_allowed_ips(exc(&[]), Some("10.9.9.0/24")).is_none());
+    }
+
+    #[test]
+    fn exclude_all_local_matches_exclude_private_ips_list() {
+        // Тот же набор, что «Exclude private IPs» в клиенте WireGuard для RFC 1918.
+        let v = build_allowed_ips(exc(&NetPreset::WIDE), None).unwrap();
+        for absent in [NET_10, NET_172, NET_192] {
+            assert!(!v.contains(absent), "{v}");
+        }
+        assert!(v.starts_with("0.0.0.0/5, "), "{v}");
+        assert!(v.contains("192.169.0.0/16"), "{v}");
+        assert!(v.contains("172.32.0.0/11"), "{v}");
+    }
+
+    #[test]
+    fn toggle_mode_flips_and_clears_all_and_vpn() {
+        let mut sel = inc(&[NetPreset::Net192]);
+        sel.vpn = true;
+        sel.toggle_mode();
+        assert_eq!(sel.mode, RouteMode::Exclude);
+        assert!(!sel.vpn && sel.net(NetPreset::Net192));
+        sel.toggle_mode();
+        assert_eq!(sel.mode, RouteMode::Include);
+        let mut all = RouteSelection {
+            all: true,
+            ..RouteSelection::default()
+        };
+        all.toggle_mode();
+        assert!(all.is_empty());
+    }
+
+    #[test]
+    fn toggle_all_or_vpn_in_exclude_mode_returns_to_include() {
+        let mut sel = exc(&[NetPreset::Net10]);
+        sel.toggle(RouteKey::All);
+        assert_eq!(sel.mode, RouteMode::Include);
+        assert!(sel.all);
+        let mut sel = exc(&[NetPreset::Net10]);
+        sel.toggle(RouteKey::Vpn);
+        assert_eq!(sel.mode, RouteMode::Include);
+        assert!(sel.vpn && sel.net(NetPreset::Net10));
+    }
+
+    #[test]
+    fn selection_from_value_recognises_exclude_values() {
+        for (nets, subnet) in [
+            (vec![NetPreset::Net10], None),
+            (vec![NetPreset::Net10], Some("10.9.9.0/24")),
+            (NetPreset::WIDE.to_vec(), Some("10.9.9.0/24")),
+            (vec![NetPreset::Net192_1, NetPreset::Net10_0], None),
+            (vec![NetPreset::Net192_1], Some("192.168.1.128/25")),
+        ] {
+            let sel = exc(&nets);
+            let v = build_allowed_ips(sel, subnet).unwrap();
+            let back = selection_from_value(&v, subnet);
+            assert_eq!(back, Some(sel), "{nets:?} / {subnet:?}: {v}");
+        }
+    }
+
+    #[test]
+    fn selection_from_value_exclude_drops_presets_nested_in_wider_ones() {
+        // 192.168.1.0/24 внутри 192.168.0.0/16: строка та же, на экране —
+        // только широкий тумблер.
+        let v = build_allowed_ips(exc(&[NetPreset::Net192, NetPreset::Net192_1]), None).unwrap();
+        assert_eq!(
+            selection_from_value(&v, None),
+            Some(exc(&[NetPreset::Net192]))
+        );
+    }
+
+    #[test]
+    fn selection_from_value_exclude_none_for_manual_lists() {
+        // Дополнение чужой сети — не наш пресет.
+        let manual = crate::vpn::cidr::subtract(
+            &[crate::vpn::cidr::Ipv4Net::parse("0.0.0.0/0").unwrap()],
+            &[crate::vpn::cidr::Ipv4Net::parse("1.2.3.0/24").unwrap()],
+        )
+        .iter()
+        .map(|n| n.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+        assert!(selection_from_value(&format!("{manual}, ::/0"), None).is_none());
+        // Без ::/0 — тоже не наша сборка.
+        let v = build_allowed_ips(exc(&[NetPreset::Net10]), None).unwrap();
+        let no_v6 = v.trim_end_matches(", ::/0");
+        assert!(selection_from_value(no_v6, None).is_none());
+        // Мусор внутри списка.
+        assert!(selection_from_value("0.0.0.0/5, garbage, ::/0", None).is_none());
     }
 
     #[test]
@@ -960,9 +1302,8 @@ mod tests {
     fn route_key_str_roundtrip() {
         for k in [
             RouteKey::All,
-            RouteKey::Net10,
-            RouteKey::Net172,
-            RouteKey::Net192,
+            RouteKey::Net(NetPreset::Net10),
+            RouteKey::Net(NetPreset::Net192_100),
             RouteKey::Vpn,
             RouteKey::Local,
         ] {

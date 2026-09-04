@@ -4,7 +4,7 @@ use crate::backup::Key;
 use crate::i18n::{self, Lang};
 use crate::store::{BackupRow, BackupSchedule};
 use crate::vpn::model::{format_handshake_compact, Client, ClientFilter};
-use crate::vpn::validate::{RouteKey, RouteSelection};
+use crate::vpn::validate::{NetPreset, RouteKey, RouteMode, RouteSelection};
 use crate::vpn::BackupFile;
 
 fn cb(text: &str, data: &str) -> InlineKeyboardButton {
@@ -507,37 +507,61 @@ fn route_toggle(
     )
 }
 
-/// Экран выбора AllowedIPs: тумблеры пресетов + ручной ввод. Один и тот же для
-/// создания и правки, различия — две кнопки: «⏭ Как на сервере» есть только при
-/// создании (пропустить шаг), «▶️ Применить» — только когда что-то выбрано
-/// (иначе применять нечего, и мёртвая кнопка вводила бы в заблуждение).
-/// Кнопка подсети VPN появляется, только если `check` её отдал.
+/// Экран выбора AllowedIPs: переключатель режима, тумблеры пресетов + ручной
+/// ввод. Один и тот же для создания и правки, различия — две кнопки:
+/// «⏭ Как на сервере» есть только при создании (пропустить шаг),
+/// «▶️ Применить» — только когда что-то выбрано (иначе применять нечего, и
+/// мёртвая кнопка вводила бы в заблуждение). Кнопка подсети VPN появляется,
+/// только если `check` её отдал; в режиме исключений её и «Весь трафик» нет —
+/// туда они не вписываются (VPN-подсеть возвращается в список сама).
 pub fn allowed_ips_menu(
     lang: Lang,
     sel: RouteSelection,
     vpn_subnet: Option<&str>,
     creating: bool,
 ) -> InlineKeyboardMarkup {
-    use crate::vpn::validate::{NET_10, NET_172, NET_192};
+    let net = |p: NetPreset| route_toggle(lang, sel, RouteKey::Net(p), p.cidr());
     let mut rows = vec![
+        vec![cb(&i18n::btn_route_mode(lang, sel.mode), "aip:mode")],
         vec![
-            route_toggle(lang, sel, RouteKey::Net10, NET_10),
-            route_toggle(lang, sel, RouteKey::Net172, NET_172),
+            net(NetPreset::Net10),
+            net(NetPreset::Net172),
+            net(NetPreset::Net192),
         ],
-        vec![route_toggle(lang, sel, RouteKey::Net192, NET_192)],
+        vec![
+            net(NetPreset::Net10_0),
+            net(NetPreset::Net10_1),
+            net(NetPreset::Net192_0),
+        ],
+        vec![
+            net(NetPreset::Net192_1),
+            net(NetPreset::Net192_10),
+            net(NetPreset::Net192_100),
+        ],
     ];
-    if let Some(subnet) = vpn_subnet {
-        rows[1].push(route_toggle(
+    let mut group = vec![route_toggle(
+        lang,
+        sel,
+        RouteKey::Local,
+        &i18n::btn_route_local(lang),
+    )];
+    if sel.mode == RouteMode::Include {
+        if let Some(subnet) = vpn_subnet {
+            group.push(route_toggle(
+                lang,
+                sel,
+                RouteKey::Vpn,
+                &i18n::btn_route_vpn(lang, subnet),
+            ));
+        }
+        group.push(route_toggle(
             lang,
             sel,
-            RouteKey::Vpn,
-            &i18n::btn_route_vpn(lang, subnet),
+            RouteKey::All,
+            &i18n::btn_route_all(lang),
         ));
     }
-    rows.push(vec![
-        route_toggle(lang, sel, RouteKey::Local, &i18n::btn_route_local(lang)),
-        route_toggle(lang, sel, RouteKey::All, &i18n::btn_route_all(lang)),
-    ]);
+    rows.push(group);
     let mut manual = vec![cb(&i18n::btn_route_custom(lang), "aip:custom")];
     if creating {
         manual.push(cb(&i18n::btn_route_skip(lang), "aip:skip"));
@@ -1778,19 +1802,61 @@ mod tests {
 
     #[test]
     fn allowed_ips_menu_has_all_toggles_and_apply_when_selected() {
-        let sel = RouteSelection {
-            net10: true,
-            ..RouteSelection::default()
-        };
+        let sel = RouteSelection::with_nets(RouteMode::Include, &[NetPreset::Net10]);
         let kb = allowed_ips_menu(Lang::Ru, sel, Some("10.9.9.0/24"), true);
         let data = all_callback_data(&kb);
         for k in ["10", "172", "192", "vpn", "local", "all"] {
             assert!(data.contains(&format!("aip:t:{k}")), "нет тумблера {k}");
         }
+        for p in NetPreset::ALL {
+            assert!(
+                data.contains(&format!("aip:t:{}", p.key())),
+                "нет тумблера {}",
+                p.cidr()
+            );
+        }
+        assert!(data.contains(&"aip:mode".to_string()));
         assert!(data.contains(&"aip:custom".to_string()));
         assert!(data.contains(&"aip:skip".to_string()));
         assert!(data.contains(&"aip:apply".to_string()));
         assert!(data.contains(&"menu".to_string()));
+    }
+
+    #[test]
+    fn allowed_ips_menu_exclude_mode_hides_all_and_vpn_keeps_presets() {
+        let sel = RouteSelection::with_nets(RouteMode::Exclude, &[NetPreset::Net10]);
+        let kb = allowed_ips_menu(Lang::Ru, sel, Some("10.9.9.0/24"), true);
+        let data = all_callback_data(&kb);
+        assert!(!data.contains(&"aip:t:all".to_string()));
+        assert!(!data.contains(&"aip:t:vpn".to_string()));
+        for p in NetPreset::ALL {
+            assert!(data.contains(&format!("aip:t:{}", p.key())));
+        }
+        assert!(data.contains(&"aip:t:local".to_string()));
+        assert!(data.contains(&"aip:mode".to_string()));
+        assert!(data.contains(&"aip:apply".to_string()));
+    }
+
+    #[test]
+    fn allowed_ips_menu_mode_button_reflects_mode() {
+        let text_of = |sel: RouteSelection| {
+            allowed_ips_menu(Lang::Ru, sel, None, true)
+                .inline_keyboard
+                .iter()
+                .flatten()
+                .find(|b| {
+                    matches!(&b.kind,
+                    teloxide::types::InlineKeyboardButtonKind::CallbackData(d) if d == "aip:mode")
+                })
+                .unwrap()
+                .text
+                .clone()
+        };
+        let inc = text_of(RouteSelection::default());
+        let exc = text_of(RouteSelection::with_nets(RouteMode::Exclude, &[]));
+        assert_ne!(inc, exc);
+        assert_eq!(inc, i18n::btn_route_mode(Lang::Ru, RouteMode::Include));
+        assert_eq!(exc, i18n::btn_route_mode(Lang::Ru, RouteMode::Exclude));
     }
 
     #[test]
@@ -1809,10 +1875,7 @@ mod tests {
 
     #[test]
     fn allowed_ips_menu_marks_selected_toggles() {
-        let sel = RouteSelection {
-            all: true,
-            ..RouteSelection::default()
-        };
+        let sel = RouteSelection::all_traffic();
         let kb = allowed_ips_menu(Lang::Ru, sel, None, false);
         let on = kb
             .inline_keyboard

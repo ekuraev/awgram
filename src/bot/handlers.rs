@@ -88,6 +88,7 @@ pub enum Action {
     SetLink(bool),
     // --- Маршруты клиента, AllowedIPs (экран пресетов) ---
     RouteToggle(crate::vpn::validate::RouteKey),
+    RouteMode,
     RouteCustom,
     RouteSkip,
     RouteApply,
@@ -146,6 +147,7 @@ fn parse_callback(data: &str) -> Action {
         "g:new" => Action::GroupCreate,
         "g:selmenu" => Action::GroupSelectMenu,
         "gscope" => Action::GroupScopeAsk,
+        "aip:mode" => Action::RouteMode,
         "aip:custom" => Action::RouteCustom,
         "aip:skip" => Action::RouteSkip,
         "aip:apply" => Action::RouteApply,
@@ -695,12 +697,25 @@ async fn show_routes(
     subnet: Option<&str>,
     current: Option<&str>,
 ) {
-    let pending = crate::vpn::validate::build_allowed_ips(sel, subnet);
+    use crate::vpn::validate::{build_allowed_ips, NetPreset, RouteMode};
+    let pending = build_allowed_ips(sel, subnet);
+    // В режиме исключений итог — два десятка CIDR; в заголовке показываем
+    // сводку «всё, кроме …», сам список уйдёт в конфиг.
+    let excluded = sel
+        .nets()
+        .map(NetPreset::cidr)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let pending = match (sel.mode, pending.as_deref()) {
+        (_, None) => None,
+        (RouteMode::Include, Some(v)) => Some(i18n::RoutePending::Routes(v)),
+        (RouteMode::Exclude, Some(_)) => Some(i18n::RoutePending::AllExcept(&excluded)),
+    };
     edit_or_send(
         bot,
         chat,
         msg_id,
-        i18n::routes_title(lang, ctx.name(), current, pending.as_deref()),
+        i18n::routes_title(lang, ctx.name(), current, pending, sel.mode),
         menu::allowed_ips_menu(lang, sel, subnet, ctx.is_creating()),
     )
     .await;
@@ -745,9 +760,8 @@ fn authorize(action: &Action, role: &Role, settings: &Store) -> bool {
         // открыт всем; правку маршрутов существующего клиента гейтит Modify
         // (owner-only) и повторная проверка роли в самой ветке.
         Menu | List | Add | Stats | Page(_) | Expiry(_) | AddPsk(_) | Lang(_)
-        | SetListFilter(_) | RouteToggle(_) | RouteCustom | RouteSkip | RouteApply | Unknown => {
-            true
-        }
+        | SetListFilter(_) | RouteToggle(_) | RouteMode | RouteCustom | RouteSkip | RouteApply
+        | Unknown => true,
         // Экран/установка текущей группы: только GA, группа — только своя.
         GroupSelectMenu => matches!(role, Role::GroupAdmin(_)),
         GroupSelect(id) => matches!(role, Role::GroupAdmin(groups) if groups.contains(id)),
@@ -3178,7 +3192,7 @@ async fn callback_handler(
                 })
                 .await?;
         }
-        Action::RouteToggle(key) => {
+        Action::RouteToggle(_) | Action::RouteMode => {
             let State::AwaitingRoutes {
                 ctx,
                 mut sel,
@@ -3196,7 +3210,10 @@ async fn callback_handler(
                 .await;
                 return Ok(());
             };
-            sel.toggle(key);
+            match action {
+                Action::RouteToggle(key) => sel.toggle(key),
+                _ => sel.toggle_mode(),
+            }
             show_routes(
                 &bot,
                 chat,
@@ -5090,10 +5107,10 @@ mod tests {
             menu::cancel_menu(Lang::Ru),
             menu::allowed_ips_menu(
                 Lang::Ru,
-                crate::vpn::validate::RouteSelection {
-                    net10: true,
-                    ..crate::vpn::validate::RouteSelection::default()
-                },
+                crate::vpn::validate::RouteSelection::with_nets(
+                    crate::vpn::validate::RouteMode::Include,
+                    &[crate::vpn::validate::NetPreset::Net10],
+                ),
                 Some("10.9.9.0/24"),
                 true,
             ),
@@ -5181,7 +5198,10 @@ mod tests {
             SetConf(false),
             SetQr(false),
             SetLink(false),
-            RouteToggle(crate::vpn::validate::RouteKey::Net10),
+            RouteToggle(crate::vpn::validate::RouteKey::Net(
+                crate::vpn::validate::NetPreset::Net10,
+            )),
+            RouteMode,
             RouteCustom,
             RouteSkip,
             RouteApply,
@@ -5274,6 +5294,7 @@ mod tests {
                 SetQr(_) => {}
                 SetLink(_) => {}
                 RouteToggle(_) => {}
+                RouteMode => {}
                 RouteCustom => {}
                 RouteSkip => {}
                 RouteApply => {}
@@ -5337,10 +5358,13 @@ mod tests {
             (Action::Expiry("1d".into()), true, true),
             (Action::AddPsk(true), true, true),
             (
-                Action::RouteToggle(crate::vpn::validate::RouteKey::Net10),
+                Action::RouteToggle(crate::vpn::validate::RouteKey::Net(
+                    crate::vpn::validate::NetPreset::Net10,
+                )),
                 true,
                 true,
             ),
+            (Action::RouteMode, true, true),
             (Action::RouteCustom, true, true),
             (Action::RouteSkip, true, true),
             (Action::RouteApply, true, true),
@@ -5476,18 +5500,22 @@ mod tests {
 
     #[test]
     fn parse_callback_route_toggles_and_actions() {
-        use crate::vpn::validate::RouteKey;
+        use crate::vpn::validate::{NetPreset, RouteKey};
         assert_eq!(
             parse_callback("aip:t:10"),
-            Action::RouteToggle(RouteKey::Net10)
+            Action::RouteToggle(RouteKey::Net(NetPreset::Net10))
         );
         assert_eq!(
             parse_callback("aip:t:172"),
-            Action::RouteToggle(RouteKey::Net172)
+            Action::RouteToggle(RouteKey::Net(NetPreset::Net172))
         );
         assert_eq!(
             parse_callback("aip:t:192"),
-            Action::RouteToggle(RouteKey::Net192)
+            Action::RouteToggle(RouteKey::Net(NetPreset::Net192))
+        );
+        assert_eq!(
+            parse_callback("aip:t:192.1"),
+            Action::RouteToggle(RouteKey::Net(NetPreset::Net192_1))
         );
         assert_eq!(
             parse_callback("aip:t:vpn"),
@@ -5504,6 +5532,7 @@ mod tests {
         assert_eq!(parse_callback("aip:custom"), Action::RouteCustom);
         assert_eq!(parse_callback("aip:skip"), Action::RouteSkip);
         assert_eq!(parse_callback("aip:apply"), Action::RouteApply);
+        assert_eq!(parse_callback("aip:mode"), Action::RouteMode);
     }
 
     #[test]
