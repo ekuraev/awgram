@@ -3,7 +3,13 @@
 🇷🇺 Русский · [🇬🇧 English](README.en.md)
 
 [![CI](https://github.com/ekuraev/awgram/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ekuraev/awgram/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/ekuraev/awgram)](https://github.com/ekuraev/awgram/releases)
+[![Release](https://img.shields.io/github/v/release/ekuraev/awgram?logo=github&label=release)](https://github.com/ekuraev/awgram/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/ekuraev/awgram/total?logo=github&label=downloads)](https://github.com/ekuraev/awgram/releases)
+[![Discussions](https://img.shields.io/github/discussions/ekuraev/awgram?logo=github&label=discussions)](https://github.com/ekuraev/awgram/discussions)
+<br>
+[![Platform](https://img.shields.io/badge/linux-amd64%20%7C%20arm64-informational?logo=linux&logoColor=white)](https://github.com/ekuraev/awgram/releases/latest)
+[![Rust](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fekuraev%2Fawgram%2Fmain%2FCargo.toml&query=%24.package.rust-version&prefix=%E2%89%A5%20&label=rust&logo=rust&color=orange)](Cargo.toml)
+[![Installer](https://img.shields.io/badge/amneziawg--installer-%E2%89%A5%20v5.21.0%20%C2%B7%20tested%20v5.31.0-blue)](docs/compat.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Telegram-бот на Rust для управления клиентами [AmneziaWG](https://amnezia.org/) прямо
@@ -67,7 +73,8 @@ Telegram-бот на Rust для управления клиентами [Amnezi
 - 🔁 **Перезапуск сервиса** и 🛠 **починка модуля ядра** (DKMS rebuild).
 - 💾 **Бэкапы**: по расписанию с ротацией и отчётами, комментарии
   и закрепление, восстановление AmneziaWG и, по желанию, БД бота
-  (группы, статистика), загрузка бэкапа файлом.
+  (группы, статистика), загрузка бэкапа файлом. Нюансы hardened-режима
+  и ручное восстановление — в [docs/operations.md](docs/operations.md).
 
 ### Настройки и безопасность
 
@@ -82,17 +89,17 @@ Telegram-бот на Rust для управления клиентами [Amnezi
   напрямую недоступен; подробности и альтернатива через маршрутизацию —
   в [docs/proxy.md](docs/proxy.md).
 
-- ⚠️ **Бэкапы в hardened-режиме**: архивы инсталлера создаются с `chmod 600`
-  и пользователю `awgram` недоступны, поэтому бэкапы через бота полноценно
-  работают в root-режиме. В hardened нужно вручную открыть архивы на чтение
-  (`setfacl -m u:awgram:r /root/awg/backups/*.tar.gz`) или дождаться
-  обновления инсталлера.
-- 🧰 **Ручное восстановление из бандла**, если сам бот недоступен:
+## Требования
 
-  ```bash
-  tar -xzf awgram_backup_<ts>.tar.gz awg/ \
-    && sudo bash /root/awg/manage_amneziawg.sh restore awg/awg_backup_<ts>.tar.gz
-  ```
+- Linux-VPS на amd64 или arm64 с systemd; root или sudo на время установки.
+- Нативный AmneziaWG, поставленный
+  [bivlked/amneziawg-installer](https://github.com/bivlked/amneziawg-installer)
+  версии v5.21.0 и новее (сверено с v5.31.0, см.
+  [docs/compat.md](docs/compat.md)).
+- Токен бота от [@BotFather](https://t.me/BotFather) и числовые Telegram ID
+  администраторов.
+- Доступ с сервера к `api.telegram.org` — напрямую или через прокси
+  ([docs/proxy.md](docs/proxy.md)).
 
 ## Быстрый старт
 
@@ -120,18 +127,8 @@ curl -fsSL https://github.com/ekuraev/awgram/releases/latest/download/install.sh
 командой без `--token`.
 
 Управление после установки: `awgram-setup update | config | status | uninstall`.
-
-Предрелизные сборки — доступны начиная с **v0.7.0**: `awgram-setup update
---channel rc` (выбор запоминается, канал rc видит и стабильные релизы;
-вернуться — `awgram-setup update --channel stable`). Если на сервере
-`awgram-setup` старше v0.7.0, флага `--channel` у него ещё нет — либо
-выполните обычный `awgram-setup update` (он обновит и сам скрипт), либо
-поставьте rc сразу однострочником из нужного релиза:
-
-```bash
-curl -fsSL https://github.com/ekuraev/awgram/releases/download/vX.Y.Z-rc.N/install.sh \
-  | bash -s -- update --channel rc
-```
+Предрелизные сборки — `awgram-setup update --channel rc`; подробнее о каналах
+обновлений — в [docs/operations.md](docs/operations.md#каналы-обновлений).
 
 ## Как это работает
 
@@ -146,54 +143,18 @@ webhook), который живёт на том же VPS, что и VPN. Кон�
 
 Бот — надстройка над `manage_amneziawg.sh` из
 [bivlked/amneziawg-installer](https://github.com/bivlked/amneziawg-installer)
-и напрямую зависит от его интерфейса.
+и напрямую зависит от его `--json`-интерфейса.
 
-- **Поддерживаемая версия инсталлера:
-  [v5.31.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.31.0)**
-  (сверен `--json`-контракт). Минимальная —
-  [v5.21.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.21.0);
-  более старые v5.20.x не поддерживаются — бот использует расширенный
-  `--json`-интерфейс команд управления, появившийся в v5.21.0.
-  v5.21.1–v5.31.0 JSON-контракт не ломали: v5.21.1/v5.21.2 — багфиксы
-  валидации, v5.22.0 добавил в `regen`/`check` предупреждение о рассинхроне
-  `awgsetup_cfg.init` (уходит в stderr, stdout-JSON не затронут),
-  v5.23.0 — изменения только в установщике (модуль ядра на старых ядрах),
-  v5.24.0 добавил аддитивное поле `module.version` в `check --json`,
-  v5.25.0 — только новые предупреждения, и все они уходят в stderr,
-  v5.26.0 — только каскадный скрипт маршрутизации и диагностический отчёт,
-  v5.27.0 — только установщик (согласие на удаление пакетов),
-  v5.27.1 поменял `manage_amneziawg.sh`: `modify`/`regen` нормализуют
-  списки `AllowedIPs`/`DNS` к виду «a, b, c», `regen` больше не схлопывает
-  их; конверты не тронуты — `value` в ответе `modify` остаётся присланным
-  значением, новые сообщения уходят в stderr, а бот и так шлёт списки
-  в каноническом виде; v5.28.0–v5.29.0 — только установщик (защита
-  загрузочных пакетов при обновлении системы, маскирование ключей
-  в диагностическом отчёте), подписи релизов и документация —
-  в `manage_amneziawg.sh` сменился лишь номер версии;
-  v5.30.0 ограничил все обращения к интерфейсу таймаутом и перестал
-  выдавать непрочитанное состояние за измеренное — `list --json` при
-  неудачном чтении оставляет клиентам `no_data` вместо «нет handshake»
-  (бот этот статус понимает и красит жёлтым), а `check --json` отдаёт
-  пустой `interface.addresses`, на что бот реагирует штатно: пресет
-  подсети VPN не показывается, массовая генерация сообщает о недоступной
-  ёмкости; v5.31.0 определяет полный туннель покрытием маршрутов, поэтому
-  дефолтный режим «Amnezia» получает `::/0`, а `modify` предупреждает,
-  если ему передали полный туннель без `::/0` — бот в пресете «весь
-  трафик» шлёт `0.0.0.0/0, ::/0`, так что предупреждение не срабатывает.
-  Все новые сообщения обоих релизов уходят в stderr, конверты `--json`
-  не изменились.
-- Используемые подкоманды: `add`, `remove`, `list`, `stats`, `regen`,
-  `modify`, `backup`, `restore`, `check`, `restart`, `repair-module` —
-  все с `--json`.
-- **Необязательный `add --allowed-ips`**
-  ([Issue #253](https://github.com/bivlked/amneziawg-installer/issues/253))
-  — индивидуальные маршруты клиента одной командой вместе с созданием. Бот
-  определяет наличие флага по справке самого скрипта (`--help`, ничего не
-  меняет), а не по номеру версии: релиз с флагом заранее не известен, а на
-  полуобновлённом сервере номер и реальность расходятся. Нет флага — работает
-  прежний путь `add` + `modify`, минимальная версия не меняется. У массовой
-  генерации отката нет: там `modify` пришлось бы звать на каждого клиента,
-  поэтому без флага шаг маршрутов не показывается.
+- **Поддерживаемая версия — [v5.31.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.31.0)**
+  (сверен `--json`-контракт), минимальная —
+  [v5.21.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.21.0).
+- Подкоманды: `add`, `remove`, `list`, `stats`, `regen`, `modify`, `backup`,
+  `restore`, `check`, `restart`, `repair-module` — все с `--json`.
+- Необязательный `add --allowed-ips` определяется по справке скрипта, а не по
+  версии; без него работает путь `add` + `modify`.
+
+Что менялось в каждой версии инсталлера и как это отразилось на боте — в
+[docs/compat.md](docs/compat.md).
 
 ## Сборка из исходников
 
@@ -207,6 +168,22 @@ cargo build --release                 # target/release/awgram
 
 Релизы на тег `v*` собирают бинарники amd64+arm64 c `sha256`-суммами
 автоматически.
+
+## Сообщество
+
+- 💬 Вопросы и обсуждения — [Discussions](https://github.com/ekuraev/awgram/discussions).
+- 🐞 Баги и идеи — [Issues](https://github.com/ekuraev/awgram/issues/new/choose)
+  по шаблонам; дорожная карта — [открытые предложения](https://github.com/ekuraev/awgram/issues?q=is%3Aissue+is%3Aopen+label%3Aenhancement).
+- 🔐 Уязвимости — приватно, по [SECURITY.md](SECURITY.md).
+- 🤝 Вклад — [CONTRIBUTING.md](CONTRIBUTING.md); история изменений —
+  [CHANGELOG.md](CHANGELOG.md).
+
+## Благодарности
+
+- [bivlked/amneziawg-installer](https://github.com/bivlked/amneziawg-installer) —
+  инсталлер и `manage_amneziawg.sh`, на которые опирается бот.
+- [Amnezia](https://amnezia.org/) — за AmneziaWG.
+- [teloxide](https://github.com/teloxide/teloxide) — Telegram Bot API на Rust.
 
 ## Лицензия
 

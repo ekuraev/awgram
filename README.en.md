@@ -3,7 +3,13 @@
 [🇷🇺 Русский](README.md) · 🇬🇧 English
 
 [![CI](https://github.com/ekuraev/awgram/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ekuraev/awgram/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/ekuraev/awgram)](https://github.com/ekuraev/awgram/releases)
+[![Release](https://img.shields.io/github/v/release/ekuraev/awgram?logo=github&label=release)](https://github.com/ekuraev/awgram/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/ekuraev/awgram/total?logo=github&label=downloads)](https://github.com/ekuraev/awgram/releases)
+[![Discussions](https://img.shields.io/github/discussions/ekuraev/awgram?logo=github&label=discussions)](https://github.com/ekuraev/awgram/discussions)
+<br>
+[![Platform](https://img.shields.io/badge/linux-amd64%20%7C%20arm64-informational?logo=linux&logoColor=white)](https://github.com/ekuraev/awgram/releases/latest)
+[![Rust](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fekuraev%2Fawgram%2Fmain%2FCargo.toml&query=%24.package.rust-version&prefix=%E2%89%A5%20&label=rust&logo=rust&color=orange)](Cargo.toml)
+[![Installer](https://img.shields.io/badge/amneziawg--installer-%E2%89%A5%20v5.21.0%20%C2%B7%20tested%20v5.31.0-blue)](docs/compat.en.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A Rust Telegram bot for managing [AmneziaWG](https://amnezia.org/) clients
@@ -68,7 +74,8 @@ tangible on budget VPS hosts.
 - 🔁 **Restart service** and 🛠 **kernel module repair** (DKMS rebuild).
 - 💾 **Backups**: scheduled with rotation and reports, comments and
   pinning, restore AmneziaWG and, optionally, the bot's own database
-  (groups, stats), backup download as a file.
+  (groups, stats), backup download as a file. Hardened-mode caveats and
+  manual restore are covered in [docs/operations.en.md](docs/operations.en.md).
 
 ### Settings & security
 
@@ -82,17 +89,17 @@ tangible on budget VPS hosts.
   servers where the Bot API is unreachable directly; details and the
   routing-based alternative in [docs/proxy.en.md](docs/proxy.en.md).
 
-- ⚠️ **Backups in hardened mode**: the installer creates its archives with
-  `chmod 600`, unreadable by the `awgram` user, so backups through the bot
-  fully work in root mode. In hardened mode grant read access manually
-  (`setfacl -m u:awgram:r /root/awg/backups/*.tar.gz`) or wait for an
-  installer update.
-- 🧰 **Manual restore from a bundle** when the bot itself is unavailable:
+## Requirements
 
-  ```bash
-  tar -xzf awgram_backup_<ts>.tar.gz awg/ \
-    && sudo bash /root/awg/manage_amneziawg.sh restore awg/awg_backup_<ts>.tar.gz
-  ```
+- A Linux VPS on amd64 or arm64 with systemd; root or sudo during install.
+- Native AmneziaWG set up by
+  [bivlked/amneziawg-installer](https://github.com/bivlked/amneziawg-installer)
+  v5.21.0 or newer (verified against v5.31.0, see
+  [docs/compat.en.md](docs/compat.en.md)).
+- A bot token from [@BotFather](https://t.me/BotFather) and the numeric
+  Telegram IDs of the administrators.
+- Access from the server to `api.telegram.org` — directly or via a proxy
+  ([docs/proxy.en.md](docs/proxy.en.md)).
 
 ## Quick start
 
@@ -120,18 +127,8 @@ history) — `export AWGRAM_TOKEN='TOKEN'` before the same command without
 `--token` instead.
 
 Post-install management: `awgram-setup update | config | status | uninstall`.
-
-Pre-release builds — available since **v0.7.0**: `awgram-setup update
---channel rc` (the choice is sticky, the rc channel also sees stable
-releases; to return run `awgram-setup update --channel stable`). If the
-server's `awgram-setup` is older than v0.7.0, it has no `--channel` flag
-yet — either run a plain `awgram-setup update` (it updates the script
-itself too), or install an rc right away with a one-liner from the release:
-
-```bash
-curl -fsSL https://github.com/ekuraev/awgram/releases/download/vX.Y.Z-rc.N/install.sh \
-  | bash -s -- update --channel rc
-```
+Pre-release builds: `awgram-setup update --channel rc`; update channels are
+described in [docs/operations.en.md](docs/operations.en.md#update-channels).
 
 ## How it works
 
@@ -147,54 +144,18 @@ the logs.
 
 The bot is a layer on top of `manage_amneziawg.sh` from
 [bivlked/amneziawg-installer](https://github.com/bivlked/amneziawg-installer)
-and depends directly on its interface.
+and depends directly on its `--json` interface.
 
-- **Supported installer version:
-  [v5.31.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.31.0)**
-  (`--json` contract verified). Minimum is
-  [v5.21.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.21.0);
-  older v5.20.x releases are not supported — the bot uses the extended
-  `--json` interface for management commands introduced in v5.21.0.
-  v5.21.1–v5.31.0 keep the JSON contract intact: v5.21.1/v5.21.2 are
-  validation bugfixes, v5.22.0 added an `awgsetup_cfg.init` drift warning
-  to `regen`/`check` (goes to stderr, stdout JSON untouched), v5.23.0
-  only changes the installers (kernel module handling on older kernels),
-  v5.24.0 added an additive `module.version` field to `check --json`,
-  v5.25.0 adds only new warnings, all of which go to stderr, v5.26.0 only
-  touches the cascade routing script and the diagnostic report,
-  v5.27.0 only changes the installer (package-removal consent),
-  v5.27.1 changes `manage_amneziawg.sh`: `modify`/`regen` normalize the
-  `AllowedIPs`/`DNS` lists to the canonical "a, b, c" form and `regen`
-  no longer collapses them; the envelopes are untouched — the `modify`
-  reply still echoes `value` as sent, new messages go to stderr, and the
-  bot already sends lists in the canonical form; v5.28.0–v5.29.0 only
-  touch the installer (boot-critical package protection during the system
-  upgrade, key masking in the diagnostic report), release signing and
-  docs — `manage_amneziawg.sh` changed nothing but its version number;
-  v5.30.0 bounds every interface call by a timeout and stops reporting an
-  unread state as a measured one — on a failed read `list --json` leaves
-  clients at `no_data` instead of "no handshake" (the bot understands that
-  status and marks it yellow), and `check --json` returns an empty
-  `interface.addresses`, which the bot degrades on gracefully: the VPN
-  subnet preset is hidden and bulk creation reports capacity as
-  unavailable; v5.31.0 decides a full tunnel by route coverage, so the
-  default "Amnezia" mode now gets `::/0`, and `modify` warns when it is
-  handed a full tunnel without `::/0` — the bot's "all traffic" preset
-  sends `0.0.0.0/0, ::/0`, so that warning never fires. All new messages
-  from both releases go to stderr and the `--json` envelopes are
-  unchanged.
-- Subcommands used: `add`, `remove`, `list`, `stats`, `regen`, `modify`,
-  `backup`, `restore`, `check`, `restart`, `repair-module` — all with `--json`.
-- **Optional `add --allowed-ips`**
-  ([Issue #253](https://github.com/bivlked/amneziawg-installer/issues/253))
-  — per-client routes set by the same call that creates the client. The bot
-  detects the flag from the script's own help (`--help`, which changes
-  nothing) rather than from a version number: the release carrying the flag is
-  not known in advance, and on a half-updated server the number and reality
-  disagree. Without the flag the old `add` + `modify` path is used and the
-  minimum version stays the same. Bulk creation has no fallback, since
-  `modify` would have to run once per client, so the routes step is hidden
-  there.
+- **Supported version — [v5.31.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.31.0)**
+  (`--json` contract verified), minimum —
+  [v5.21.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.21.0).
+- Subcommands: `add`, `remove`, `list`, `stats`, `regen`, `modify`, `backup`,
+  `restore`, `check`, `restart`, `repair-module` — all with `--json`.
+- The optional `add --allowed-ips` is detected from the script's help rather
+  than its version; without it the `add` + `modify` path is used.
+
+What changed in each installer release and how it affected the bot — in
+[docs/compat.en.md](docs/compat.en.md).
 
 ## Building from source
 
@@ -208,6 +169,22 @@ cargo build --release                 # target/release/awgram
 
 Releases on a `v*` tag build amd64+arm64 binaries with `sha256` checksums
 automatically.
+
+## Community
+
+- 💬 Questions and discussion — [Discussions](https://github.com/ekuraev/awgram/discussions).
+- 🐞 Bugs and ideas — [Issues](https://github.com/ekuraev/awgram/issues/new/choose)
+  via the templates; roadmap — [open proposals](https://github.com/ekuraev/awgram/issues?q=is%3Aissue+is%3Aopen+label%3Aenhancement).
+- 🔐 Vulnerabilities — privately, per [SECURITY.md](SECURITY.md).
+- 🤝 Contributing — [CONTRIBUTING.md](CONTRIBUTING.md); change history —
+  [CHANGELOG.md](CHANGELOG.md).
+
+## Acknowledgements
+
+- [bivlked/amneziawg-installer](https://github.com/bivlked/amneziawg-installer) —
+  the installer and `manage_amneziawg.sh` the bot builds upon.
+- [Amnezia](https://amnezia.org/) — for AmneziaWG.
+- [teloxide](https://github.com/teloxide/teloxide) — Telegram Bot API in Rust.
 
 ## License
 
