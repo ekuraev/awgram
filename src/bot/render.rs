@@ -6,6 +6,27 @@ use crate::i18n::{self, html_escape, Lang};
 use crate::store::{EventRow, TrafficSummary};
 use crate::vpn::model::{format_expiry, format_handshake, human_bytes, AddResult, Client};
 
+/// Символ «пустого» шрифта Braille: невидим, но занимает ширину, и Telegram
+/// не обрезает его как пробел в конце сообщения.
+pub const WIDTH_SPACER_CHAR: char = '\u{2800}';
+/// Длина строки-распорки. Подобрана так, чтобы пузырь на десктопе растягивался
+/// до естественной ширины главного меню; на телефоне пузырь и так широкий.
+pub const WIDTH_SPACER_LEN: usize = 50;
+
+/// Добавляет к тексту невидимую строку-распорку.
+///
+/// Ширину инлайн-клавиатуры задаёт клиент Telegram по ширине пузыря: короткий
+/// заголовок даёт широкое меню, многострочный текст с недлинными строками —
+/// узкое, с обрезанными подписями. Распорка делает самую длинную строку
+/// одинаковой на всех экранах, и клавиатура перестаёт «плавать».
+pub fn pad_width(text: &str) -> String {
+    let spacer: String = std::iter::repeat_n(WIDTH_SPACER_CHAR, WIDTH_SPACER_LEN).collect();
+    if text.ends_with(&spacer) {
+        return text.to_string();
+    }
+    format!("{text}\n{spacer}")
+}
+
 pub fn format_client_card(
     lang: Lang,
     c: &Client,
@@ -492,6 +513,30 @@ mod tests {
         ];
         let text = format_client_history(Lang::Ru, "alice", &events, now);
         assert!(text.contains("(1 ч)")); // сессия 3600 с = 60 мин
+    }
+
+    #[test]
+    fn pad_width_appends_spacer_line() {
+        let out = pad_width("hello");
+        assert!(
+            out.starts_with("hello\n"),
+            "текст сохраняется, распорка — отдельной строкой"
+        );
+        let spacer = &out["hello\n".len()..];
+        assert_eq!(spacer.chars().count(), WIDTH_SPACER_LEN);
+        assert!(spacer.chars().all(|c| c == WIDTH_SPACER_CHAR));
+    }
+
+    #[test]
+    fn pad_width_is_idempotent() {
+        let once = pad_width("hello");
+        assert_eq!(pad_width(&once), once);
+    }
+
+    #[test]
+    fn pad_width_spacer_is_html_safe() {
+        let out = pad_width("x");
+        assert!(!out[1..].contains(['<', '>', '&']));
     }
 
     #[test]

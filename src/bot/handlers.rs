@@ -527,6 +527,7 @@ async fn edit_or_send(
     text: String,
     kb: InlineKeyboardMarkup,
 ) {
+    let text = render::pad_width(&text);
     let edit = bot
         .edit_message_text(chat, msg_id, text.clone())
         .reply_markup(kb.clone())
@@ -675,7 +676,7 @@ async fn finish_below(
 ) {
     let _ = bot.delete_message(chat, msg_id).await;
     let _ = bot
-        .send_message(chat, text)
+        .send_message(chat, render::pad_width(&text))
         .reply_markup(kb)
         .parse_mode(ParseMode::Html)
         .await;
@@ -1174,10 +1175,13 @@ async fn message_handler(
                 // multi по факту: пользователь мог уже быть админом других
                 // групп — кнопку смены группы прячем только при единственной.
                 let multi = settings.admin_group_ids(uid).len() > 1;
-                bot.send_message(msg.chat.id, i18n::joined_group(lang, &gname))
-                    .parse_mode(ParseMode::Html)
-                    .reply_markup(menu::ga_main_menu(lang, multi))
-                    .await?;
+                bot.send_message(
+                    msg.chat.id,
+                    render::pad_width(&i18n::joined_group(lang, &gname)),
+                )
+                .parse_mode(ParseMode::Html)
+                .reply_markup(menu::ga_main_menu(lang, multi))
+                .await?;
                 // Уведомить владельцев о новом админе.
                 for owner in &cfg.admin_ids {
                     let _ = bot
@@ -1192,10 +1196,13 @@ async fn message_handler(
             crate::store::InviteUse::AlreadyAdmin(gid) => {
                 let gname = settings.group(gid).map(|g| g.name).unwrap_or_default();
                 let multi = settings.admin_group_ids(uid).len() > 1;
-                bot.send_message(msg.chat.id, i18n::joined_group(lang, &gname))
-                    .parse_mode(ParseMode::Html)
-                    .reply_markup(menu::ga_main_menu(lang, multi))
-                    .await?;
+                bot.send_message(
+                    msg.chat.id,
+                    render::pad_width(&i18n::joined_group(lang, &gname)),
+                )
+                .parse_mode(ParseMode::Html)
+                .reply_markup(menu::ga_main_menu(lang, multi))
+                .await?;
             }
             crate::store::InviteUse::Invalid => {
                 bot.send_message(msg.chat.id, i18n::invite_invalid(lang))
@@ -1948,21 +1955,27 @@ async fn message_handler(
                     Role::GroupAdmin(groups) => match current_ga_group(&settings, uid, groups) {
                         Some(gid) => {
                             let gname = settings.group(gid).map(|g| g.name).unwrap_or_default();
-                            bot.send_message(msg.chat.id, i18n::ga_menu_title(lang, &gname))
-                                .reply_markup(menu::ga_main_menu(lang, groups.len() > 1))
-                                .parse_mode(ParseMode::Html)
-                                .await?;
+                            bot.send_message(
+                                msg.chat.id,
+                                render::pad_width(&i18n::ga_menu_title(lang, &gname)),
+                            )
+                            .reply_markup(menu::ga_main_menu(lang, groups.len() > 1))
+                            .parse_mode(ParseMode::Html)
+                            .await?;
                         }
                         None => {
                             let rows: Vec<_> =
                                 groups.iter().filter_map(|g| settings.group(*g)).collect();
-                            bot.send_message(msg.chat.id, i18n::select_group_title(lang))
-                                .reply_markup(menu::group_select_menu(lang, &rows))
-                                .await?;
+                            bot.send_message(
+                                msg.chat.id,
+                                render::pad_width(&i18n::select_group_title(lang)),
+                            )
+                            .reply_markup(menu::group_select_menu(lang, &rows))
+                            .await?;
                         }
                     },
                     _ => {
-                        bot.send_message(msg.chat.id, i18n::menu_title(lang))
+                        bot.send_message(msg.chat.id, render::pad_width(&i18n::menu_title(lang)))
                             .reply_markup(menu::main_menu(lang))
                             .parse_mode(ParseMode::Html)
                             .await?;
