@@ -3,6 +3,34 @@
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версионирование — [SemVer](https://semver.org/lang/ru/).
 Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning — [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### 🇷🇺 Русский
+
+#### 🐛 Исправлено
+
+- **Групповой фильтр списка клиентов больше не невидим.** Кнопка «🗂» и
+  «👥 Клиенты группы» в карточке группы ставят владельцу липкий фильтр по
+  группе, а список при этом выглядел как обычный: заголовок «Клиенты:»,
+  фильтр «✅ Все» — и один клиент из четырёх без объяснений. Теперь заголовок
+  показывает группу и счётчик («Клиенты — 🗂 family (1 из 4)»), кнопка «🗂»
+  несёт имя группы, на экране «Показывать клиентов» текущий пункт отмечен ✅.
+  Фильтр на удалённую группу сбрасывается на «Все группы», а не прячет всех
+  клиентов насовсем.
+
+### 🇬🇧 English
+
+#### 🐛 Fixed
+
+- **The group filter of the client list is no longer invisible.** The «🗂»
+  button and «👥 Group clients» on a group card set a sticky per-group filter
+  for the owner, yet the list looked ordinary: the «Clients:» title, the
+  «✅ All» filter — and one client out of four with no explanation. The title
+  now shows the group and a counter («Clients — 🗂 family (1 of 4)»), the «🗂»
+  button carries the group name, and the current choice is marked ✅ on the
+  «Show clients» screen. A filter pointing at a deleted group falls back to
+  «All groups» instead of hiding every client for good.
+
 ## [0.11.0] — 2026-09-05
 
 ### 🇷🇺 Русский
