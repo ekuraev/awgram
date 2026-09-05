@@ -3,7 +3,7 @@
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версионирование — [SemVer](https://semver.org/lang/ru/).
 Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning — [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [0.11.1] — 2026-09-05
 
 ### 🇷🇺 Русский
 
@@ -806,6 +806,7 @@ config paths have changed. On a running VPS, perform once:
 - Environment diagnostics (🔬 button), ⏳ client expiry badges.
 - RU/EN localization, PSK default, backup/restore, persistent state.
 
+[0.11.1]: https://github.com/ekuraev/awgram/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/ekuraev/awgram/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/ekuraev/awgram/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/ekuraev/awgram/compare/v0.9.0...v0.10.0
