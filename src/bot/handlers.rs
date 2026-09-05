@@ -2529,6 +2529,7 @@ fn empty_list_screen(
     total: usize,
     filter: crate::vpn::model::ClientFilter,
     is_owner: bool,
+    scope_label: Option<&str>,
     home: InlineKeyboardMarkup,
 ) -> (String, InlineKeyboardMarkup) {
     if total == 0 {
@@ -2536,8 +2537,32 @@ fn empty_list_screen(
     } else {
         (
             i18n::clients_empty_filtered(lang),
-            menu::clients_empty_menu(lang, filter, is_owner),
+            menu::clients_empty_menu(lang, filter, is_owner, scope_label),
         )
+    }
+}
+
+/// Подпись текущего группового скоупа для заголовка списка и кнопки «🗂».
+/// Только владельцу: групповой админ и так видит лишь свою группу, а
+/// подпись со счётчиком «из N» раскрыла бы ему число клиентов всего сервера.
+fn scope_label_for(
+    lang: Lang,
+    settings: &Store,
+    scope: ListScope,
+    is_owner: bool,
+) -> Option<String> {
+    if !is_owner {
+        return None;
+    }
+    match scope {
+        ListScope::All => None,
+        ListScope::NoGroup => Some(i18n::no_group_label(lang)),
+        ListScope::Group(g) => Some(
+            settings
+                .group(g)
+                .map(|g| g.name)
+                .unwrap_or_else(|| format!("#{g}")),
+        ),
     }
 }
 
@@ -2576,8 +2601,27 @@ async fn render_clients_list(
                 .into_iter()
                 .filter(|c| scope.admits(settings.client_group(&c.name)))
                 .collect();
+            // Липкий скоуп обязан быть виден: в заголовке и на кнопке «🗂».
+            // Групповому админу подписи нет, и «всего» для него — размер его
+            // группы, а не всего сервера.
+            let scope_label = scope_label_for(lang, settings, scope, is_owner);
+            let total = if is_owner {
+                all_clients.len()
+            } else {
+                all_clients
+                    .iter()
+                    .filter(|c| scope.admits(settings.client_group(&c.name)))
+                    .count()
+            };
             if clients.is_empty() {
-                let (text, kb) = empty_list_screen(lang, all_clients.len(), filter, is_owner, home);
+                let (text, kb) = empty_list_screen(
+                    lang,
+                    all_clients.len(),
+                    filter,
+                    is_owner,
+                    scope_label.as_deref(),
+                    home,
+                );
                 edit_or_send(bot, chat, msg_id, text, kb).await;
                 return;
             }
@@ -2585,8 +2629,13 @@ async fn render_clients_list(
             // по глобальному i, срез по странице дал бы сдвиг меток на страницах > 0.
             let expiries: Vec<Option<i64>> =
                 clients.iter().map(|c| vpn.client_expiry(&c.name)).collect();
-            let title =
-                i18n::clients_title_filtered(lang, filter, clients.len(), all_clients.len());
+            let title = i18n::clients_title_filtered(
+                lang,
+                filter,
+                scope_label.as_deref(),
+                clients.len(),
+                total,
+            );
             edit_or_send(
                 bot,
                 chat,
@@ -2601,6 +2650,7 @@ async fn render_clients_list(
                     8,
                     filter,
                     is_owner,
+                    scope_label.as_deref(),
                 ),
             )
             .await;
@@ -4441,7 +4491,7 @@ async fn callback_handler(
                 chat,
                 msg_id,
                 i18n::scope_title(lang),
-                menu::group_scope_menu(lang, &groups),
+                menu::group_scope_menu(lang, &groups, settings.owner_scope(uid)),
             )
             .await;
         }
@@ -4956,6 +5006,7 @@ mod tests {
             0,
             crate::vpn::model::ClientFilter::All,
             true,
+            None,
             home.clone(),
         );
         assert_eq!(text, i18n::clients_empty(Lang::Ru));
@@ -4971,6 +5022,7 @@ mod tests {
             3,
             crate::vpn::model::ClientFilter::All,
             true,
+            Some("family"),
             menu::main_menu(Lang::Ru),
         );
         assert_eq!(text, i18n::clients_empty_filtered(Lang::Ru));
@@ -5068,6 +5120,7 @@ mod tests {
                 8,
                 crate::vpn::model::ClientFilter::All,
                 true,
+                Some("family"),
             ),
             menu::language_select(),
             menu::settings_menu(Lang::Ru, false, false, false, false, false),
@@ -5101,8 +5154,13 @@ mod tests {
             menu::group_select_menu(Lang::Ru, &[sample_group()]),
             menu::ga_main_menu(Lang::Ru, true),
             menu::move_client_menu(Lang::Ru, "alice", &[sample_group()]),
-            menu::group_scope_menu(Lang::Ru, &[sample_group()]),
-            menu::clients_empty_menu(Lang::Ru, crate::vpn::model::ClientFilter::All, true),
+            menu::group_scope_menu(Lang::Ru, &[sample_group()], ListScope::Group(1)),
+            menu::clients_empty_menu(
+                Lang::Ru,
+                crate::vpn::model::ClientFilter::All,
+                true,
+                Some("family"),
+            ),
             menu::slug_recommend_menu(Lang::Ru),
             menu::cancel_menu(Lang::Ru),
             menu::allowed_ips_menu(

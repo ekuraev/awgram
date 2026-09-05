@@ -159,16 +159,30 @@ pub fn move_client_menu(
 }
 
 /// Экран выбора группового фильтра списка (владелец): все / без группы / группа.
-pub fn group_scope_menu(lang: Lang, groups: &[crate::store::GroupRow]) -> InlineKeyboardMarkup {
+/// Текущий скоуп помечен ✅ — как активный статус-фильтр в `filter_row`.
+pub fn group_scope_menu(
+    lang: Lang,
+    groups: &[crate::store::GroupRow],
+    current: crate::store::ListScope,
+) -> InlineKeyboardMarkup {
+    use crate::store::ListScope;
+    let mark = |s: ListScope| if s == current { "✅ " } else { "" };
     let mut rows = vec![
-        vec![cb(&i18n::btn_scope_all(lang), "gscope:all")],
-        vec![cb(&i18n::no_group_label(lang), "gscope:none")],
+        vec![cb(
+            &format!("{}{}", mark(ListScope::All), i18n::btn_scope_all(lang)),
+            "gscope:all",
+        )],
+        vec![cb(
+            &format!("{}{}", mark(ListScope::NoGroup), i18n::no_group_label(lang)),
+            "gscope:none",
+        )],
     ];
-    rows.extend(
-        groups
-            .iter()
-            .map(|g| vec![cb(&format!("🗂 {}", g.name), &format!("gscope:{}", g.id))]),
-    );
+    rows.extend(groups.iter().map(|g| {
+        vec![cb(
+            &format!("{}🗂 {}", mark(ListScope::Group(g.id)), g.name),
+            &format!("gscope:{}", g.id),
+        )]
+    }));
     rows.push(vec![cb(&i18n::btn_back(lang), "list")]);
     InlineKeyboardMarkup::new(rows)
 }
@@ -413,6 +427,7 @@ pub fn clients_list(
     per_page: usize,
     current_filter: ClientFilter,
     is_owner: bool,
+    scope_label: Option<&str>,
 ) -> InlineKeyboardMarkup {
     if per_page == 0 {
         return InlineKeyboardMarkup::new(vec![vec![cb(&i18n::btn_back(lang), "menu")]]);
@@ -456,9 +471,10 @@ pub fn clients_list(
     rows.push(nav);
     let mut filter_btns = filter_row(lang, current_filter);
     // Кнопка «🗂» — фильтр списка по группе; видна только владельцу
-    // (групповому админу скоуп и так задаёт его текущая группа).
+    // (групповому админу скоуп и так задаёт его текущая группа). Несёт имя
+    // текущего скоупа — липкий фильтр по группе не должен быть невидимым.
     if is_owner {
-        filter_btns.push(cb(&i18n::btn_scope(lang), "gscope"));
+        filter_btns.push(cb(&i18n::btn_scope(lang, scope_label), "gscope"));
     }
     rows.push(filter_btns);
     // «Перевыпустить всех» — глобальное действие, групповому админу не
@@ -478,10 +494,11 @@ pub fn clients_empty_menu(
     lang: Lang,
     current_filter: ClientFilter,
     is_owner: bool,
+    scope_label: Option<&str>,
 ) -> InlineKeyboardMarkup {
     let mut filter_btns = filter_row(lang, current_filter);
     if is_owner {
-        filter_btns.push(cb(&i18n::btn_scope(lang), "gscope"));
+        filter_btns.push(cb(&i18n::btn_scope(lang, scope_label), "gscope"));
     }
     InlineKeyboardMarkup::new(vec![filter_btns, vec![cb(&i18n::btn_back(lang), "menu")]])
 }
@@ -853,6 +870,19 @@ mod tests {
             .collect()
     }
 
+    /// Подпись кнопки с данным callback (первое совпадение).
+    fn label_of(kb: &InlineKeyboardMarkup, data: &str) -> Option<String> {
+        kb.inline_keyboard
+            .iter()
+            .flatten()
+            .find_map(|b| match &b.kind {
+                teloxide::types::InlineKeyboardButtonKind::CallbackData(d) if d == data => {
+                    Some(b.text.clone())
+                }
+                _ => None,
+            })
+    }
+
     #[test]
     fn main_menu_has_expected_actions() {
         let data = all_callback_data(&main_menu(Lang::Ru));
@@ -950,6 +980,7 @@ mod tests {
             10,
             ClientFilter::All,
             true,
+            None,
         ));
         assert!(data.contains(&"regen_all".to_string()));
     }
@@ -978,6 +1009,7 @@ mod tests {
             10,
             ClientFilter::All,
             false,
+            None,
         ));
         assert!(
             data.contains(&"page:0".to_string()),
@@ -1000,7 +1032,17 @@ mod tests {
                 last_handshake: None,
             })
             .collect();
-        let kb = clients_list(Lang::Ru, &clients, &[], 0, 0, 8, ClientFilter::All, false);
+        let kb = clients_list(
+            Lang::Ru,
+            &clients,
+            &[],
+            0,
+            0,
+            8,
+            ClientFilter::All,
+            false,
+            None,
+        );
         // nav-ряд — первый после клиентских (8 клиентов на странице → ряд с индексом 8).
         let nav_row = &kb.inline_keyboard[8];
         let data: Vec<&str> = nav_row
@@ -1031,7 +1073,17 @@ mod tests {
                 last_handshake: None,
             })
             .collect();
-        let kb = clients_list(Lang::Ru, &clients, &[], 0, 2, 8, ClientFilter::All, false);
+        let kb = clients_list(
+            Lang::Ru,
+            &clients,
+            &[],
+            0,
+            2,
+            8,
+            ClientFilter::All,
+            false,
+            None,
+        );
         // Страница 2: клиентские ряды 16..23 (8 шт.) → nav-ряд с индексом 8.
         let nav_row = &kb.inline_keyboard[8];
         let data: Vec<&str> = nav_row
@@ -1093,6 +1145,7 @@ mod tests {
             10,
             ClientFilter::All,
             false,
+            None,
         ));
         assert!(data.contains(&"client:a".to_string()));
         assert!(data.contains(&"client:b".to_string()));
@@ -1111,6 +1164,7 @@ mod tests {
             0,
             ClientFilter::All,
             false,
+            None,
         );
         let data_empty = all_callback_data(&kb_empty);
         assert_eq!(
@@ -1142,7 +1196,17 @@ mod tests {
                 last_handshake: None,
             },
         ];
-        let kb_filled = clients_list(Lang::Ru, &clients, &[], 0, 0, 0, ClientFilter::All, false);
+        let kb_filled = clients_list(
+            Lang::Ru,
+            &clients,
+            &[],
+            0,
+            0,
+            0,
+            ClientFilter::All,
+            false,
+            None,
+        );
         let data_filled = all_callback_data(&kb_filled);
         assert_eq!(
             data_filled,
@@ -1186,6 +1250,7 @@ mod tests {
             10,
             ClientFilter::All,
             false,
+            None,
         ));
         assert!(
             texts
@@ -1247,6 +1312,7 @@ mod tests {
             10,
             ClientFilter::All,
             false,
+            None,
         ));
         assert!(
             texts.iter().any(|t| t.starts_with("🟢 online")),
@@ -1298,6 +1364,7 @@ mod tests {
             10,
             ClientFilter::All,
             false,
+            None,
         ));
         assert!(
             texts
@@ -1336,6 +1403,7 @@ mod tests {
             10,
             ClientFilter::All,
             false,
+            None,
         ));
         assert!(data.contains(&"listfilter:all".to_string()));
         assert!(data.contains(&"listfilter:online".to_string()));
@@ -1365,6 +1433,7 @@ mod tests {
             10,
             ClientFilter::Online,
             false,
+            None,
         ));
         assert!(
             texts_online
@@ -1405,6 +1474,7 @@ mod tests {
             10,
             ClientFilter::All,
             true,
+            None,
         ));
         assert!(with_scope.contains(&"gscope".to_string()));
         let without_scope = all_callback_data(&clients_list(
@@ -1416,6 +1486,7 @@ mod tests {
             10,
             ClientFilter::All,
             false,
+            None,
         ));
         assert!(!without_scope.contains(&"gscope".to_string()));
     }
@@ -1443,6 +1514,7 @@ mod tests {
             10,
             ClientFilter::All,
             true,
+            None,
         ));
         assert!(owner.contains(&"regen_all".to_string()));
         let ga = all_callback_data(&clients_list(
@@ -1454,6 +1526,7 @@ mod tests {
             10,
             ClientFilter::All,
             false,
+            None,
         ));
         assert!(!ga.contains(&"regen_all".to_string()));
     }
@@ -1478,11 +1551,78 @@ mod tests {
             max_clients: None,
             created_at: 0,
         };
-        let data = all_callback_data(&group_scope_menu(Lang::Ru, &[g]));
+        let data = all_callback_data(&group_scope_menu(
+            Lang::Ru,
+            &[g],
+            crate::store::ListScope::All,
+        ));
         assert!(data.contains(&"gscope:all".to_string()));
         assert!(data.contains(&"gscope:none".to_string()));
         assert!(data.contains(&"gscope:5".to_string()));
         assert!(data.contains(&"list".to_string()));
+    }
+
+    #[test]
+    fn group_scope_menu_marks_current_scope() {
+        use crate::store::ListScope;
+        // Текущий скоуп помечен ✅ — как активный фильтр в filter_row; иначе
+        // липкий скоуп невидим и владелец не понимает, почему клиентов «мало».
+        let g = crate::store::GroupRow {
+            id: 5,
+            name: "family".into(),
+            max_clients: None,
+            created_at: 0,
+        };
+        let kb = group_scope_menu(Lang::Ru, std::slice::from_ref(&g), ListScope::Group(5));
+        assert!(label_of(&kb, "gscope:5").unwrap().starts_with("✅ "));
+        assert!(!label_of(&kb, "gscope:all").unwrap().starts_with("✅ "));
+        assert!(!label_of(&kb, "gscope:none").unwrap().starts_with("✅ "));
+        let kb = group_scope_menu(Lang::Ru, std::slice::from_ref(&g), ListScope::NoGroup);
+        assert!(label_of(&kb, "gscope:none").unwrap().starts_with("✅ "));
+        let kb = group_scope_menu(Lang::Ru, std::slice::from_ref(&g), ListScope::All);
+        assert!(label_of(&kb, "gscope:all").unwrap().starts_with("✅ "));
+    }
+
+    #[test]
+    fn clients_list_scope_button_shows_current_scope() {
+        // Кнопка «🗂» несёт имя текущего скоупа; без скоупа — голая «🗂».
+        let clients = vec![Client {
+            name: "a".into(),
+            ip: String::new(),
+            client_ipv6: String::new(),
+            status: String::new(),
+            status_code: "active".into(),
+            rx: 0,
+            tx: 0,
+            last_handshake: None,
+        }];
+        let kb = clients_list(
+            Lang::Ru,
+            &clients,
+            &[],
+            0,
+            0,
+            10,
+            ClientFilter::All,
+            true,
+            Some("family"),
+        );
+        assert_eq!(label_of(&kb, "gscope").unwrap(), "🗂 family");
+        let kb = clients_list(
+            Lang::Ru,
+            &clients,
+            &[],
+            0,
+            0,
+            10,
+            ClientFilter::All,
+            true,
+            None,
+        );
+        assert_eq!(label_of(&kb, "gscope").unwrap(), "🗂");
+        // Пустая выборка — та же индикация.
+        let kb = clients_empty_menu(Lang::Ru, ClientFilter::All, true, Some("family"));
+        assert_eq!(label_of(&kb, "gscope").unwrap(), "🗂 family");
     }
 
     #[test]
@@ -1780,7 +1920,7 @@ mod tests {
         // Тупик #20: пустая выборка при липком фильтре/скоупе обязана
         // оставлять кнопки смены статус-фильтра и группового фильтра —
         // иначе «Без группы» без клиентов запирает раздел клиентов.
-        let data = all_callback_data(&clients_empty_menu(Lang::Ru, ClientFilter::All, true));
+        let data = all_callback_data(&clients_empty_menu(Lang::Ru, ClientFilter::All, true, None));
         assert!(data.contains(&"gscope".to_string()));
         assert!(data.contains(&"listfilter:all".to_string()));
         assert!(data.contains(&"menu".to_string()));
@@ -1788,7 +1928,12 @@ mod tests {
 
     #[test]
     fn clients_empty_menu_hides_scope_for_group_admin() {
-        let data = all_callback_data(&clients_empty_menu(Lang::Ru, ClientFilter::All, false));
+        let data = all_callback_data(&clients_empty_menu(
+            Lang::Ru,
+            ClientFilter::All,
+            false,
+            None,
+        ));
         assert!(!data.contains(&"gscope".to_string()));
         assert!(data.contains(&"listfilter:all".to_string()));
     }

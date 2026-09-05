@@ -530,28 +530,42 @@ pub fn clients_title(lang: Lang) -> String {
 /// Заголовок списка клиентов с индикатором активного фильтра.
 /// `All` (или когда показаны все) → без пометки (как `clients_title`).
 /// Иначе → «👥 Клиенты — 🟢 онлайн (3 из 10)».
+/// Заголовок списка клиентов. `scope_label` — имя группового скоупа
+/// владельца («family», «Без группы»), `None` — все группы. Скоуп показывается
+/// всегда, когда задан: липкий фильтр по группе иначе невидим, и список из
+/// одного клиента выглядит как «все клиенты сервера». Статус-фильтр
+/// показывается, только если он реально что-то отсёк.
 pub fn clients_title_filtered(
     lang: Lang,
     filter: crate::vpn::model::ClientFilter,
+    scope_label: Option<&str>,
     shown: usize,
     total: usize,
 ) -> String {
-    if matches!(filter, crate::vpn::model::ClientFilter::All) || shown == total {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(scope) = scope_label {
+        parts.push(format!("🗂 {}", html_escape(scope)));
+    }
+    if !matches!(filter, crate::vpn::model::ClientFilter::All) && shown != total {
+        let mark = filter.mark();
+        let label = match (lang, filter) {
+            (Lang::Ru, crate::vpn::model::ClientFilter::Online) => "онлайн",
+            (Lang::En, crate::vpn::model::ClientFilter::Online) => "online",
+            (Lang::Ru, crate::vpn::model::ClientFilter::Offline) => "оффлайн",
+            (Lang::En, crate::vpn::model::ClientFilter::Offline) => "offline",
+            (Lang::Ru, crate::vpn::model::ClientFilter::Never) => "никогда",
+            (Lang::En, crate::vpn::model::ClientFilter::Never) => "never",
+            _ => "",
+        };
+        parts.push(format!("{mark} {label}"));
+    }
+    if parts.is_empty() {
         return clients_title(lang);
     }
-    let mark = filter.mark();
-    let label = match (lang, filter) {
-        (Lang::Ru, crate::vpn::model::ClientFilter::Online) => "онлайн",
-        (Lang::En, crate::vpn::model::ClientFilter::Online) => "online",
-        (Lang::Ru, crate::vpn::model::ClientFilter::Offline) => "оффлайн",
-        (Lang::En, crate::vpn::model::ClientFilter::Offline) => "offline",
-        (Lang::Ru, crate::vpn::model::ClientFilter::Never) => "никогда",
-        (Lang::En, crate::vpn::model::ClientFilter::Never) => "never",
-        _ => "",
-    };
+    let parts = parts.join(" · ");
     match lang {
-        Lang::Ru => format!("👥 <b>Клиенты</b> — {mark} {label} ({shown} из {total})"),
-        Lang::En => format!("👥 <b>Clients</b> — {mark} {label} ({shown} of {total})"),
+        Lang::Ru => format!("👥 <b>Клиенты</b> — {parts} ({shown} из {total})"),
+        Lang::En => format!("👥 <b>Clients</b> — {parts} ({shown} of {total})"),
     }
 }
 pub fn not_found(lang: Lang) -> String {
@@ -2338,10 +2352,14 @@ pub fn scope_title(lang: Lang) -> String {
     .to_string()
 }
 /// Кнопка «🗂» в ряду фильтров списка клиентов — открывает `scope_title`
-/// (только владельцу, см. `menu::clients_list`'s `can_scope`).
-pub fn btn_scope(lang: Lang) -> String {
+/// (только владельцу, см. `menu::clients_list`). Несёт имя текущего скоупа,
+/// чтобы липкий фильтр по группе был виден прямо в списке.
+pub fn btn_scope(lang: Lang, scope_label: Option<&str>) -> String {
     let _ = lang;
-    "🗂".to_string()
+    match scope_label {
+        Some(name) => format!("🗂 {name}"),
+        None => "🗂".to_string(),
+    }
 }
 pub fn btn_scope_all(lang: Lang) -> String {
     match lang {
@@ -2893,8 +2911,8 @@ mod tests {
     fn clients_title_all_has_no_filter_label() {
         use crate::vpn::model::ClientFilter;
         // All → как clients_title, без пометки фильтра.
-        let ru = clients_title_filtered(Lang::Ru, ClientFilter::All, 5, 10);
-        let en = clients_title_filtered(Lang::En, ClientFilter::All, 5, 10);
+        let ru = clients_title_filtered(Lang::Ru, ClientFilter::All, None, 5, 10);
+        let en = clients_title_filtered(Lang::En, ClientFilter::All, None, 5, 10);
         assert_eq!(ru, "👥 <b>Клиенты</b>:");
         assert_eq!(en, "👥 <b>Clients</b>:");
     }
@@ -2902,11 +2920,11 @@ mod tests {
     #[test]
     fn clients_title_filtered_shows_label_and_count() {
         use crate::vpn::model::ClientFilter;
-        let ru = clients_title_filtered(Lang::Ru, ClientFilter::Online, 3, 10);
+        let ru = clients_title_filtered(Lang::Ru, ClientFilter::Online, None, 3, 10);
         assert!(ru.contains("🟢"));
         assert!(ru.contains("онлайн"));
         assert!(ru.contains("(3 из 10)"));
-        let en = clients_title_filtered(Lang::En, ClientFilter::Never, 2, 8);
+        let en = clients_title_filtered(Lang::En, ClientFilter::Never, None, 2, 8);
         assert!(en.contains("🟡"));
         assert!(en.contains("never"));
         assert!(en.contains("(2 of 8)"));
@@ -2916,8 +2934,35 @@ mod tests {
     fn clients_title_filtered_shown_equals_total_drops_label() {
         use crate::vpn::model::ClientFilter;
         // Фильтр активен, но показаны все (напр. 3 из 3 онлайн) → без пометки.
-        let ru = clients_title_filtered(Lang::Ru, ClientFilter::Online, 3, 3);
+        let ru = clients_title_filtered(Lang::Ru, ClientFilter::Online, None, 3, 3);
         assert_eq!(ru, "👥 <b>Клиенты</b>:");
+    }
+
+    #[test]
+    fn clients_title_scoped_shows_group_and_count() {
+        use crate::vpn::model::ClientFilter;
+        // Групповой скоуп владельца обязан быть виден в заголовке даже при
+        // фильтре «Все»: иначе список из одного клиента выглядит как «все
+        // клиенты сервера» (реальный кейс: 1 показан, 4 на сервере).
+        let ru = clients_title_filtered(Lang::Ru, ClientFilter::All, Some("family"), 1, 4);
+        assert!(ru.contains("🗂 family"), "{ru}");
+        assert!(ru.contains("(1 из 4)"), "{ru}");
+        // Скоуп показывается и когда в группе все клиенты сервера.
+        let full = clients_title_filtered(Lang::En, ClientFilter::All, Some("family"), 4, 4);
+        assert!(full.contains("🗂 family"), "{full}");
+        assert!(full.contains("(4 of 4)"), "{full}");
+        // Скоуп + статус-фильтр — обе пометки.
+        let both = clients_title_filtered(Lang::Ru, ClientFilter::Online, Some("family"), 1, 4);
+        assert!(both.contains("🗂 family"), "{both}");
+        assert!(both.contains("🟢 онлайн"), "{both}");
+        // Имя группы экранируется (HTML parse mode).
+        let esc = clients_title_filtered(Lang::Ru, ClientFilter::All, Some("<x>"), 1, 4);
+        assert!(esc.contains("&lt;x&gt;"), "{esc}");
+        // Без скоупа и без фильтра — прежний короткий заголовок.
+        assert_eq!(
+            clients_title_filtered(Lang::Ru, ClientFilter::All, None, 4, 4),
+            "👥 <b>Клиенты</b>:"
+        );
     }
 
     #[test]

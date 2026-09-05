@@ -133,9 +133,16 @@ impl Store {
     }
     /// Фильтр списка клиентов по группе — для владельцев (групповым админам
     /// скоуп диктует их текущая группа).
+    /// Липкий групповой скоуп списка владельца. Скоуп на удалённую группу
+    /// считается `All`: иначе он навсегда прячет всех клиентов за экраном
+    /// «под фильтр никто не попал».
     pub fn owner_scope(&self, uid: i64) -> crate::store::ListScope {
-        self.get_json(&format!("owner_scope:{uid}"))
-            .unwrap_or(crate::store::ListScope::All)
+        use crate::store::ListScope;
+        match self.get_json(&format!("owner_scope:{uid}")) {
+            Some(ListScope::Group(g)) if self.group(g).is_none() => ListScope::All,
+            Some(s) => s,
+            None => ListScope::All,
+        }
     }
     pub fn set_owner_scope(&self, uid: i64, s: crate::store::ListScope) {
         self.set_json(&format!("owner_scope:{uid}"), &s);
@@ -475,10 +482,26 @@ mod tests {
         use crate::store::ListScope;
         let s = Store::open_in_memory();
         assert_eq!(s.owner_scope(42), ListScope::All);
-        s.set_owner_scope(42, ListScope::Group(7));
-        assert_eq!(s.owner_scope(42), ListScope::Group(7));
+        // Скоуп на существующую группу читается как есть (на несуществующую —
+        // см. owner_scope_falls_back_to_all_when_group_deleted).
+        let gid = s.create_group("family", 0).unwrap();
+        s.set_owner_scope(42, ListScope::Group(gid));
+        assert_eq!(s.owner_scope(42), ListScope::Group(gid));
         s.set_owner_scope(42, ListScope::NoGroup);
         assert_eq!(s.owner_scope(42), ListScope::NoGroup);
+    }
+
+    #[test]
+    fn owner_scope_falls_back_to_all_when_group_deleted() {
+        use crate::store::ListScope;
+        // Липкий скоуп на удалённую группу иначе навсегда прячет всех
+        // клиентов за экраном «под фильтр никто не попал».
+        let s = Store::open_in_memory();
+        let gid = s.create_group("family", 0).unwrap();
+        s.set_owner_scope(42, ListScope::Group(gid));
+        assert_eq!(s.owner_scope(42), ListScope::Group(gid));
+        s.delete_group(gid);
+        assert_eq!(s.owner_scope(42), ListScope::All);
     }
 
     #[test]
