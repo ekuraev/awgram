@@ -7,8 +7,25 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
 
 ### 🇷🇺 Русский
 
+#### ✨ Добавлено
+
+- **Экран «Готово» показывает применённые маршруты.** Строка
+  «🛣 Маршруты: …» берётся из ответа `add` инсталлера v5.32.0+ — это то, что
+  реально записано в `.conf`, а на сервере с IPv6 оно шире выбранного: скрипт
+  дописывает подсеть VPN или `::/0`. На старом инсталлере (путь `add`, затем
+  `modify`) показывается отправленное значение. У массовой генерации — одна
+  строка на всю пачку.
+
 #### 🔧 Изменено
 
+- **Срок действия читается из `list --json`, а не с диска.** Инсталлер
+  v5.32.0 отдаёт `expires_at` в каждой записи, и бот берёт его оттуда — в
+  списке и в карточке клиента. Сломанная метка (`expires_at_error`) больше не
+  выглядит как «бессрочно»: в карточке «⚠️ метка срока не читается», в списке
+  бейдж «⚠️ срок?». На инсталлере без этих полей бот по-прежнему читает
+  `expiry/<имя>`, но теперь в той же канонической форме, что и скрипт:
+  метка с ведущим нулём, мусором или длиннее 15 знаков считается
+  неопределённой, а не датой.
 - **Совместимость с инсталлером**: поддерживаемая версия —
   [v5.32.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.32.0)
   (сверен `--json`-контракт: `add --allowed-ips`, который бот с v0.10.0
@@ -17,13 +34,30 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
   поле `allowed_ips`; `list --json` отдаёт `expires_at`/`expires_at_error`;
   метка срока с ведущим нулём больше не удаляет клиента молча; `restore`
   предупреждает в stderr о расхождении поколения протокола `AWG_PROTOCOL`.
-  Конверты не изменились, новые поля бот игнорирует); минимальная —
+  Конверты не изменились, новые поля аддитивные); минимальная —
   по-прежнему v5.21.0.
 
 ### 🇬🇧 English
 
+#### ✨ Added
+
+- **The "Done" screen shows the applied routes.** The "🛣 Routes: …" line
+  comes from the `add` reply of installer v5.32.0+ — what was actually written
+  to the `.conf`, which on an IPv6-enabled server is wider than the selection:
+  the script appends the VPN subnet or `::/0`. On an older installer (the
+  `add` then `modify` path) the value that was sent is shown. Bulk creation
+  gets one line for the whole batch.
+
 #### 🔧 Changed
 
+- **Expiry is read from `list --json` instead of the disk.** Installer
+  v5.32.0 reports `expires_at` in every record and the bot takes it from
+  there — in the list and on the client card. A broken marker
+  (`expires_at_error`) no longer looks like "no expiry": the card says
+  "⚠️ expiry marker unreadable", the list shows a "⚠️ expiry?" badge. On an
+  installer without these fields the bot still reads `expiry/<name>`, but now
+  in the same canonical form as the script: a marker with a leading zero,
+  junk or more than 15 digits counts as undetermined rather than a date.
 - **Installer compatibility**: the supported version is now
   [v5.32.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.32.0)
   (`--json` contract verified: `add --allowed-ips`, which the bot has detected
@@ -32,7 +66,7 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
   `allowed_ips` field; `list --json` reports `expires_at`/`expires_at_error`;
   an expiry marker with a leading zero no longer deletes the client silently;
   `restore` warns on stderr when the `AWG_PROTOCOL` generation differs. The
-  envelopes are unchanged and the bot ignores the new fields); the minimum is
+  envelopes are unchanged and the new fields are additive); the minimum is
   still v5.21.0.
 
 ## [0.11.1] — 2026-09-05

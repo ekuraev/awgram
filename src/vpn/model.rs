@@ -19,9 +19,68 @@ pub struct Client {
     pub tx: u64,
     #[serde(default)]
     pub last_handshake: Option<i64>,
+    /// Срок из `list --json` (инсталлер v5.32.0+). Три состояния, и все
+    /// разные: поля нет — инсталлер старый, срок надо читать с диска (`None`);
+    /// `null` — клиент бессрочный (`Some(None)`); число — unix-время
+    /// (`Some(Some(ts))`).
+    #[serde(default, deserialize_with = "deserialize_present")]
+    pub expires_at: Option<Option<i64>>,
+    /// `null` в норме; `"unreadable"` — метка на сервере есть, а значение из
+    /// неё получить не удалось. Голый `expires_at: null` в этом случае значил
+    /// бы «бессрочный по замыслу», хотя срок задавали.
+    #[serde(default)]
+    pub expires_at_error: Option<String>,
+}
+
+/// Отличает отсутствующее поле от `null`: `#[serde(default)]` даёт `None`
+/// для обоих, а нам нужно `Some(None)` для явного `null`.
+fn deserialize_present<'de, D>(d: D) -> Result<Option<Option<i64>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<i64>::deserialize(d).map(Some)
+}
+
+/// Срок действия клиента, как его видит бот.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Expiry {
+    /// Бессрочный клиент.
+    Never,
+    /// Истекает в указанное unix-время (сек).
+    At(i64),
+    /// Метка срока есть, но прочитать её не удалось — доверять нечему.
+    Unreadable,
+}
+
+/// Метка срока из файла `expiry/<имя>` в той же канонической форме, что
+/// принимает скрипт: десятичное число без ведущего нуля, не длиннее 15 знаков.
+/// Ведущий ноль bash читал бы как восьмеричное (и когда-то удалял клиентов
+/// не по той дате), поэтому всё остальное — «срок не определён».
+pub fn parse_expiry_marker(raw: &str) -> Option<i64> {
+    let s = raw.trim();
+    if s.is_empty() || s.len() > 15 || !s.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    if s.len() > 1 && s.starts_with('0') {
+        return None;
+    }
+    s.parse().ok()
 }
 
 impl Client {
+    /// Срок из ответа `list --json`, если инсталлер его отдаёт. `None` — поля
+    /// в ответе нет (инсталлер до v5.32.0), срок нужно брать из файла. Любой
+    /// код в `expires_at_error` означает, что значению доверять нельзя.
+    pub fn list_expiry(&self) -> Option<Expiry> {
+        if self.expires_at_error.is_some() {
+            return Some(Expiry::Unreadable);
+        }
+        self.expires_at.map(|e| match e {
+            Some(ts) => Expiry::At(ts),
+            None => Expiry::Never,
+        })
+    }
+
     /// Цвет статуса, вычисленный ботом из `last_handshake` (см. `status_mark_at`).
     /// `now` — текущее время (epoch, сек), передаётся явно ради тестируемости.
     pub fn mark(&self, now: i64) -> &'static str {
@@ -152,6 +211,10 @@ pub struct AddResult {
     pub conf_path: String,
     pub qr_path: String,
     pub uri: String,
+    /// Маршруты, которые скрипт реально записал в `.conf` (ответ `add --json`
+    /// инсталлера v5.32.0+). `None` — ответ без поля или результат не от `add`
+    /// (`regen`, повторная выдача файлов).
+    pub allowed_ips: Option<String>,
 }
 
 /// Результат массового создания: успешно созданные клиенты (с путями для
@@ -285,19 +348,24 @@ pub fn format_handshake_compact(lang: Lang, now: i64, hs: i64) -> String {
 }
 
 /// Человекочитаемый срок действия. None → бессрочно.
-pub fn format_expiry(lang: Lang, now: i64, exp: Option<i64>) -> String {
+pub fn format_expiry(lang: Lang, now: i64, exp: Expiry) -> String {
     match exp {
-        None => match lang {
+        Expiry::Unreadable => match lang {
+            Lang::Ru => "⚠️ метка срока не читается",
+            Lang::En => "⚠️ expiry marker unreadable",
+        }
+        .to_string(),
+        Expiry::Never => match lang {
             Lang::Ru => "бессрочно",
             Lang::En => "no expiry",
         }
         .to_string(),
-        Some(e) if e <= now => match lang {
+        Expiry::At(e) if e <= now => match lang {
             Lang::Ru => "истёк",
             Lang::En => "expired",
         }
         .to_string(),
-        Some(e) => {
+        Expiry::At(e) => {
             let d = e - now;
             if d >= 86400 {
                 match lang {
@@ -321,9 +389,19 @@ pub fn format_expiry(lang: Lang, now: i64, exp: Option<i64>) -> String {
 }
 
 /// Компактная метка срока для кнопки списка клиентов. None → бессрочный
-/// клиент (метка не показывается). Пороги — как у `format_expiry`.
-pub fn format_expiry_badge(lang: Lang, now: i64, exp: Option<i64>) -> Option<String> {
-    let e = exp?;
+/// клиент (метка не показывается), нечитаемая метка — короткое «⚠️ срок?».
+/// Пороги — как у `format_expiry`.
+pub fn format_expiry_badge(lang: Lang, now: i64, exp: Expiry) -> Option<String> {
+    let e = match exp {
+        Expiry::Never => return None,
+        Expiry::Unreadable => {
+            return Some(match lang {
+                Lang::Ru => "⚠️ срок?".to_string(),
+                Lang::En => "⚠️ expiry?".to_string(),
+            })
+        }
+        Expiry::At(e) => e,
+    };
     let d = e - now;
     let text = if d <= 0 {
         match lang {
@@ -463,62 +541,80 @@ mod tests {
 
     #[test]
     fn format_expiry_none_is_unlimited() {
-        assert_eq!(format_expiry(Lang::Ru, 1_700_000_000, None), "бессрочно");
+        assert_eq!(
+            format_expiry(Lang::Ru, 1_700_000_000, Expiry::Never),
+            "бессрочно"
+        );
     }
 
     #[test]
     fn format_expiry_none_is_unlimited_en() {
-        assert_eq!(format_expiry(Lang::En, 1_700_000_000, None), "no expiry");
+        assert_eq!(
+            format_expiry(Lang::En, 1_700_000_000, Expiry::Never),
+            "no expiry"
+        );
     }
 
     #[test]
     fn format_expiry_past_is_expired() {
         let now = 1_700_000_000;
-        assert_eq!(format_expiry(Lang::Ru, now, Some(now - 1)), "истёк");
-        assert_eq!(format_expiry(Lang::Ru, now, Some(now)), "истёк");
+        assert_eq!(format_expiry(Lang::Ru, now, Expiry::At(now - 1)), "истёк");
+        assert_eq!(format_expiry(Lang::Ru, now, Expiry::At(now)), "истёк");
     }
 
     #[test]
     fn format_expiry_past_is_expired_en() {
         let now = 1_700_000_000;
-        assert_eq!(format_expiry(Lang::En, now, Some(now - 1)), "expired");
-        assert_eq!(format_expiry(Lang::En, now, Some(now)), "expired");
+        assert_eq!(format_expiry(Lang::En, now, Expiry::At(now - 1)), "expired");
+        assert_eq!(format_expiry(Lang::En, now, Expiry::At(now)), "expired");
     }
 
     #[test]
     fn format_expiry_days_remaining() {
         let now = 1_700_000_000;
-        assert_eq!(format_expiry(Lang::Ru, now, Some(now + 172800)), "ещё 2 дн");
+        assert_eq!(
+            format_expiry(Lang::Ru, now, Expiry::At(now + 172800)),
+            "ещё 2 дн"
+        );
     }
 
     #[test]
     fn format_expiry_days_remaining_en() {
         let now = 1_700_000_000;
-        assert_eq!(format_expiry(Lang::En, now, Some(now + 86400)), "1 d left");
+        assert_eq!(
+            format_expiry(Lang::En, now, Expiry::At(now + 86400)),
+            "1 d left"
+        );
     }
 
     #[test]
     fn format_expiry_hours_remaining() {
         let now = 1_700_000_000;
-        assert_eq!(format_expiry(Lang::Ru, now, Some(now + 7200)), "ещё 2 ч");
+        assert_eq!(
+            format_expiry(Lang::Ru, now, Expiry::At(now + 7200)),
+            "ещё 2 ч"
+        );
     }
 
     #[test]
     fn format_expiry_hours_remaining_en() {
         let now = 1_700_000_000;
-        assert_eq!(format_expiry(Lang::En, now, Some(now + 7200)), "2 h left");
+        assert_eq!(
+            format_expiry(Lang::En, now, Expiry::At(now + 7200)),
+            "2 h left"
+        );
     }
 
     #[test]
     fn format_expiry_under_an_hour_remaining() {
         let now = 1_700_000_000;
-        assert_eq!(format_expiry(Lang::Ru, now, Some(now + 600)), "< 1 ч");
+        assert_eq!(format_expiry(Lang::Ru, now, Expiry::At(now + 600)), "< 1 ч");
     }
 
     #[test]
     fn format_expiry_under_an_hour_remaining_en() {
         let now = 1_700_000_000;
-        assert_eq!(format_expiry(Lang::En, now, Some(now + 600)), "< 1 h");
+        assert_eq!(format_expiry(Lang::En, now, Expiry::At(now + 600)), "< 1 h");
     }
 
     #[test]
@@ -619,6 +715,8 @@ mod tests {
             rx: 0,
             tx: 0,
             last_handshake: hs,
+            expires_at: None,
+            expires_at_error: None,
         }
     }
 
@@ -632,6 +730,8 @@ mod tests {
             rx: 0,
             tx: 0,
             last_handshake: hs,
+            expires_at: None,
+            expires_at_error: None,
         }
     }
 
@@ -794,35 +894,44 @@ mod tests {
     #[test]
     fn format_expiry_boundary_1_hour() {
         let now = 2_000_000;
-        assert_eq!(format_expiry(Lang::Ru, now, Some(now + 3600)), "ещё 1 ч");
+        assert_eq!(
+            format_expiry(Lang::Ru, now, Expiry::At(now + 3600)),
+            "ещё 1 ч"
+        );
     }
 
     #[test]
     fn format_expiry_boundary_1_day() {
         let now = 2_000_000;
-        assert_eq!(format_expiry(Lang::Ru, now, Some(now + 86400)), "ещё 1 дн");
+        assert_eq!(
+            format_expiry(Lang::Ru, now, Expiry::At(now + 86400)),
+            "ещё 1 дн"
+        );
     }
 
     #[test]
     fn format_expiry_boundary_exactly_now() {
         let now = 2_000_000;
-        assert_eq!(format_expiry(Lang::Ru, now, Some(now)), "истёк");
+        assert_eq!(format_expiry(Lang::Ru, now, Expiry::At(now)), "истёк");
     }
 
     #[test]
     fn expiry_badge_none_for_permanent() {
-        assert_eq!(format_expiry_badge(Lang::Ru, 1_700_000_000, None), None);
+        assert_eq!(
+            format_expiry_badge(Lang::Ru, 1_700_000_000, Expiry::Never),
+            None
+        );
     }
 
     #[test]
     fn expiry_badge_days() {
         let now = 1_700_000_000;
         assert_eq!(
-            format_expiry_badge(Lang::Ru, now, Some(now + 6 * 86400)),
+            format_expiry_badge(Lang::Ru, now, Expiry::At(now + 6 * 86400)),
             Some("⏳ 6д".to_string())
         );
         assert_eq!(
-            format_expiry_badge(Lang::En, now, Some(now + 6 * 86400)),
+            format_expiry_badge(Lang::En, now, Expiry::At(now + 6 * 86400)),
             Some("⏳ 6d".to_string())
         );
     }
@@ -831,11 +940,11 @@ mod tests {
     fn expiry_badge_hours() {
         let now = 1_700_000_000;
         assert_eq!(
-            format_expiry_badge(Lang::Ru, now, Some(now + 5 * 3600)),
+            format_expiry_badge(Lang::Ru, now, Expiry::At(now + 5 * 3600)),
             Some("⏳ 5ч".to_string())
         );
         assert_eq!(
-            format_expiry_badge(Lang::En, now, Some(now + 5 * 3600)),
+            format_expiry_badge(Lang::En, now, Expiry::At(now + 5 * 3600)),
             Some("⏳ 5h".to_string())
         );
     }
@@ -844,11 +953,11 @@ mod tests {
     fn expiry_badge_under_hour() {
         let now = 1_700_000_000;
         assert_eq!(
-            format_expiry_badge(Lang::Ru, now, Some(now + 600)),
+            format_expiry_badge(Lang::Ru, now, Expiry::At(now + 600)),
             Some("⏳ <1ч".to_string())
         );
         assert_eq!(
-            format_expiry_badge(Lang::En, now, Some(now + 600)),
+            format_expiry_badge(Lang::En, now, Expiry::At(now + 600)),
             Some("⏳ <1h".to_string())
         );
     }
@@ -857,11 +966,11 @@ mod tests {
     fn expiry_badge_expired() {
         let now = 1_700_000_000;
         assert_eq!(
-            format_expiry_badge(Lang::Ru, now, Some(now)),
+            format_expiry_badge(Lang::Ru, now, Expiry::At(now)),
             Some("⏳ истёк".to_string())
         );
         assert_eq!(
-            format_expiry_badge(Lang::En, now, Some(now - 1)),
+            format_expiry_badge(Lang::En, now, Expiry::At(now - 1)),
             Some("⏳ expired".to_string())
         );
     }
@@ -893,5 +1002,92 @@ mod tests {
             reason: SkipReason::Exists,
         };
         assert!(matches!(s.reason, SkipReason::Exists));
+    }
+
+    // --- expires_at / expires_at_error из list --json (инсталлер v5.32.0) ---
+
+    #[test]
+    fn list_json_without_expiry_fields_has_no_list_expiry() {
+        let clients = parse_client_list(LIST_JSON).unwrap();
+        assert_eq!(clients[0].list_expiry(), None);
+    }
+
+    #[test]
+    fn list_json_expires_at_number_is_at() {
+        let json = r#"[{"name":"a","status_code":"active","expires_at":1893456000,"expires_at_error":null}]"#;
+        let clients = parse_client_list(json).unwrap();
+        assert_eq!(clients[0].list_expiry(), Some(Expiry::At(1893456000)));
+    }
+
+    #[test]
+    fn list_json_expires_at_null_is_never() {
+        let json =
+            r#"[{"name":"a","status_code":"active","expires_at":null,"expires_at_error":null}]"#;
+        let clients = parse_client_list(json).unwrap();
+        assert_eq!(clients[0].list_expiry(), Some(Expiry::Never));
+    }
+
+    #[test]
+    fn list_json_unreadable_marker_is_unreadable() {
+        let json = r#"[{"name":"a","status_code":"active","expires_at":null,"expires_at_error":"unreadable"}]"#;
+        let clients = parse_client_list(json).unwrap();
+        assert_eq!(clients[0].list_expiry(), Some(Expiry::Unreadable));
+    }
+
+    #[test]
+    fn list_json_any_error_marker_means_unreadable() {
+        // Незнакомый код ошибки — значению всё равно доверять нельзя.
+        let json = r#"[{"name":"a","status_code":"active","expires_at":1893456000,"expires_at_error":"corrupt"}]"#;
+        let clients = parse_client_list(json).unwrap();
+        assert_eq!(clients[0].list_expiry(), Some(Expiry::Unreadable));
+    }
+
+    #[test]
+    fn parse_expiry_marker_accepts_canonical_decimal() {
+        assert_eq!(parse_expiry_marker("1893456000"), Some(1893456000));
+        assert_eq!(parse_expiry_marker(" 1893456000\n"), Some(1893456000));
+        assert_eq!(parse_expiry_marker("0"), Some(0));
+        assert_eq!(
+            parse_expiry_marker("123456789012345"),
+            Some(123456789012345)
+        );
+    }
+
+    #[test]
+    fn parse_expiry_marker_rejects_leading_zero_junk_and_overlong() {
+        // Как скрипт: ведущий ноль (bash читал бы восьмеричное), пустое,
+        // мусор, знак и число длиннее 15 знаков — метка не определена.
+        assert_eq!(parse_expiry_marker("01750000000"), None);
+        assert_eq!(parse_expiry_marker(""), None);
+        assert_eq!(parse_expiry_marker("not-a-number"), None);
+        assert_eq!(parse_expiry_marker("-5"), None);
+        assert_eq!(parse_expiry_marker("+5"), None);
+        assert_eq!(parse_expiry_marker("1234567890123456"), None);
+    }
+
+    #[test]
+    fn format_expiry_unreadable() {
+        let now = 1_700_000_000;
+        assert_eq!(
+            format_expiry(Lang::Ru, now, Expiry::Unreadable),
+            "⚠️ метка срока не читается"
+        );
+        assert_eq!(
+            format_expiry(Lang::En, now, Expiry::Unreadable),
+            "⚠️ expiry marker unreadable"
+        );
+    }
+
+    #[test]
+    fn expiry_badge_unreadable() {
+        let now = 1_700_000_000;
+        assert_eq!(
+            format_expiry_badge(Lang::Ru, now, Expiry::Unreadable),
+            Some("⚠️ срок?".to_string())
+        );
+        assert_eq!(
+            format_expiry_badge(Lang::En, now, Expiry::Unreadable),
+            Some("⚠️ expiry?".to_string())
+        );
     }
 }

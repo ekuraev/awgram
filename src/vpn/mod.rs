@@ -280,6 +280,7 @@ impl Vpn {
                 conf_path: entry.conf.unwrap_or_default(),
                 qr_path: entry.qr.unwrap_or_default(),
                 uri: read_vpnuri_content(&entry.vpnuri.unwrap_or_default()),
+                allowed_ips: entry.allowed_ips,
             })),
             wire::AddStatus::Exists => Err(crate::error::Error::ClientExists(name)),
             wire::AddStatus::InvalidName => {
@@ -410,6 +411,7 @@ impl Vpn {
                     conf_path: entry.conf.unwrap_or_default(),
                     qr_path: entry.qr.unwrap_or_default(),
                     uri: read_vpnuri_content(&entry.vpnuri.unwrap_or_default()),
+                    allowed_ips: entry.allowed_ips,
                 }),
                 wire::AddStatus::Exists => skipped.push(Skip {
                     name: entry.name,
@@ -488,6 +490,7 @@ impl Vpn {
                 conf_path: entry.conf.unwrap_or_default(),
                 qr_path: entry.qr.unwrap_or_default(),
                 uri: read_vpnuri_content(&entry.vpnuri.unwrap_or_default()),
+                allowed_ips: None,
             }),
             wire::RegenStatus::NotFound => Err(crate::error::Error::ClientNotFound(name)),
             _ => Err(crate::error::Error::Parse("regen: ошибка".into())),
@@ -556,16 +559,32 @@ impl Vpn {
             conf_path: conf.to_string_lossy().into_owned(),
             qr_path: qr.to_string_lossy().into_owned(),
             uri,
+            allowed_ips: None,
         })
     }
 
     /// Читает срок действия клиента из `<clients_dir>/expiry/<name>` (epoch, сек).
-    /// None, если файла нет или содержимое не парсится (значит — бессрочно).
+    /// None, если файла нет или содержимое не в канонической форме скрипта
+    /// (`parse_expiry_marker`) — тогда срок не определён, показываем как
+    /// бессрочный, как и сам скрипт в проверке истечения.
     pub fn client_expiry(&self, name: &str) -> Option<i64> {
         let name = validate::validate_name(name).ok()?;
         let path = self.clients_dir.join("expiry").join(&name);
         let raw = std::fs::read_to_string(path).ok()?;
-        raw.trim().parse::<i64>().ok()
+        model::parse_expiry_marker(&raw)
+    }
+
+    /// Срок действия клиента для показа. Источник правды — ответ `list --json`
+    /// (инсталлер v5.32.0+ отдаёт `expires_at`/`expires_at_error`): он не
+    /// требует доступа к файлам и умеет сказать «метка есть, но не читается».
+    /// Если инсталлер старше и полей в ответе нет — читаем `expiry/<имя>` с
+    /// диска, как раньше.
+    pub fn expiry_for(&self, c: &model::Client) -> model::Expiry {
+        c.list_expiry()
+            .unwrap_or_else(|| match self.client_expiry(&c.name) {
+                Some(ts) => model::Expiry::At(ts),
+                None => model::Expiry::Never,
+            })
     }
 
     /// Текущие AllowedIPs клиента из его `.conf` (`clients_dir/<name>.conf`).
@@ -1312,6 +1331,52 @@ exit 1
         assert_eq!(vpn.client_expiry("a/b"), None);
     }
 
+    #[test]
+    fn client_expiry_rejects_leading_zero_like_the_script() {
+        // Скрипт с v5.32.0 считает такую метку нечитаемой и клиента не трогает;
+        // бот не должен показывать по ней дату.
+        let (dir, vpn) = vpn_with_script("#!/bin/sh\n");
+        std::fs::create_dir_all(dir.path().join("expiry")).unwrap();
+        std::fs::write(dir.path().join("expiry").join("dave"), "01750000000").unwrap();
+        assert_eq!(vpn.client_expiry("dave"), None);
+    }
+
+    fn client_from_json(json: &str) -> model::Client {
+        model::parse_client_list(&format!("[{json}]"))
+            .unwrap()
+            .remove(0)
+    }
+
+    #[test]
+    fn expiry_for_prefers_list_fields_over_file() {
+        // Файл говорит одно, list --json — другое: побеждает ответ скрипта.
+        let (dir, vpn) = vpn_with_script("#!/bin/sh\n");
+        std::fs::create_dir_all(dir.path().join("expiry")).unwrap();
+        std::fs::write(dir.path().join("expiry").join("alice"), "1").unwrap();
+        let at =
+            client_from_json(r#"{"name":"alice","expires_at":1893456000,"expires_at_error":null}"#);
+        assert_eq!(vpn.expiry_for(&at), model::Expiry::At(1893456000));
+        let never =
+            client_from_json(r#"{"name":"alice","expires_at":null,"expires_at_error":null}"#);
+        assert_eq!(vpn.expiry_for(&never), model::Expiry::Never);
+        let bad = client_from_json(
+            r#"{"name":"alice","expires_at":null,"expires_at_error":"unreadable"}"#,
+        );
+        assert_eq!(vpn.expiry_for(&bad), model::Expiry::Unreadable);
+    }
+
+    #[test]
+    fn expiry_for_falls_back_to_file_when_list_has_no_field() {
+        // Инсталлер до v5.32.0: полей нет — читаем expiry/<имя>, как раньше.
+        let (dir, vpn) = vpn_with_script("#!/bin/sh\n");
+        std::fs::create_dir_all(dir.path().join("expiry")).unwrap();
+        std::fs::write(dir.path().join("expiry").join("alice"), "1893456000").unwrap();
+        let old = client_from_json(r#"{"name":"alice","status_code":"active"}"#);
+        assert_eq!(vpn.expiry_for(&old), model::Expiry::At(1893456000));
+        let no_file = client_from_json(r#"{"name":"bob","status_code":"active"}"#);
+        assert_eq!(vpn.expiry_for(&no_file), model::Expiry::Never);
+    }
+
     #[tokio::test]
     #[serial]
     async fn backup_takes_path_from_json() {
@@ -1841,7 +1906,7 @@ aip=""
 for a in "$@"; do
   case "$a" in --allowed-ips=*) aip="${a#--allowed-ips=}" ;; esac
 done
-echo "{\"command\":\"add\",\"ok\":true,\"added\":1,\"failed\":0,\"applied\":true,\"results\":[{\"name\":\"alice\",\"status\":\"created\",\"conf\":\"/tmp/alice.conf\",\"qr\":null,\"vpnuri\":null,\"aip\":\"$aip\"}]}"
+echo "{\"command\":\"add\",\"ok\":true,\"added\":1,\"failed\":0,\"applied\":true,\"results\":[{\"name\":\"alice\",\"status\":\"created\",\"conf\":\"/tmp/alice.conf\",\"qr\":null,\"vpnuri\":null,\"allowed_ips\":\"$aip, fddd:2c4:2c4:2c4::/64\"}]}"
 "#
         .to_string()
     }
@@ -1889,6 +1954,22 @@ echo '{"command":"add","ok":true,"added":1,"failed":0,"applied":true,"results":[
 
     #[tokio::test]
     #[serial]
+    async fn add_client_returns_applied_allowed_ips_from_reply() {
+        // Значение берётся из ответа скрипта, а не из нашего аргумента: на
+        // dual-stack сервере инсталлер дописывает IPv6-часть.
+        let (_d, vpn) = vpn_with_script(&new_installer_stub());
+        let out = vpn
+            .add_client("alice", None, false, Some("10.0.0.0/8"))
+            .await
+            .unwrap();
+        assert_eq!(
+            out.res.allowed_ips.as_deref(),
+            Some("10.0.0.0/8, fddd:2c4:2c4:2c4::/64")
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn add_client_falls_back_on_old_installer() {
         // Старый скрипт отвергает аргументы, клиента не создаёт — бот обязан
         // повторить обычным add и сказать, что маршруты ещё не применены.
@@ -1899,6 +1980,7 @@ echo '{"command":"add","ok":true,"added":1,"failed":0,"applied":true,"results":[
             .unwrap();
         assert!(!out.routes_applied);
         assert_eq!(out.res.name, "alice");
+        assert_eq!(out.res.allowed_ips, None, "старый ответ без поля");
     }
 
     #[tokio::test]
@@ -1952,6 +2034,7 @@ echo '{"command":"add","ok":true,"added":2,"failed":0,"applied":true,"results":[
             .unwrap();
         assert!(out.routes_applied);
         assert_eq!(out.res.created.len(), 2);
+        assert_eq!(out.res.created[0].allowed_ips, None, "ответ без поля");
 
         let (_d2, old) = vpn_with_script(
             r#"#!/bin/sh
@@ -1967,6 +2050,28 @@ echo '{"command":"add","ok":true,"added":2,"failed":0,"applied":true,"results":[
             .unwrap();
         assert!(!out.routes_applied, "старый скрипт — маршруты не применены");
         assert_eq!(out.res.created.len(), 2);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn add_many_returns_applied_allowed_ips_per_client() {
+        let names = vec!["a".to_string(), "b".to_string()];
+        let (_d, vpn) = vpn_with_script(
+            r#"#!/bin/sh
+case "$1" in
+  --help) echo "  --allowed-ips=СПИСОК  индивидуальные AllowedIPs"; exit 0 ;;
+esac
+echo '{"command":"add","ok":true,"added":2,"failed":0,"applied":true,"results":[{"name":"a","status":"created","conf":"/tmp/a.conf","allowed_ips":"10.0.0.0/8, ::/0"},{"name":"b","status":"created","conf":"/tmp/b.conf","allowed_ips":"10.0.0.0/8, ::/0"}]}'
+"#,
+        );
+        let out = vpn
+            .add_many_clients(&names, None, false, Some("10.0.0.0/8"))
+            .await
+            .unwrap();
+        assert_eq!(
+            out.res.created[1].allowed_ips.as_deref(),
+            Some("10.0.0.0/8, ::/0")
+        );
     }
 
     #[tokio::test]

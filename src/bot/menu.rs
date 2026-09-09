@@ -3,7 +3,7 @@ use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 use crate::backup::Key;
 use crate::i18n::{self, Lang};
 use crate::store::{BackupRow, BackupSchedule};
-use crate::vpn::model::{format_handshake_compact, Client, ClientFilter};
+use crate::vpn::model::{format_handshake_compact, Client, ClientFilter, Expiry};
 use crate::vpn::validate::{NetPreset, RouteKey, RouteMode, RouteSelection};
 use crate::vpn::BackupFile;
 
@@ -421,7 +421,7 @@ fn filter_row(lang: Lang, current: ClientFilter) -> Vec<InlineKeyboardButton> {
 pub fn clients_list(
     lang: Lang,
     clients: &[Client],
-    expiries: &[Option<i64>],
+    expiries: &[Expiry],
     now: i64,
     page: usize,
     per_page: usize,
@@ -444,7 +444,7 @@ pub fn clients_list(
             // Компактный handshake («2 мин», «никогда») — требуется stats()
             // (last_handshake есть только в stats --json, не в list --json).
             let hs = format_handshake_compact(lang, now, c.last_handshake.unwrap_or(0));
-            let exp = expiries.get(i).copied().flatten();
+            let exp = expiries.get(i).copied().unwrap_or(Expiry::Never);
             let label = match crate::vpn::model::format_expiry_badge(lang, now, exp) {
                 Some(badge) => format!("{mark} {} · {hs} {badge}", c.name),
                 None => format!("{mark} {} · {hs}", c.name),
@@ -970,6 +970,8 @@ mod tests {
             rx: 0,
             tx: 0,
             last_handshake: None,
+            expires_at: None,
+            expires_at_error: None,
         }];
         let data = all_callback_data(&clients_list(
             Lang::Ru,
@@ -999,6 +1001,8 @@ mod tests {
             rx: 0,
             tx: 0,
             last_handshake: None,
+            expires_at: None,
+            expires_at_error: None,
         }];
         let data = all_callback_data(&clients_list(
             Lang::Ru,
@@ -1030,6 +1034,8 @@ mod tests {
                 rx: 0,
                 tx: 0,
                 last_handshake: None,
+                expires_at: None,
+                expires_at_error: None,
             })
             .collect();
         let kb = clients_list(
@@ -1071,6 +1077,8 @@ mod tests {
                 rx: 0,
                 tx: 0,
                 last_handshake: None,
+                expires_at: None,
+                expires_at_error: None,
             })
             .collect();
         let kb = clients_list(
@@ -1124,6 +1132,8 @@ mod tests {
                 rx: 0,
                 tx: 0,
                 last_handshake: None,
+                expires_at: None,
+                expires_at_error: None,
             },
             Client {
                 name: "b".into(),
@@ -1134,6 +1144,8 @@ mod tests {
                 rx: 0,
                 tx: 0,
                 last_handshake: None,
+                expires_at: None,
+                expires_at_error: None,
             },
         ];
         let data = all_callback_data(&clients_list(
@@ -1184,6 +1196,8 @@ mod tests {
                 rx: 0,
                 tx: 0,
                 last_handshake: None,
+                expires_at: None,
+                expires_at_error: None,
             },
             Client {
                 name: "b".into(),
@@ -1194,6 +1208,8 @@ mod tests {
                 rx: 0,
                 tx: 0,
                 last_handshake: None,
+                expires_at: None,
+                expires_at_error: None,
             },
         ];
         let kb_filled = clients_list(
@@ -1227,6 +1243,8 @@ mod tests {
                 rx: 0,
                 tx: 0,
                 last_handshake: None,
+                expires_at: None,
+                expires_at_error: None,
             },
             Client {
                 name: "perm".into(),
@@ -1237,10 +1255,12 @@ mod tests {
                 rx: 0,
                 tx: 0,
                 last_handshake: None,
+                expires_at: None,
+                expires_at_error: None,
             },
         ];
         let now = 1_700_000_000;
-        let expiries = vec![Some(now + 6 * 86400), None];
+        let expiries = vec![Expiry::At(now + 6 * 86400), Expiry::Never];
         let texts = all_button_texts(&clients_list(
             Lang::Ru,
             &clients,
@@ -1281,6 +1301,8 @@ mod tests {
                 rx: 0,
                 tx: 0,
                 last_handshake: Some(now - 30), // недавно — онлайн
+                expires_at: None,
+                expires_at_error: None,
             },
             Client {
                 name: "never".into(),
@@ -1291,6 +1313,8 @@ mod tests {
                 rx: 0,
                 tx: 0,
                 last_handshake: None,
+                expires_at: None,
+                expires_at_error: None,
             },
             Client {
                 name: "gone".into(),
@@ -1301,6 +1325,8 @@ mod tests {
                 rx: 0,
                 tx: 0,
                 last_handshake: Some(now - 6 * 3600), // был, но давно
+                expires_at: None,
+                expires_at_error: None,
             },
         ];
         let texts = all_button_texts(&clients_list(
@@ -1343,6 +1369,8 @@ mod tests {
                 rx: 0,
                 tx: 0,
                 last_handshake: Some(now - 600),
+                expires_at: None,
+                expires_at_error: None,
             },
             Client {
                 name: "fresh".into(),
@@ -1353,6 +1381,8 @@ mod tests {
                 rx: 0,
                 tx: 0,
                 last_handshake: Some(0),
+                expires_at: None,
+                expires_at_error: None,
             },
         ];
         let texts = all_button_texts(&clients_list(
@@ -1393,6 +1423,8 @@ mod tests {
             rx: 0,
             tx: 0,
             last_handshake: None,
+            expires_at: None,
+            expires_at_error: None,
         }];
         let data = all_callback_data(&clients_list(
             Lang::Ru,
@@ -1423,6 +1455,8 @@ mod tests {
             rx: 0,
             tx: 0,
             last_handshake: None,
+            expires_at: None,
+            expires_at_error: None,
         }];
         let texts_online = all_button_texts(&clients_list(
             Lang::Ru,
@@ -1464,6 +1498,8 @@ mod tests {
             rx: 0,
             tx: 0,
             last_handshake: None,
+            expires_at: None,
+            expires_at_error: None,
         }];
         let with_scope = all_callback_data(&clients_list(
             Lang::Ru,
@@ -1504,6 +1540,8 @@ mod tests {
             rx: 0,
             tx: 0,
             last_handshake: None,
+            expires_at: None,
+            expires_at_error: None,
         }];
         let owner = all_callback_data(&clients_list(
             Lang::Ru,
@@ -1595,6 +1633,8 @@ mod tests {
             rx: 0,
             tx: 0,
             last_handshake: None,
+            expires_at: None,
+            expires_at_error: None,
         }];
         let kb = clients_list(
             Lang::Ru,
