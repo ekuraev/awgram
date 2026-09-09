@@ -9,7 +9,7 @@
 <br>
 [![Platform](https://img.shields.io/badge/linux-amd64%20%7C%20arm64-informational?logo=linux&logoColor=white)](https://github.com/ekuraev/awgram/releases/latest)
 [![Rust](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fekuraev%2Fawgram%2Fmain%2FCargo.toml&query=%24.package.rust-version&prefix=%E2%89%A5%20&label=rust&logo=rust&color=orange)](Cargo.toml)
-[![Installer](https://img.shields.io/badge/amneziawg--installer-%E2%89%A5%20v5.21.0%20%C2%B7%20tested%20v5.31.0-blue)](docs/compat.en.md)
+[![Installer](https://img.shields.io/badge/amneziawg--installer-%E2%89%A5%20v5.21.0%20%C2%B7%20tested%20v5.32.0-blue)](docs/compat.en.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A Rust Telegram bot for managing [AmneziaWG](https://amnezia.org/) clients
@@ -99,7 +99,7 @@ tangible on budget VPS hosts.
 - A Linux VPS on amd64 or arm64 with systemd; root or sudo during install.
 - Native AmneziaWG set up by
   [bivlked/amneziawg-installer](https://github.com/bivlked/amneziawg-installer)
-  v5.21.0 or newer (verified against v5.31.0, see
+  v5.21.0 or newer (verified against v5.32.0, see
   [docs/compat.en.md](docs/compat.en.md)).
 - A bot token from [@BotFather](https://t.me/BotFather) and the numeric
   Telegram IDs of the administrators.
@@ -151,13 +151,14 @@ The bot is a layer on top of `manage_amneziawg.sh` from
 [bivlked/amneziawg-installer](https://github.com/bivlked/amneziawg-installer)
 and depends directly on its `--json` interface.
 
-- **Supported version — [v5.31.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.31.0)**
+- **Supported version — [v5.32.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.32.0)**
   (`--json` contract verified), minimum —
   [v5.21.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.21.0).
 - Subcommands: `add`, `remove`, `list`, `stats`, `regen`, `modify`, `backup`,
   `restore`, `check`, `restart`, `repair-module` — all with `--json`.
-- The optional `add --allowed-ips` is detected from the script's help rather
-  than its version; without it the `add` + `modify` path is used.
+- The optional `add --allowed-ips` (installer v5.32.0 and newer) is detected
+  from the script's help rather than its version; without it the `add` +
+  `modify` path is used.
 
 What changed in each installer release and how it affected the bot — in
 [docs/compat.en.md](docs/compat.en.md).

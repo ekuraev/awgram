@@ -3,6 +3,38 @@
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версионирование — [SemVer](https://semver.org/lang/ru/).
 Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning — [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### 🇷🇺 Русский
+
+#### 🔧 Изменено
+
+- **Совместимость с инсталлером**: поддерживаемая версия —
+  [v5.32.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.32.0)
+  (сверен `--json`-контракт: `add --allowed-ips`, который бот с v0.10.0
+  определяет по справке скрипта, вышел в релизе — клиент создаётся с
+  маршрутами одним вызовом, а запись `created` в ответе получила аддитивное
+  поле `allowed_ips`; `list --json` отдаёт `expires_at`/`expires_at_error`;
+  метка срока с ведущим нулём больше не удаляет клиента молча; `restore`
+  предупреждает в stderr о расхождении поколения протокола `AWG_PROTOCOL`.
+  Конверты не изменились, новые поля бот игнорирует); минимальная —
+  по-прежнему v5.21.0.
+
+### 🇬🇧 English
+
+#### 🔧 Changed
+
+- **Installer compatibility**: the supported version is now
+  [v5.32.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.32.0)
+  (`--json` contract verified: `add --allowed-ips`, which the bot has detected
+  from the script's help since v0.10.0, is in a release — the client is created
+  with its routes in one call, and the `created` entry gains an additive
+  `allowed_ips` field; `list --json` reports `expires_at`/`expires_at_error`;
+  an expiry marker with a leading zero no longer deletes the client silently;
+  `restore` warns on stderr when the `AWG_PROTOCOL` generation differs. The
+  envelopes are unchanged and the bot ignores the new fields); the minimum is
+  still v5.21.0.
+
 ## [0.11.1] — 2026-09-05
 
 ### 🇷🇺 Русский
@@ -806,6 +838,7 @@ config paths have changed. On a running VPS, perform once:
 - Environment diagnostics (🔬 button), ⏳ client expiry badges.
 - RU/EN localization, PSK default, backup/restore, persistent state.
 
+[Unreleased]: https://github.com/ekuraev/awgram/compare/v0.11.1...HEAD
 [0.11.1]: https://github.com/ekuraev/awgram/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/ekuraev/awgram/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/ekuraev/awgram/compare/v0.10.0...v0.10.1
