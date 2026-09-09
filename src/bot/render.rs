@@ -4,7 +4,7 @@ use teloxide::types::{ChatId, InputFile, InputMedia, InputMediaDocument, ParseMo
 use crate::error::{Error, Result};
 use crate::i18n::{self, html_escape, Lang};
 use crate::store::{EventRow, TrafficSummary};
-use crate::vpn::model::{format_expiry, format_handshake, human_bytes, AddResult, Client};
+use crate::vpn::model::{format_expiry, format_handshake, human_bytes, AddResult, Client, Expiry};
 
 /// Символ «пустого» шрифта Braille: невидим, но занимает ширину, и Telegram
 /// не обрезает его как пробел в конце сообщения.
@@ -31,7 +31,7 @@ pub fn format_client_card(
     lang: Lang,
     c: &Client,
     now: i64,
-    expiry: Option<i64>,
+    expiry: Expiry,
     traffic: &TrafficSummary,
 ) -> String {
     let mark = c.mark(now);
@@ -249,13 +249,15 @@ mod tests {
             rx: 1288490188,
             tx: 356515840,
             last_handshake: Some(1_700_000_000 - 30), // близко к now — статус 🟢
+            expires_at: None,
+            expires_at_error: None,
         }
     }
 
     #[test]
     fn card_contains_name_and_traffic() {
         let now = 1_700_000_000;
-        let expiry = Some(now + 5 * 86400);
+        let expiry = Expiry::At(now + 5 * 86400);
         let text = format_client_card(Lang::Ru, &sample(), now, expiry, &TrafficSummary::default());
         assert!(text.contains("alice"));
         assert!(text.contains("Онлайн"));
@@ -269,7 +271,7 @@ mod tests {
         let now = 1_700_000_000;
         let mut c = sample();
         c.name = "a<b>&c".to_string();
-        let text = format_client_card(Lang::Ru, &c, now, None, &TrafficSummary::default());
+        let text = format_client_card(Lang::Ru, &c, now, Expiry::Never, &TrafficSummary::default());
         assert!(text.contains("a&lt;b&gt;&amp;c"));
         assert!(!text.contains("a<b>&c"));
     }
@@ -281,7 +283,7 @@ mod tests {
             Lang::En,
             &sample(),
             now,
-            Some(now + 86400),
+            Expiry::At(now + 86400),
             &TrafficSummary::default(),
         );
         assert!(text.contains("Status:"));
@@ -312,6 +314,8 @@ mod tests {
                 rx: 0,
                 tx: 0,
                 last_handshake: None,
+                expires_at: None,
+                expires_at_error: None,
             },
         ];
         let summary = TrafficSummary::default();
@@ -327,7 +331,7 @@ mod tests {
         let mut c = sample();
         c.status_code = "recent".into(); // инсталлер считает это «недавно»
         c.last_handshake = Some(now - 6 * 3600); // а на деле — 6 часов назад
-        let text = format_client_card(Lang::Ru, &c, now, None, &TrafficSummary::default());
+        let text = format_client_card(Lang::Ru, &c, now, Expiry::Never, &TrafficSummary::default());
         assert!(text.contains("🔴"));
         assert!(text.contains("Оффлайн"));
         assert!(!text.contains("🟢"));
@@ -422,8 +426,16 @@ mod tests {
             rx: 1048576,
             tx: 524288,
             last_handshake: Some(1700000000 - 600),
+            expires_at: None,
+            expires_at_error: None,
         };
-        let text = format_client_card(Lang::Ru, &client, now, None, &TrafficSummary::default());
+        let text = format_client_card(
+            Lang::Ru,
+            &client,
+            now,
+            Expiry::Never,
+            &TrafficSummary::default(),
+        );
         assert!(!text.contains("IP:"));
         assert!(text.contains("charlie"));
         assert!(text.contains("Трафик"));
@@ -445,7 +457,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let text = format_client_card(Lang::Ru, &sample(), now, None, &summary);
+        let text = format_client_card(Lang::Ru, &sample(), now, Expiry::Never, &summary);
         assert!(text.contains("Сегодня"));
         assert!(text.contains("7 дн"));
         assert!(text.contains("4 ч")); // 240 минут онлайна за 7 дн

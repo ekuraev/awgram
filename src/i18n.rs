@@ -1751,6 +1751,18 @@ pub fn routes_apply_failed(lang: Lang) -> String {
     .to_string()
 }
 
+/// Маршруты, которые реально записаны в `.conf` нового клиента. Значение
+/// приходит из ответа `add` (инсталлер v5.32.0+) — на dual-stack сервере оно
+/// шире переданного: скрипт дописывает IPv6-часть, и пользователю стоит это
+/// увидеть. На пути `add` + `modify` показывается отправленное значение.
+pub fn routes_applied_line(lang: Lang, value: &str) -> String {
+    let v = html_escape(value);
+    match lang {
+        Lang::Ru => format!("🛣 Маршруты: <code>{v}</code>"),
+        Lang::En => format!("🛣 Routes: <code>{v}</code>"),
+    }
+}
+
 // --- restart / repair ---
 pub fn btn_restart(lang: Lang) -> String {
     match lang {
@@ -2826,6 +2838,23 @@ mod tests {
     }
 
     #[test]
+    fn routes_applied_line_shows_value_in_both_languages() {
+        let ru = routes_applied_line(Lang::Ru, "10.0.0.0/8, fddd:2c4:2c4:2c4::/64");
+        assert!(ru.contains("Маршруты"), "{ru}");
+        assert!(ru.contains("10.0.0.0/8, fddd:2c4:2c4:2c4::/64"), "{ru}");
+        let en = routes_applied_line(Lang::En, "10.0.0.0/8");
+        assert!(en.contains("Routes"), "{en}");
+        assert!(en.contains("10.0.0.0/8"), "{en}");
+    }
+
+    #[test]
+    fn routes_applied_line_escapes_html() {
+        let ru = routes_applied_line(Lang::Ru, "<b>");
+        assert!(ru.contains("&lt;b&gt;"), "{ru}");
+        assert!(!ru.contains("<b>"), "{ru}");
+    }
+
+    #[test]
     fn bulk_result_summary_created_only() {
         use crate::vpn::model::{AddResult, BulkResult};
         let res = BulkResult {
@@ -2835,12 +2864,14 @@ mod tests {
                     conf_path: "/x".into(),
                     qr_path: "".into(),
                     uri: "".into(),
+                    allowed_ips: None,
                 },
                 AddResult {
                     name: "b".into(),
                     conf_path: "/y".into(),
                     qr_path: "".into(),
                     uri: "".into(),
+                    allowed_ips: None,
                 },
             ],
             skipped: vec![],
@@ -2860,6 +2891,7 @@ mod tests {
                 conf_path: "/x".into(),
                 qr_path: "".into(),
                 uri: "".into(),
+                allowed_ips: None,
             }],
             skipped: vec![Skip {
                 name: "b".into(),

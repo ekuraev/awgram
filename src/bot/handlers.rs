@@ -2063,6 +2063,14 @@ async fn finish_add(
         Ok(out) => {
             let routes_applied = out.routes_applied;
             let mut res = out.res;
+            // Что реально записано в .conf: инсталлер v5.32.0+ возвращает это
+            // в ответе add (на dual-stack сервере — с дописанным IPv6). На
+            // пути add+modify ниже подставится отправленное значение.
+            let mut applied_routes: Option<String> = if routes_applied {
+                res.allowed_ips.clone()
+            } else {
+                None
+            };
             settings.log_event(
                 now_epoch(),
                 EventKind::ClientAdd,
@@ -2144,12 +2152,16 @@ async fn finish_add(
                         if let Ok(fresh) = vpn.existing_files(name) {
                             res = fresh;
                         }
+                        applied_routes = Some(value.to_string());
                     }
                     Err(e) => {
                         tracing::error!(error = %e, client = name, "modify AllowedIPs после add провалился");
                         notes.push(i18n::routes_apply_failed(lang));
                     }
                 }
+            }
+            if let Some(applied) = applied_routes.as_deref() {
+                notes.push(i18n::routes_applied_line(lang, applied));
             }
             // Фильтр выдачи по тумблерам настроек (deliver_conf/qr/link): после
             // создания шлём только включённые артефакты. Ручная повторная выдача
@@ -2492,6 +2504,10 @@ async fn finish_bulk(
             let mut notes: Vec<String> = Vec::new();
             if allowed_ips.is_some() && !out.routes_applied {
                 notes.push(i18n::routes_not_supported(lang));
+            } else if let Some(applied) = res.created.first().and_then(|c| c.allowed_ips.as_deref())
+            {
+                // Одно значение на всю пачку — как и сам флаг --allowed-ips.
+                notes.push(i18n::routes_applied_line(lang, applied));
             }
             if settings.deliver_conf() && !res.created.is_empty() {
                 let conf_paths: Vec<String> =
@@ -2627,8 +2643,8 @@ async fn render_clients_list(
             }
             // Полный вектор (не страница): clients_list индексирует expiries[i]
             // по глобальному i, срез по странице дал бы сдвиг меток на страницах > 0.
-            let expiries: Vec<Option<i64>> =
-                clients.iter().map(|c| vpn.client_expiry(&c.name)).collect();
+            let expiries: Vec<crate::vpn::model::Expiry> =
+                clients.iter().map(|c| vpn.expiry_for(c)).collect();
             let title = i18n::clients_title_filtered(
                 lang,
                 filter,
@@ -2872,7 +2888,7 @@ async fn callback_handler(
             Ok(clients) => match clients.iter().find(|c| c.name == name) {
                 Some(c) => {
                     let now = now_epoch();
-                    let expiry = vpn.client_expiry(&name);
+                    let expiry = vpn.expiry_for(c);
                     let traffic = settings.traffic_summary(Some(&name), now);
                     let group_line = settings
                         .client_group(&name)
@@ -5073,6 +5089,8 @@ mod tests {
             rx: 0,
             tx: 0,
             last_handshake: None,
+            expires_at: None,
+            expires_at_error: None,
         };
 
         let sample_backup = crate::vpn::BackupFile {

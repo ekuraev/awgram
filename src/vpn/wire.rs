@@ -52,6 +52,11 @@ pub struct AddEntry {
     pub vpnuri: Option<String>,
     #[serde(default)]
     pub expires_at: Option<i64>,
+    /// Применённые AllowedIPs из созданного `.conf` (инсталлер v5.32.0+);
+    /// могут отличаться от переданных `--allowed-ips` — на dual-stack сервере
+    /// скрипт дописывает IPv6-часть. У старых версий поля нет.
+    #[serde(default)]
+    pub allowed_ips: Option<String>,
 }
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -314,6 +319,20 @@ mod tests {
         assert_eq!(e.qr.as_deref(), Some("/root/awg/phone.png"));
         assert_eq!(e.vpnuri.as_deref(), Some("/root/awg/phone.vpnuri"));
         assert_eq!(e.expires_at, None);
+        assert_eq!(e.allowed_ips, None, "поля нет у инсталлеров до v5.32.0");
+    }
+
+    #[test]
+    fn parse_add_reads_applied_allowed_ips() {
+        // v5.32.0: применённые маршруты из созданного .conf, с дописанным IPv6.
+        let s = r#"{"command":"add","ok":true,"added":1,"failed":0,"applied":true,"results":[{"name":"phone","status":"created","conf":"/root/awg/phone.conf","qr":null,"vpnuri":null,"expires_at":null,"allowed_ips":"10.0.0.0/8, fddd:2c4:2c4:2c4::/64"}]}"#;
+        let o = parse_add(s).unwrap();
+        assert_eq!(
+            o.results[0].allowed_ips.as_deref(),
+            Some("10.0.0.0/8, fddd:2c4:2c4:2c4::/64")
+        );
+        let s = r#"{"command":"add","ok":true,"added":1,"failed":0,"applied":true,"results":[{"name":"phone","status":"created","conf":"/root/awg/phone.conf","allowed_ips":null}]}"#;
+        assert_eq!(parse_add(s).unwrap().results[0].allowed_ips, None);
     }
 
     #[test]
