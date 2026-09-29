@@ -12,7 +12,7 @@ the bot.
 
 | | Version |
 |---|---|
-| Supported (`--json` contract verified) | [v5.32.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.32.0) |
+| Supported (`--json` contract verified) | [v5.37.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.37.0) |
 | Minimum | [v5.21.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.21.0) |
 
 v5.20.x and older are not supported: the bot relies on the extended
@@ -39,7 +39,7 @@ reality disagree.
 
 ## Installer release history
 
-None of the v5.21.1–v5.32.0 releases broke the JSON contract. All new
+None of the v5.21.1–v5.37.0 releases broke the JSON contract. All new
 messages go to stderr; the `--json` envelopes on stdout are unchanged.
 
 | Version | What changed | Effect on the bot |
@@ -56,6 +56,11 @@ messages go to stderr; the `--json` envelopes on stdout are unchanged.
 | v5.30.0 | Every interface call is bounded by a timeout; an unread state is no longer reported as measured | On a failed read `list --json` leaves clients at `no_data` — the bot marks them yellow; `check --json` may return an empty `interface.addresses` — the VPN subnet preset is hidden and bulk creation reports capacity as unavailable |
 | v5.31.0 | Full tunnel is decided by route coverage; the default "Amnezia" mode gets `::/0`; `modify` warns about a full tunnel without `::/0` | None: the "all traffic" preset sends `0.0.0.0/0, ::/0`, so the warning never fires |
 | v5.32.0 | `add --allowed-ips=LIST` — per-client routes at creation ([Issue #253](https://github.com/bivlked/amneziawg-installer/issues/253)), the `created` entry of `add --json` gains an additive `allowed_ips` field; `list --json` reports `expires_at` and `expires_at_error` in every record; an expiry marker with a leading zero no longer deletes the client; protocol generation marker `AWG_PROTOCOL` in `awgsetup_cfg.init`, `restore` warns when the generation differs | The flag the bot has detected via `--help` since v0.10.0 is now in a release: the client is created with its routes in one call, with no intermediate `modify`. On an IPv6-enabled server the script appends an IPv6 part to an IPv4-only list (the VPN subnet, or `::/0` for a full tunnel) — unlike the old `modify`, which wrote the list as is; the applied value comes back in `allowed_ips`. `expires_at`/`expires_at_error` are the source of expiry for the list and the card (an unreadable marker shows as ⚠️), on an installer without the fields the bot still reads `expiry/<name>`; `allowed_ips` from the `add` reply is shown on the "Done" screen; the `restore` warning goes to stderr |
+| v5.33.0 | Installer and `I1` generator only: `--protocol` flag, `I1` shaped as a DNS reply | None |
+| v5.34.0, v5.34.1 | Full tunnel is the default mode; `I1`–`I5` are checked when profiles are issued; `modify` rebuilds `.png`/`.vpnuri` and returns additive `qr`/`vpnuri` | None: `add`/`regen` refusals come as `status:"error"`, the QR and link are sent only if the file exists |
+| v5.35.0 | `add`/`regen`/`modify` refuse when `HeaderProtectionKey` disagrees with the `AWG_PROTOCOL` marker; keys are masked in `check`/`show` output and traces | A `modify` refusal comes as an `ok:false` error envelope; before awgram v0.12.1 the bot took it for success — fixed |
+| v5.36.0–v5.36.2 | Additive `protocol`/`protocol_error` in `check --json`; secrets hidden in the service status; a list-based full tunnel gets `2000::/3` plus a "sink" address instead of `::/0` (the Windows client reaches the LAN again) | None: the "all traffic" preset (`0.0.0.0/0, ::/0`) is left alone; after `regen` a value with `2000::/3` shows on the routes screen as set manually |
+| v5.37.0 | Default client DNS (`CLIENT_DNS`) in the install config; an empty `--expires=` is an error; `add`/`restore` handle expiry markers more strictly | None: the bot passes `--expires` only with a non-empty validated value, refusals come as `status:"error"`/`rolled_back` |
 
 ## How a new installer release is verified
 
