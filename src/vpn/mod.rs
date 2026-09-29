@@ -44,6 +44,32 @@ pub struct Vpn {
     /// Меняется только вместе с обновлением инсталлера, то есть с
     /// перезапуском бота, поэтому кэш живёт всё время процесса.
     add_allowed_ips: AtomicU8,
+    /// Дописывает ли инсталлер адрес «стока» IPv6 к списку с `2000::/3`
+    /// (v5.36.2+). Кэш по тем же правилам, что и `add_allowed_ips`.
+    v6_sink: AtomicU8,
+}
+
+/// Первая версия инсталлера, которая сама дописывает адрес стока IPv6 в
+/// `Address`, когда в AllowedIPs есть `2000::/3` без `::/0`.
+const V6_SINK_SINCE: (u32, u32, u32) = (5, 36, 2);
+
+/// Номер версии из шапки `--help` («Скрипт управления AmneziaWG (v5.37.0)»,
+/// у старых релизов — «AmneziaWG 2.0 (v5.21.0)», в английской версии —
+/// «AmneziaWG management script (v5.37.0)»).
+fn parse_script_version(help: &str) -> Option<(u32, u32, u32)> {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = RE.get_or_init(|| regex::Regex::new(r"\(v(\d+)\.(\d+)\.(\d+)\)").expect("literal"));
+    let c = re.captures(help)?;
+    let n = |i: usize| c[i].parse::<u32>().ok();
+    Some((n(1)?, n(2)?, n(3)?))
+}
+
+fn cap(yes: bool) -> u8 {
+    if yes {
+        CAP_YES
+    } else {
+        CAP_NO
+    }
 }
 
 impl Vpn {
@@ -54,6 +80,7 @@ impl Vpn {
             timeout_secs: cfg.op_timeout_secs,
             clients_dir: cfg.clients_dir.clone(),
             add_allowed_ips: AtomicU8::new(CAP_UNKNOWN),
+            v6_sink: AtomicU8::new(CAP_UNKNOWN),
         }
     }
 
@@ -144,29 +171,51 @@ impl Vpn {
     /// то есть с перезапуском бота. Сбой запуска НЕ кэшируем — временная
     /// ошибка не должна навсегда выключить флаг.
     pub async fn supports_add_allowed_ips(&self) -> bool {
-        match self.add_allowed_ips.load(Ordering::Relaxed) {
-            CAP_YES => return true,
-            CAP_NO => return false,
-            _ => {}
+        if self.add_allowed_ips.load(Ordering::Relaxed) == CAP_UNKNOWN {
+            self.probe_help().await;
         }
+        self.add_allowed_ips.load(Ordering::Relaxed) == CAP_YES
+    }
+
+    /// IPv6-часть для режима исключений. Признака в справке у стока нет,
+    /// поэтому здесь сверяем номер версии. На полуобновлённом сервере
+    /// (manage новый, awg_common старый) `modify` лишь предупредит, что сток не
+    /// выровнен, — это не хуже прежнего `::/0`. Справка не прочиталась —
+    /// `::/0`: без стока `2000::/3` пустил бы IPv6 мимо туннеля.
+    pub async fn v6_route(&self) -> validate::V6Route {
+        if self.v6_sink.load(Ordering::Relaxed) == CAP_UNKNOWN {
+            self.probe_help().await;
+        }
+        if self.v6_sink.load(Ordering::Relaxed) == CAP_YES {
+            validate::V6Route::Sink
+        } else {
+            validate::V6Route::All
+        }
+    }
+
+    /// Читает `--help` и раскладывает ответ по кэшам возможностей. Уже
+    /// известный ответ не переписывает: `add_allowed_ips` мог быть сброшен в
+    /// CAP_NO после отказа скрипта.
+    async fn probe_help(&self) {
         // Ответу верим только если справка действительно напечаталась: явный
         // `--help` выходит с нулём и непустым stdout. Пустой вывод или
         // ненулевой код — мы ничего не узнали, а не «флага нет».
-        match run(&self.spec(), &["--help"]).await {
-            Ok((out, 0)) if !out.trim().is_empty() => {
-                let supported = out.contains("--allowed-ips");
-                self.add_allowed_ips
-                    .store(if supported { CAP_YES } else { CAP_NO }, Ordering::Relaxed);
-                supported
-            }
+        let out = match run(&self.spec(), &["--help"]).await {
+            Ok((out, 0)) if !out.trim().is_empty() => out,
             Ok((_, code)) => {
                 tracing::warn!(code, "справка manage не прочиталась — не кэширую ответ");
-                false
+                return;
             }
             Err(e) => {
                 tracing::warn!(error = %e, "справка manage недоступна — не кэширую ответ");
-                false
+                return;
             }
+        };
+        let flag = out.contains("--allowed-ips");
+        let sink = parse_script_version(&out).is_some_and(|v| v >= V6_SINK_SINCE);
+        for (slot, yes) in [(&self.add_allowed_ips, flag), (&self.v6_sink, sink)] {
+            let _ =
+                slot.compare_exchange(CAP_UNKNOWN, cap(yes), Ordering::Relaxed, Ordering::Relaxed);
         }
     }
 
@@ -926,6 +975,7 @@ impl Vpn {
             timeout_secs: 5,
             clients_dir,
             add_allowed_ips: AtomicU8::new(CAP_UNKNOWN),
+            v6_sink: AtomicU8::new(CAP_UNKNOWN),
         }
     }
 }
@@ -951,6 +1001,7 @@ mod tests {
             timeout_secs: 5,
             clients_dir: dir.path().to_path_buf(),
             add_allowed_ips: AtomicU8::new(CAP_UNKNOWN),
+            v6_sink: AtomicU8::new(CAP_UNKNOWN),
         };
         (dir, vpn)
     }
@@ -1117,6 +1168,7 @@ echo '{{"command":"add","ok":true,"added":1,"failed":0,"applied":true,"results":
             timeout_secs: 5,
             clients_dir: dir.path().to_path_buf(),
             add_allowed_ips: AtomicU8::new(CAP_UNKNOWN),
+            v6_sink: AtomicU8::new(CAP_UNKNOWN),
         };
         let res = vpn.add("alice", None, false).await.unwrap();
         assert_eq!(res.conf_path, "/tmp/zz/alice.conf");
@@ -1146,6 +1198,7 @@ echo '{"command":"add","ok":true,"added":1,"failed":0,"applied":true,"results":[
             timeout_secs: 5,
             clients_dir: dir.path().to_path_buf(),
             add_allowed_ips: AtomicU8::new(CAP_UNKNOWN),
+            v6_sink: AtomicU8::new(CAP_UNKNOWN),
         };
         let res = vpn.add("alice", None, false).await.unwrap();
         assert_eq!(res.uri, "");
@@ -1808,6 +1861,7 @@ echo '{{"command":"add","ok":true,"added":2,"failed":1,"applied":true,"results":
             timeout_secs: 5,
             clients_dir: dir.path().to_path_buf(),
             add_allowed_ips: AtomicU8::new(CAP_UNKNOWN),
+            v6_sink: AtomicU8::new(CAP_UNKNOWN),
         };
         let res = vpn
             .add_many(
@@ -1969,6 +2023,61 @@ echo '{"command":"add","ok":true,"added":1,"failed":0,"applied":true,"results":[
         assert!(vpn.supports_add_allowed_ips().await);
         let (_d2, old) = vpn_with_script(&old_installer_stub());
         assert!(!old.supports_add_allowed_ips().await);
+    }
+
+    #[test]
+    fn parse_script_version_reads_help_header() {
+        for (help, want) in [
+            (
+                "\nСкрипт управления AmneziaWG (v5.37.0)\n====",
+                Some((5, 37, 0)),
+            ),
+            (
+                "Скрипт управления AmneziaWG 2.0 (v5.21.0)",
+                Some((5, 21, 0)),
+            ),
+            ("AmneziaWG management script (v5.36.2)", Some((5, 36, 2))),
+            ("  --psk   сгенерировать PresharedKey", None),
+        ] {
+            assert_eq!(parse_script_version(help), want, "{help}");
+        }
+    }
+
+    fn help_stub(version: &str) -> String {
+        format!(
+            "#!/bin/sh\n[ \"$1\" = --help ] || exit 1\necho 'Скрипт управления AmneziaWG (v{version})'\necho '  --allowed-ips=СПИСОК'\n"
+        )
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn v6_route_is_sink_from_5_36_2() {
+        use validate::V6Route;
+        for (version, want) in [
+            ("5.36.1", V6Route::All),
+            ("5.36.2", V6Route::Sink),
+            ("5.37.0", V6Route::Sink),
+            ("6.0.0", V6Route::Sink),
+        ] {
+            let (_d, vpn) = vpn_with_script(&help_stub(version));
+            assert_eq!(vpn.v6_route().await, want, "{version}");
+        }
+        // Справка без номера версии (или не прочиталась) — прежний ::/0.
+        let (_d, vpn) = vpn_with_script(&old_installer_stub());
+        assert_eq!(vpn.v6_route().await, V6Route::All);
+        let (_d, vpn) = vpn_with_script("#!/bin/sh\nexit 1\n");
+        assert_eq!(vpn.v6_route().await, V6Route::All);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn probe_help_keeps_allowed_ips_downgrade() {
+        // После отказа скрипта флаг сброшен в CAP_NO; вопрос о стоке снова
+        // читает справку, но не должен вернуть флаг обратно.
+        let (_d, vpn) = vpn_with_script(&help_stub("5.37.0"));
+        vpn.add_allowed_ips.store(CAP_NO, Ordering::Relaxed);
+        assert_eq!(vpn.v6_route().await, validate::V6Route::Sink);
+        assert!(!vpn.supports_add_allowed_ips().await);
     }
 
     #[tokio::test]

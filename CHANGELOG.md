@@ -3,6 +3,44 @@
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версионирование — [SemVer](https://semver.org/lang/ru/).
 Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning — [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### 🇷🇺 Русский
+
+#### 🐛 Исправлено
+
+- **Режим «исключать из VPN» больше не отрезает локальную сеть на Windows.**
+  IPv6-часть списка была `::/0`, а с ним клиент AmneziaWG для Windows
+  включает kill-switch. На инсталлере v5.36.2+ бот шлёт `2000::/3`, а адрес
+  «стока» IPv6 дописывает сам инсталлер; на более старом остаётся `::/0`.
+  Версию бот берёт из справки скрипта.
+- **Список исключений не рвёт туннель на iOS и не ломает поиск устройств в
+  LAN.** Он начинался с `0.0.0.0/5` (upstream issue #42) и отправлял в
+  туннель мультикаст `224.0.0.0/3` (mDNS/SSDP). Оба диапазона теперь
+  исключены, как в режиме 2 инсталлера; прежние списки применятся заново
+  при следующем сохранении экрана маршрутов.
+- **Экран маршрутов узнаёт серверный список режима 2** (маршруты клиентов
+  по умолчанию) как «исключить все локальные», а не «задано вручную» — и с
+  `::/0`, и с `2000::/3`.
+
+### 🇬🇧 English
+
+#### 🐛 Fixed
+
+- **"Exclude from VPN" no longer cuts off the LAN on Windows.** The IPv6
+  part of the list was `::/0`, which makes the AmneziaWG Windows client turn
+  on its kill-switch. On installer v5.36.2+ the bot sends `2000::/3` and the
+  installer adds the IPv6 "sink" address itself; older installers keep
+  `::/0`. The bot reads the version from the script's help.
+- **The exclusion list no longer breaks the tunnel on iOS or LAN device
+  discovery.** It started with `0.0.0.0/5` (upstream issue #42) and sent
+  multicast `224.0.0.0/3` (mDNS/SSDP) into the tunnel. Both ranges are now
+  left out, as in the installer's mode 2; existing lists are rebuilt the
+  next time the routes screen is saved.
+- **The routes screen recognises the server's mode 2 list** (the default
+  client routes) as "exclude all local" instead of "set manually" — with
+  either `::/0` or `2000::/3`.
+
 ## [0.12.1] — 2026-09-29
 
 ### 🇷🇺 Русский
@@ -926,6 +964,7 @@ config paths have changed. On a running VPS, perform once:
 - Environment diagnostics (🔬 button), ⏳ client expiry badges.
 - RU/EN localization, PSK default, backup/restore, persistent state.
 
+[Unreleased]: https://github.com/ekuraev/awgram/compare/v0.12.1...HEAD
 [0.12.1]: https://github.com/ekuraev/awgram/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/ekuraev/awgram/compare/v0.11.1...v0.12.0
 [0.11.1]: https://github.com/ekuraev/awgram/compare/v0.11.0...v0.11.1
