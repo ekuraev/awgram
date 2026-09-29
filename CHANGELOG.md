@@ -3,7 +3,7 @@
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версионирование — [SemVer](https://semver.org/lang/ru/).
 Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning — [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [0.12.1] — 2026-09-29
 
 ### 🇷🇺 Русский
 
@@ -14,6 +14,14 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
   поколением протокола, и небезопасные `I1`–`I5` в `.conf`, и сбой
   пересборки QR/`vpn://`), бот показывал «готово» с пустым значением, хотя
   конфиг не менялся. Теперь выводится ошибка скрипта.
+
+#### 🔧 Изменено
+
+- **Совместимость с инсталлером**: поддерживаемая версия —
+  [v5.37.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.37.0) (сверен `--json`-контракт v5.33.0–v5.37.0: конверты не
+  изменились, новые поля аддитивные — `qr`/`vpnuri` в ответе `modify`,
+  `protocol`/`protocol_error` в `check --json`; новые отказы `modify` бот
+  теперь показывает как ошибку, см. выше); минимальная — по-прежнему v5.21.0.
 
 #### 🔒 Безопасность
 
@@ -32,6 +40,14 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
   protocol generation mismatch, unsafe `I1`–`I5` in the `.conf` and a failed
   QR/`vpn://` rebuild), the bot showed "done" with an empty value although
   the config was untouched. The script error is shown now.
+
+#### 🔧 Changed
+
+- **Installer compatibility**: supported version is [v5.37.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.37.0) (the
+  `--json` contract of v5.33.0–v5.37.0 is verified: envelopes are unchanged,
+  new fields are additive — `qr`/`vpnuri` in the `modify` reply,
+  `protocol`/`protocol_error` in `check --json`; the new `modify` refusals
+  are now shown as errors, see above); the minimum is still v5.21.0.
 
 #### 🔒 Security
 
@@ -910,7 +926,7 @@ config paths have changed. On a running VPS, perform once:
 - Environment diagnostics (🔬 button), ⏳ client expiry badges.
 - RU/EN localization, PSK default, backup/restore, persistent state.
 
-[Unreleased]: https://github.com/ekuraev/awgram/compare/v0.12.0...HEAD
+[0.12.1]: https://github.com/ekuraev/awgram/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/ekuraev/awgram/compare/v0.11.1...v0.12.0
 [0.11.1]: https://github.com/ekuraev/awgram/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/ekuraev/awgram/compare/v0.10.1...v0.11.0
