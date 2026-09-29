@@ -529,13 +529,50 @@ impl RouteSelection {
     }
 }
 
+/// IPv6-часть списка исключений. `::/0` на Windows включает kill-switch и
+/// отрезает локальную сеть — ту самую, ради которой режим существует;
+/// `2000::/3` (глобальный unicast) её не трогает, но без адреса «стока» в
+/// `Address` IPv6 ушёл бы мимо туннеля. Сток дописывает инсталлер v5.36.2+
+/// (и в `add`, и в `modify`), поэтому `Sink` — только для него.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum V6Route {
+    All,
+    Sink,
+}
+
+impl V6Route {
+    pub fn cidr(self) -> &'static str {
+        match self {
+            V6Route::All => "::/0",
+            V6Route::Sink => "2000::/3",
+        }
+    }
+}
+
+/// Не шлём в туннель в режиме исключений: 0.0.0.0/8 не маршрутизируется, а
+/// список с 0.0.0.0/5 рвёт туннель на iOS (upstream issue #42); 224.0.0.0/3 —
+/// мультикаст и резерв, в туннеле ломает обнаружение устройств LAN (mDNS/SSDP).
+/// Тот же набор выкидывает список режима 2 инсталлера.
+const EXCLUDE_ALWAYS: [&str; 2] = ["0.0.0.0/8", "224.0.0.0/3"];
+
+fn exclude_always() -> impl Iterator<Item = Ipv4Net> {
+    EXCLUDE_ALWAYS
+        .into_iter()
+        .map(|c| Ipv4Net::parse(c).expect("literal"))
+}
+
 /// Собирает значение AllowedIPs из набора тумблеров. `None` — ничего не
 /// выбрано (применять нечего). Подсеть VPN участвует только если она известна
 /// (её отдаёт `check`, при недоступном интерфейсе кнопки просто нет).
-pub fn build_allowed_ips(sel: RouteSelection, vpn_subnet: Option<&str>) -> Option<String> {
+/// `v6` влияет только на режим исключений.
+pub fn build_allowed_ips(
+    sel: RouteSelection,
+    vpn_subnet: Option<&str>,
+    v6: V6Route,
+) -> Option<String> {
     match sel.mode {
         RouteMode::Include => build_include(sel, vpn_subnet),
-        RouteMode::Exclude => build_exclude(sel, vpn_subnet),
+        RouteMode::Exclude => build_exclude(sel, vpn_subnet, v6),
     }
 }
 
@@ -554,11 +591,12 @@ fn build_include(sel: RouteSelection, vpn_subnet: Option<&str>) -> Option<String
     }
 }
 
-fn build_exclude(sel: RouteSelection, vpn_subnet: Option<&str>) -> Option<String> {
-    let cut: Vec<Ipv4Net> = sel.nets().map(NetPreset::net).collect();
+fn build_exclude(sel: RouteSelection, vpn_subnet: Option<&str>, v6: V6Route) -> Option<String> {
+    let mut cut: Vec<Ipv4Net> = sel.nets().map(NetPreset::net).collect();
     if cut.is_empty() {
         return None;
     }
+    cut.extend(exclude_always());
     let everything = Ipv4Net::parse("0.0.0.0/0").expect("literal");
     let mut nets = cidr::subtract(&[everything], &cut);
     if let Some(vpn) = vpn_subnet.and_then(Ipv4Net::parse) {
@@ -566,7 +604,7 @@ fn build_exclude(sel: RouteSelection, vpn_subnet: Option<&str>) -> Option<String
         nets = cidr::aggregate(&nets);
     }
     let mut parts: Vec<String> = nets.iter().map(ToString::to_string).collect();
-    parts.push("::/0".to_string());
+    parts.push(v6.cidr().to_string());
     Some(parts.join(", "))
 }
 
@@ -607,21 +645,29 @@ fn selection_from_include(value: &str, vpn_subnet: Option<&str>) -> Option<Route
 /// нет ничего из него (за вычетом подсети VPN — её сборка возвращает всегда).
 /// Вложенные исключения (192.168.1.0/24 внутри 192.168.0.0/16) сворачиваются
 /// в широкий тумблер. Итог сверяется пересборкой: не совпало — значение чужое.
+/// Сверка терпит то, что на смысл не влияет: IPv6-часть `::/0` или
+/// `2000::/3`, наличие 0.0.0.0/8 и 224.0.0.0/3 (прежние сборки бота их
+/// слали) и подсети VPN (в списке режима 2 инсталлера её нет при изоляции).
 fn selection_from_exclude(value: &str, vpn_subnet: Option<&str>) -> Option<RouteSelection> {
-    let mut have_v6 = false;
+    let mut v6: Option<&str> = None;
     let mut v4: Vec<Ipv4Net> = Vec::new();
     for raw in value.split(',') {
         let token = raw.trim();
         if token.is_empty() {
             continue;
         }
-        if token == "::/0" {
-            have_v6 = true;
+        if token.contains(':') {
+            // Ровно один IPv6-маршрут и только наш: ::/0 вместе с 2000::/3
+            // или ULA — уже чужая настройка.
+            if v6.is_some() || (token != V6Route::All.cidr() && token != V6Route::Sink.cidr()) {
+                return None;
+            }
+            v6 = Some(token);
             continue;
         }
         v4.push(Ipv4Net::parse(token)?);
     }
-    if !have_v6 || v4.is_empty() {
+    if v6.is_none() || v4.is_empty() {
         return None;
     }
     let vpn: Vec<Ipv4Net> = vpn_subnet.and_then(Ipv4Net::parse).into_iter().collect();
@@ -638,13 +684,19 @@ fn selection_from_exclude(value: &str, vpn_subnet: Option<&str>) -> Option<Route
         .filter(|p| !excluded.iter().any(|q| q != p && q.net().contains(p.net())))
         .collect();
     let sel = RouteSelection::with_nets(RouteMode::Exclude, &outer);
-    let rebuilt = build_allowed_ips(sel, vpn_subnet)?;
+    let rebuilt = build_allowed_ips(sel, vpn_subnet, V6Route::All)?;
+    let normalize = |nets: Vec<Ipv4Net>| {
+        let mut nets = nets;
+        nets.extend(exclude_always());
+        nets.extend(vpn.iter().copied());
+        cidr::aggregate(&nets)
+    };
     let rebuilt_v4: Vec<Ipv4Net> = rebuilt
         .split(',')
         .map(str::trim)
         .filter_map(Ipv4Net::parse)
         .collect();
-    if cidr::aggregate(&v4) == rebuilt_v4 {
+    if normalize(v4) == normalize(rebuilt_v4) {
         Some(sel)
     } else {
         None
@@ -1029,7 +1081,7 @@ mod tests {
         let mut sel = inc(&[NetPreset::Net192, NetPreset::Net10]);
         sel.vpn = true;
         assert_eq!(
-            build_allowed_ips(sel, Some("10.9.9.0/24")).unwrap(),
+            build_allowed_ips(sel, Some("10.9.9.0/24"), V6Route::All).unwrap(),
             "10.0.0.0/8, 192.168.0.0/16, 10.9.9.0/24"
         );
     }
@@ -1042,7 +1094,7 @@ mod tests {
             NetPreset::Net192_100,
         ]);
         assert_eq!(
-            build_allowed_ips(sel, None).unwrap(),
+            build_allowed_ips(sel, None, V6Route::All).unwrap(),
             "10.0.0.0/24, 192.168.1.0/24, 192.168.100.0/24"
         );
     }
@@ -1054,10 +1106,10 @@ mod tests {
             ..RouteSelection::default()
         };
         assert_eq!(
-            build_allowed_ips(all, Some("10.9.9.0/24")).unwrap(),
+            build_allowed_ips(all, Some("10.9.9.0/24"), V6Route::All).unwrap(),
             ROUTE_ALL
         );
-        assert!(build_allowed_ips(RouteSelection::default(), None).is_none());
+        assert!(build_allowed_ips(RouteSelection::default(), None, V6Route::All).is_none());
     }
 
     #[test]
@@ -1066,7 +1118,7 @@ mod tests {
             vpn: true,
             ..RouteSelection::default()
         };
-        assert!(build_allowed_ips(sel, None).is_none());
+        assert!(build_allowed_ips(sel, None, V6Route::All).is_none());
     }
 
     #[test]
@@ -1136,7 +1188,7 @@ mod tests {
         assert!(!sel.net(NetPreset::Net192));
         assert_eq!(sel.mode, RouteMode::Include);
         assert_eq!(
-            build_allowed_ips(sel, None).unwrap(),
+            build_allowed_ips(sel, None, V6Route::All).unwrap(),
             "10.0.0.0/8, 172.16.0.0/12"
         );
         let all = selection_from_value("0.0.0.0/0, ::/0", None).unwrap();
@@ -1162,10 +1214,10 @@ mod tests {
         // Всё, что собирает экран, обязано пройти валидатор перед modify.
         let mut sel = inc(&NetPreset::ALL);
         sel.vpn = true;
-        let v = build_allowed_ips(sel, Some("10.9.9.0/24")).unwrap();
+        let v = build_allowed_ips(sel, Some("10.9.9.0/24"), V6Route::All).unwrap();
         assert!(parse_allowed_ips(&v).is_ok());
         assert!(parse_allowed_ips(ROUTE_ALL).is_ok());
-        let v = build_allowed_ips(exc(&NetPreset::ALL), Some("10.9.9.0/24")).unwrap();
+        let v = build_allowed_ips(exc(&NetPreset::ALL), Some("10.9.9.0/24"), V6Route::All).unwrap();
         assert!(parse_allowed_ips(&v).is_ok());
     }
 
@@ -1173,15 +1225,34 @@ mod tests {
 
     #[test]
     fn exclude_net10_gives_complement_plus_ipv6() {
+        // Без 0.0.0.0/8 (iOS рвёт туннель на списке с 0.0.0.0/5, upstream
+        // issue #42) и без 224.0.0.0/3 (мультикаст обнаружения устройств LAN).
         assert_eq!(
-            build_allowed_ips(exc(&[NetPreset::Net10]), None).unwrap(),
-            "0.0.0.0/5, 8.0.0.0/7, 11.0.0.0/8, 12.0.0.0/6, 16.0.0.0/4, 32.0.0.0/3, 64.0.0.0/2, 128.0.0.0/1, ::/0"
+            build_allowed_ips(exc(&[NetPreset::Net10]), None, V6Route::All).unwrap(),
+            "1.0.0.0/8, 2.0.0.0/7, 4.0.0.0/6, 8.0.0.0/7, 11.0.0.0/8, 12.0.0.0/6, 16.0.0.0/4, 32.0.0.0/3, 64.0.0.0/2, 128.0.0.0/2, 192.0.0.0/3, ::/0"
+        );
+    }
+
+    #[test]
+    fn exclude_with_sink_route_ends_with_2000_3() {
+        let v = build_allowed_ips(exc(&[NetPreset::Net10]), None, V6Route::Sink).unwrap();
+        assert!(v.ends_with(", 2000::/3"), "{v}");
+        assert!(!v.contains("::/0"), "{v}");
+    }
+
+    #[test]
+    fn include_ignores_v6_route() {
+        let sel = inc(&[NetPreset::Net10]);
+        assert_eq!(
+            build_allowed_ips(sel, None, V6Route::Sink),
+            build_allowed_ips(sel, None, V6Route::All)
         );
     }
 
     #[test]
     fn exclude_keeps_vpn_subnet_inside_excluded_range() {
-        let v = build_allowed_ips(exc(&[NetPreset::Net10]), Some("10.9.9.0/24")).unwrap();
+        let v =
+            build_allowed_ips(exc(&[NetPreset::Net10]), Some("10.9.9.0/24"), V6Route::All).unwrap();
         assert!(v.contains("10.9.9.0/24"), "{v}");
         assert!(!v.contains("10.0.0.0/8"), "{v}");
         assert!(v.ends_with("::/0"), "{v}");
@@ -1189,17 +1260,18 @@ mod tests {
 
     #[test]
     fn exclude_with_nothing_selected_is_none() {
-        assert!(build_allowed_ips(exc(&[]), Some("10.9.9.0/24")).is_none());
+        assert!(build_allowed_ips(exc(&[]), Some("10.9.9.0/24"), V6Route::All).is_none());
     }
 
     #[test]
     fn exclude_all_local_matches_exclude_private_ips_list() {
-        // Тот же набор, что «Exclude private IPs» в клиенте WireGuard для RFC 1918.
-        let v = build_allowed_ips(exc(&NetPreset::WIDE), None).unwrap();
+        // Как список режима 2 инсталлера: всё, кроме RFC 1918, 0.0.0.0/8 и 224.0.0.0/3.
+        let v = build_allowed_ips(exc(&NetPreset::WIDE), None, V6Route::All).unwrap();
         for absent in [NET_10, NET_172, NET_192] {
             assert!(!v.contains(absent), "{v}");
         }
-        assert!(v.starts_with("0.0.0.0/5, "), "{v}");
+        assert!(v.starts_with("1.0.0.0/8, "), "{v}");
+        assert!(!v.contains("224.0.0.0"), "{v}");
         assert!(v.contains("192.169.0.0/16"), "{v}");
         assert!(v.contains("172.32.0.0/11"), "{v}");
     }
@@ -1243,7 +1315,7 @@ mod tests {
             (vec![NetPreset::Net192_1], Some("192.168.1.128/25")),
         ] {
             let sel = exc(&nets);
-            let v = build_allowed_ips(sel, subnet).unwrap();
+            let v = build_allowed_ips(sel, subnet, V6Route::All).unwrap();
             let back = selection_from_value(&v, subnet);
             assert_eq!(back, Some(sel), "{nets:?} / {subnet:?}: {v}");
         }
@@ -1253,7 +1325,12 @@ mod tests {
     fn selection_from_value_exclude_drops_presets_nested_in_wider_ones() {
         // 192.168.1.0/24 внутри 192.168.0.0/16: строка та же, на экране —
         // только широкий тумблер.
-        let v = build_allowed_ips(exc(&[NetPreset::Net192, NetPreset::Net192_1]), None).unwrap();
+        let v = build_allowed_ips(
+            exc(&[NetPreset::Net192, NetPreset::Net192_1]),
+            None,
+            V6Route::All,
+        )
+        .unwrap();
         assert_eq!(
             selection_from_value(&v, None),
             Some(exc(&[NetPreset::Net192]))
@@ -1273,11 +1350,71 @@ mod tests {
         .join(", ");
         assert!(selection_from_value(&format!("{manual}, ::/0"), None).is_none());
         // Без ::/0 — тоже не наша сборка.
-        let v = build_allowed_ips(exc(&[NetPreset::Net10]), None).unwrap();
+        let v = build_allowed_ips(exc(&[NetPreset::Net10]), None, V6Route::All).unwrap();
         let no_v6 = v.trim_end_matches(", ::/0");
         assert!(selection_from_value(no_v6, None).is_none());
         // Мусор внутри списка.
         assert!(selection_from_value("0.0.0.0/5, garbage, ::/0", None).is_none());
+    }
+
+    /// Список исключений в том виде, как его собирали awgram до перехода на V6Route:
+    /// дополнение от 0.0.0.0/0 (с 0.0.0.0/5 и 224.0.0.0/3) и `::/0`.
+    fn legacy_exclude(nets: &[NetPreset], subnet: Option<&str>) -> String {
+        use crate::vpn::cidr::{aggregate, subtract, Ipv4Net};
+        let cut: Vec<Ipv4Net> = nets.iter().map(|p| p.net()).collect();
+        let mut v4 = subtract(&[Ipv4Net::parse("0.0.0.0/0").unwrap()], &cut);
+        v4.extend(subnet.and_then(Ipv4Net::parse));
+        let mut parts: Vec<String> = aggregate(&v4).iter().map(ToString::to_string).collect();
+        parts.push("::/0".into());
+        parts.join(", ")
+    }
+
+    /// Список режима 2 инсталлера (install_amneziawg.sh, ALLOWED_IPS_MODE=2).
+    const UPSTREAM_MODE2: &str = "1.0.0.0/8, 2.0.0.0/7, 4.0.0.0/6, 8.0.0.0/7, 11.0.0.0/8, 12.0.0.0/6, 16.0.0.0/4, 32.0.0.0/3, 64.0.0.0/2, 128.0.0.0/3, 160.0.0.0/5, 168.0.0.0/6, 172.0.0.0/12, 172.32.0.0/11, 172.64.0.0/10, 172.128.0.0/9, 173.0.0.0/8, 174.0.0.0/7, 176.0.0.0/4, 192.0.0.0/9, 192.128.0.0/11, 192.160.0.0/13, 192.169.0.0/16, 192.170.0.0/15, 192.172.0.0/14, 192.176.0.0/12, 192.192.0.0/10, 193.0.0.0/8, 194.0.0.0/7, 196.0.0.0/6, 200.0.0.0/5, 208.0.0.0/4, 8.8.8.8/32, 1.1.1.1/32";
+
+    #[test]
+    fn selection_from_value_recognises_sink_route() {
+        let sel = exc(&[NetPreset::Net192_1]);
+        let v = build_allowed_ips(sel, Some("10.9.9.0/24"), V6Route::Sink).unwrap();
+        assert_eq!(selection_from_value(&v, Some("10.9.9.0/24")), Some(sel));
+    }
+
+    #[test]
+    fn selection_from_value_recognises_legacy_exclude_lists() {
+        for (nets, subnet) in [
+            (vec![NetPreset::Net10], None),
+            (NetPreset::WIDE.to_vec(), Some("10.9.9.0/24")),
+            (vec![NetPreset::Net192_1, NetPreset::Net10_0], None),
+        ] {
+            let v = legacy_exclude(&nets, subnet);
+            assert_eq!(selection_from_value(&v, subnet), Some(exc(&nets)), "{v}");
+        }
+    }
+
+    #[test]
+    fn selection_from_value_recognises_upstream_mode2_list() {
+        let want = Some(exc(&NetPreset::WIDE));
+        for v6 in ["::/0", "2000::/3"] {
+            // Изоляция клиентов включена: подсети VPN в списке нет.
+            let v = format!("{UPSTREAM_MODE2}, {v6}");
+            assert_eq!(selection_from_value(&v, Some("10.9.9.0/24")), want, "{v}");
+            assert_eq!(selection_from_value(&v, None), want, "{v}");
+            // Изоляция выключена: инсталлер дописывает подсеть VPN.
+            let v = format!("{UPSTREAM_MODE2}, 10.9.9.0/24, {v6}");
+            assert_eq!(selection_from_value(&v, Some("10.9.9.0/24")), want, "{v}");
+        }
+    }
+
+    #[test]
+    fn selection_from_value_exclude_rejects_foreign_ipv6() {
+        let v4 = build_allowed_ips(exc(&[NetPreset::Net10]), None, V6Route::All).unwrap();
+        let v4 = v4.trim_end_matches(", ::/0");
+        for v6 in ["::/0, 2000::/3", "fd00::/8", "2000::/3, fd00::/8"] {
+            assert!(
+                selection_from_value(&format!("{v4}, {v6}"), None).is_none(),
+                "{v6}"
+            );
+        }
     }
 
     #[test]

@@ -697,8 +697,10 @@ async fn show_routes(
     subnet: Option<&str>,
     current: Option<&str>,
 ) {
-    use crate::vpn::validate::{build_allowed_ips, NetPreset, RouteMode};
-    let pending = build_allowed_ips(sel, subnet);
+    use crate::vpn::validate::{build_allowed_ips, NetPreset, RouteMode, V6Route};
+    // Здесь важно только, есть ли что применять; IPv6-часть (она зависит от
+    // инсталлера) выбирается при применении.
+    let pending = build_allowed_ips(sel, subnet, V6Route::All);
     // В режиме исключений итог — два десятка CIDR; в заголовке показываем
     // сводку «всё, кроме …», сам список уйдёт в конфиг.
     let excluded = sel
@@ -3349,7 +3351,8 @@ async fn callback_handler(
             let value = if action == Action::RouteSkip {
                 None
             } else {
-                crate::vpn::validate::build_allowed_ips(sel, subnet.as_deref())
+                let v6 = vpn.v6_route().await;
+                crate::vpn::validate::build_allowed_ips(sel, subnet.as_deref(), v6)
             };
             apply_routes(
                 &bot,
