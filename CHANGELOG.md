@@ -7,6 +7,14 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
 
 ### 🇷🇺 Русский
 
+#### 🐛 Исправлено
+
+- **Неудачная правка клиента больше не выдаётся за успех.** Если `modify`
+  отказывал (с инсталлера v5.35.0 это и рассинхрон `HeaderProtectionKey` с
+  поколением протокола, и небезопасные `I1`–`I5` в `.conf`, и сбой
+  пересборки QR/`vpn://`), бот показывал «готово» с пустым значением, хотя
+  конфиг не менялся. Теперь выводится ошибка скрипта.
+
 #### 🔒 Безопасность
 
 - **rustls обновлён до 0.23.45** — закрыта уязвимость
@@ -16,6 +24,14 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
   с Telegram API. Заодно `toml` 1.1.6.
 
 ### 🇬🇧 English
+
+#### 🐛 Fixed
+
+- **A failed client edit is no longer reported as success.** When `modify`
+  refused (since installer v5.35.0 that includes a `HeaderProtectionKey` /
+  protocol generation mismatch, unsafe `I1`–`I5` in the `.conf` and a failed
+  QR/`vpn://` rebuild), the bot showed "done" with an empty value although
+  the config was untouched. The script error is shown now.
 
 #### 🔒 Security
 
