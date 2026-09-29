@@ -3,6 +3,28 @@
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версионирование — [SemVer](https://semver.org/lang/ru/).
 Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning — [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### 🇷🇺 Русский
+
+#### 🔒 Безопасность
+
+- **rustls обновлён до 0.23.45** — закрыта уязвимость
+  [RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285)
+  (TLS 1.3 принимал сообщения рукопожатия не на своём уровне шифрования).
+  Крейт приходит транзитивно через `reqwest`/`teloxide` и шифрует соединение
+  с Telegram API. Заодно `toml` 1.1.6.
+
+### 🇬🇧 English
+
+#### 🔒 Security
+
+- **rustls bumped to 0.23.45** — fixes
+  [RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285)
+  (TLS 1.3 accepted handshake messages at the wrong encryption level). The
+  crate comes in transitively via `reqwest`/`teloxide` and secures the
+  connection to the Telegram API. Also `toml` 1.1.6.
+
 ## [0.12.0] — 2026-09-10
 
 ### 🇷🇺 Русский
@@ -872,6 +894,7 @@ config paths have changed. On a running VPS, perform once:
 - Environment diagnostics (🔬 button), ⏳ client expiry badges.
 - RU/EN localization, PSK default, backup/restore, persistent state.
 
+[Unreleased]: https://github.com/ekuraev/awgram/compare/v0.12.0...HEAD
 [0.12.0]: https://github.com/ekuraev/awgram/compare/v0.11.1...v0.12.0
 [0.11.1]: https://github.com/ekuraev/awgram/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/ekuraev/awgram/compare/v0.10.1...v0.11.0
