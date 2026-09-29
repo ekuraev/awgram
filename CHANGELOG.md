@@ -20,8 +20,10 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
   исключены, как в режиме 2 инсталлера; прежние списки применятся заново
   при следующем сохранении экрана маршрутов.
 - **Экран маршрутов узнаёт серверный список режима 2** (маршруты клиентов
-  по умолчанию) как «исключить все локальные», а не «задано вручную» — и с
-  `::/0`, и с `2000::/3`.
+  по умолчанию) как «исключить все локальные», а не «задано вручную», если
+  IPv6-часть — `::/0` или `2000::/3`. На сервере с IPv6-туннелем без
+  нативного IPv6 (там в списке туннельная подсеть) он по-прежнему показывается
+  как заданный вручную.
 
 ### 🇬🇧 English
 
@@ -38,8 +40,10 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
   left out, as in the installer's mode 2; existing lists are rebuilt the
   next time the routes screen is saved.
 - **The routes screen recognises the server's mode 2 list** (the default
-  client routes) as "exclude all local" instead of "set manually" — with
-  either `::/0` or `2000::/3`.
+  client routes) as "exclude all local" instead of "set manually" when its
+  IPv6 part is `::/0` or `2000::/3`. On a server with an IPv6 tunnel but no
+  native IPv6 (the list then carries the tunnel subnet) it still shows as set
+  manually.
 
 ## [0.12.1] — 2026-09-29
 

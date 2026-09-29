@@ -1265,7 +1265,7 @@ mod tests {
 
     #[test]
     fn exclude_all_local_matches_exclude_private_ips_list() {
-        // Тот же набор, что «Exclude private IPs» в клиенте WireGuard для RFC 1918.
+        // Как список режима 2 инсталлера: всё, кроме RFC 1918, 0.0.0.0/8 и 224.0.0.0/3.
         let v = build_allowed_ips(exc(&NetPreset::WIDE), None, V6Route::All).unwrap();
         for absent in [NET_10, NET_172, NET_192] {
             assert!(!v.contains(absent), "{v}");
