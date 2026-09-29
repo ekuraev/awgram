@@ -821,6 +821,15 @@ impl Vpn {
                 stderr: format!("modify: пустой stdout (exit {code})"),
             });
         }
+        // Отказ приходит аварийным конвертом ok:false; без проверки он
+        // разбирается в ModifyOut с пустыми полями и выглядит как успех.
+        if let Some(env) = wire::try_error_envelope(&out) {
+            tracing::error!(error = %env.error, rc = env.rc, "modify: аварийный конверт");
+            return Err(crate::error::Error::ScriptFailed {
+                code: Some(env.rc),
+                stderr: env.error,
+            });
+        }
         wire::parse_modify(&out).map_err(|e| crate::error::Error::Parse(e.to_string()))
     }
 
@@ -1630,6 +1639,31 @@ echo '{"command":"modify","ok":true,"name":"alice","param":"PersistentKeepalive"
             .unwrap();
         assert_eq!(out.param, "PersistentKeepalive");
         assert_eq!(out.value, "25");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn modify_returns_error_on_failure_envelope() {
+        // Отказ modify (v5.35.0+: HPK против AWG_PROTOCOL, небезопасный I1–I5,
+        // не удалось убрать .png/.vpnuri) приходит аварийным конвертом.
+        // Без проверки он десериализуется в ModifyOut с пустыми полями,
+        // и бот рапортует «готово», хотя .conf не изменён.
+        let stub = r#"#!/bin/sh
+echo '{"command":"modify","ok":false,"error":"HeaderProtectionKey mismatch","rc":1}'
+exit 1
+"#;
+        let (_d, vpn) = vpn_with_script(stub);
+        let err = vpn
+            .modify("alice", validate::ModifyParam::Dns, "1.1.1.1")
+            .await
+            .unwrap_err();
+        match err {
+            crate::error::Error::ScriptFailed { code, stderr } => {
+                assert_eq!(code, Some(1));
+                assert!(stderr.contains("HeaderProtectionKey"), "{stderr}");
+            }
+            other => panic!("expected ScriptFailed, got {other:?}"),
+        }
     }
 
     #[tokio::test]
