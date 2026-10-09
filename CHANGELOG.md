@@ -3,6 +3,45 @@
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версионирование — [SemVer](https://semver.org/lang/ru/).
 Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning — [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### 🇷🇺 Русский
+
+#### 🐛 Исправлено
+
+- **Кнопка «починить модуль» на инсталлере v5.37.1 больше не отвечает «не
+  удалось разобрать ответ сервера».** Новый `repair-module --json` ставит
+  `null` вместо `false` там, где факта нет: при отказе до ремонта (сломан
+  помощник модуля, не отвечает dpkg, у текущего ядра нет заголовков) — во
+  всех полях, а на пути через помощник — в `service_active`, если модуль не
+  загрузился. Бот ждал там `bool`/число и ронял разбор. Теперь отказ
+  приходит как ошибка операции с причиной в журнале бота, а незагруженный
+  модуль — прежним «модуль не поднялся».
+- **Неполный откат восстановления больше не выдаётся за «конфиг откачен».**
+  Инсталлер v5.37.1 помечает такой откат `rollback_complete:false` — часть
+  файлов из снимка не вернулась. Бот показывает отдельное предупреждение:
+  недостающее лежит в снимке в `backups/`, причина — в
+  `manage_amneziawg.log`.
+
+### 🇬🇧 English
+
+#### 🐛 Fixed
+
+- **The "repair module" button on installer v5.37.1 no longer answers
+  "failed to parse server response".** The new `repair-module --json` puts
+  `null` instead of `false` where there is no fact: in every field when the
+  repair is refused up front (broken module helper, dpkg not answering, no
+  headers for the running kernel), and in `service_active` on the helper
+  path when the module did not load. The bot expected a `bool`/number there
+  and failed to parse. A refusal now comes as an operation error with the
+  reason in the bot log, and an unloaded module as the usual "module failed
+  to load".
+- **An incomplete restore rollback is no longer reported as "configuration
+  was rolled back".** Installer v5.37.1 marks such a rollback with
+  `rollback_complete:false` — some files from the snapshot were not put
+  back. The bot shows a separate warning: the missing files are in the
+  snapshot under `backups/`, the reason is in `manage_amneziawg.log`.
+
 ## [0.12.2] — 2026-09-29
 
 ### 🇷🇺 Русский
@@ -968,6 +1007,7 @@ config paths have changed. On a running VPS, perform once:
 - Environment diagnostics (🔬 button), ⏳ client expiry badges.
 - RU/EN localization, PSK default, backup/restore, persistent state.
 
+[Unreleased]: https://github.com/ekuraev/awgram/compare/v0.12.2...HEAD
 [0.12.2]: https://github.com/ekuraev/awgram/compare/v0.12.1...v0.12.2
 [0.12.1]: https://github.com/ekuraev/awgram/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/ekuraev/awgram/compare/v0.11.1...v0.12.0

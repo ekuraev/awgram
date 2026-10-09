@@ -16,6 +16,8 @@ pub enum Error {
     ClientNotFound(String),
     #[error("восстановление провалилось, конфиг откачен к предыдущему состоянию")]
     RestoreRolledBack,
+    #[error("восстановление провалилось, откат неполный — часть файлов не вернулась")]
+    RestoreRollbackIncomplete,
     #[error("ошибка ввода-вывода: {0}")]
     Io(#[from] std::io::Error),
     #[error("ошибка Telegram: {0}")]
@@ -43,6 +45,9 @@ impl Error {
             Error::ClientNotFound(_) => "⚠️ Клиент не найден.",
             Error::RestoreRolledBack => {
                 "⚠️ Восстановление провалилось. Конфиг откачен к предыдущему состоянию."
+            }
+            Error::RestoreRollbackIncomplete => {
+                "⚠️ Восстановление провалилось, и откат неполный — проверьте файлы на сервере."
             }
             Error::Io(_) => "❌ Ошибка выполнения операции.",
             Error::Telegram(_) => "❌ Ошибка отправки сообщения.",
@@ -84,5 +89,15 @@ mod tests {
         let m = e.user_message();
         // локализованный текст, без утечки stderr
         assert!(!m.is_empty());
+    }
+
+    #[test]
+    fn restore_rollback_incomplete_message_differs_from_rolled_back() {
+        // Неполный откат нельзя выдавать за «конфиг откачен»: человек должен
+        // пойти проверять файлы, а не считать сервер целым.
+        let m = Error::RestoreRollbackIncomplete.user_message();
+        assert!(!m.is_empty());
+        assert_ne!(m, Error::RestoreRolledBack.user_message());
+        assert!(m.contains("неполн"), "{m}");
     }
 }

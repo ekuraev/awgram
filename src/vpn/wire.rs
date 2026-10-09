@@ -178,6 +178,11 @@ pub struct RestoreOut {
     pub applied: bool,
     #[serde(default)]
     pub rolled_back: bool,
+    /// v5.37.1+: при `rolled_back:true` — вернулись ли все файлы из снимка.
+    /// `false` — откат неполный, недостающее лежит в снимке в `backups/`.
+    /// У старых версий поля нет: откат считается полным, как и раньше.
+    #[serde(default)]
+    pub rollback_complete: Option<bool>,
     #[serde(default)]
     pub error: Option<String>,
     #[serde(default)]
@@ -257,16 +262,25 @@ pub struct RestartOut {
     #[serde(default)]
     pub active: bool,
 }
+/// `repair-module --json`. С v5.37.1 факт, которого нет, приходит как `null`,
+/// а не `false`: на пути через помощник `service_active:null`, когда модуль
+/// не загрузился и сервис не проверялся; при отказе до ремонта (помощник
+/// сломан, dpkg не отвечает, нет заголовков ядра) `null` во всех трёх полях и
+/// причина в `error`. `serde(default)` явный `null` не покрывает — поэтому
+/// `Option`.
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 pub struct RepairOut {
     #[serde(default)]
     pub ok: bool,
     #[serde(default)]
-    pub module_loaded: bool,
+    pub module_loaded: Option<bool>,
     #[serde(default)]
-    pub service_active: bool,
+    pub service_active: Option<bool>,
+    /// Код ремонта (0/1/2); `None` — ремонт не начинался, см. `error`.
     #[serde(default)]
-    pub rc: i32,
+    pub rc: Option<i32>,
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 pub fn parse_add(s: &str) -> Result<AddOut, serde_json::Error> {
@@ -431,6 +445,18 @@ mod tests {
         let o = parse_restore(s).unwrap();
         assert!(o.rolled_back);
         assert_eq!(o.error.as_deref(), Some("boom"));
+        // До v5.37.1 поля rollback_complete нет — откат считается полным.
+        assert_eq!(o.rollback_complete, None);
+    }
+
+    #[test]
+    fn parse_restore_rollback_incomplete_flag() {
+        // v5.37.1: при rolled_back:true приходит rollback_complete; false —
+        // часть файлов из снимка не вернулась.
+        let s = r#"{"command":"restore","ok":false,"error":"boom","source":"/x.tar.gz","applied":false,"rolled_back":true,"rollback_complete":false,"rc":1}"#;
+        let o = parse_restore(s).unwrap();
+        assert!(o.rolled_back);
+        assert_eq!(o.rollback_complete, Some(false));
     }
 
     #[test]
@@ -481,11 +507,38 @@ mod tests {
     fn parse_repair_codes() {
         let ok = parse_repair(r#"{"ok":true,"module_loaded":true,"service_active":true,"rc":0}"#)
             .unwrap();
-        assert_eq!(ok.rc, 0);
+        assert_eq!(ok.rc, Some(0));
         let svc_down =
             parse_repair(r#"{"ok":false,"module_loaded":true,"service_active":false,"rc":2}"#)
                 .unwrap();
-        assert_eq!(svc_down.rc, 2);
-        assert!(!svc_down.service_active);
+        assert_eq!(svc_down.rc, Some(2));
+        assert_eq!(svc_down.service_active, Some(false));
+    }
+
+    #[test]
+    fn parse_repair_helper_path_null_service_when_module_down() {
+        // v5.37.1, путь через помощник: модуль не загрузился → service_active:null,
+        // rc:1, поля error нет — это не отказ, а итог ремонта.
+        let s = r#"{"command":"repair-module","ok":false,"module_loaded":false,"service_active":null,"rc":1,"helper":"current","path":"helper","repair_rc":1,"finish_rc":null,"status_complete":true,"packages":"empty","source":"base","fix_disabled":false,"kernels_without_module":[],"unfinished_without_module":[],"kernels_unknown":[],"running_module_on_disk":false,"running_headers":"ok"}"#;
+        let o = parse_repair(s).unwrap();
+        assert!(!o.ok);
+        assert_eq!(o.module_loaded, Some(false));
+        assert_eq!(o.service_active, None);
+        assert_eq!(o.rc, Some(1));
+        assert_eq!(o.error, None);
+    }
+
+    #[test]
+    fn parse_repair_refusal_has_null_rc_and_error() {
+        // v5.37.1: отказ до ремонта (помощник сломан, dpkg не отвечает, нет
+        // заголовков) — все факты null, причина в error.
+        let s = r#"{"command":"repair-module","ok":false,"module_loaded":null,"service_active":null,"rc":null,"helper":"broken","path":"refused","repair_rc":null,"finish_rc":null,"status_complete":null,"packages":null,"source":null,"fix_disabled":null,"kernels_without_module":null,"unfinished_without_module":null,"kernels_unknown":null,"running_module_on_disk":null,"running_headers":null,"error":"помощник модуля не отвечает как ожидалось"}"#;
+        let o = parse_repair(s).unwrap();
+        assert!(!o.ok);
+        assert_eq!(o.rc, None);
+        assert_eq!(
+            o.error.as_deref(),
+            Some("помощник модуля не отвечает как ожидалось")
+        );
     }
 }

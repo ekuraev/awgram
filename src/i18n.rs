@@ -1485,6 +1485,12 @@ pub fn error_text(lang: Lang, err: &Error) -> String {
             "⚠️ Восстановление провалилось. Конфиг откачен к предыдущему состоянию."
         }
         (Lang::En, Error::RestoreRolledBack) => "⚠️ Restore failed. Configuration was rolled back.",
+        (Lang::Ru, Error::RestoreRollbackIncomplete) => {
+            "⚠️ Восстановление провалилось, и откат неполный: часть файлов не вернулась. Проверьте сервер — недостающие файлы лежат в снимке в backups/, причина в manage_amneziawg.log."
+        }
+        (Lang::En, Error::RestoreRollbackIncomplete) => {
+            "⚠️ Restore failed and the rollback is incomplete: some files were not put back. Check the server — the missing files are in the snapshot under backups/, the reason is in manage_amneziawg.log."
+        }
         (_, Error::BackupInvalid(e)) => return format!("⚠️ {}", format_error(lang, e)),
         (Lang::Ru, Error::BackupUnreadable(_)) => {
             "❌ Архив бэкапа недоступен для чтения. В hardened-режиме нужен доступ пользователя awgram к backups/ — см. README."
@@ -2744,11 +2750,23 @@ mod tests {
             for e in [
                 Error::ClientNotFound("ghost".into()),
                 Error::RestoreRolledBack,
+                Error::RestoreRollbackIncomplete,
             ] {
                 let t = error_text(l, &e);
                 assert!(!t.is_empty());
                 assert!(!t.contains("ghost")); // имя не утекает
             }
+        }
+    }
+
+    #[test]
+    fn restore_rollback_incomplete_text_differs_from_rolled_back() {
+        use crate::error::Error;
+        for l in [Lang::Ru, Lang::En] {
+            assert_ne!(
+                error_text(l, &Error::RestoreRollbackIncomplete),
+                error_text(l, &Error::RestoreRolledBack)
+            );
         }
     }
 
