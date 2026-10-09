@@ -23,6 +23,17 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
   недостающее лежит в снимке в `backups/`, причина — в
   `manage_amneziawg.log`.
 
+#### 🔧 Изменено
+
+- **Совместимость с инсталлером**: поддерживаемая версия —
+  [v5.37.1](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.37.1) (сверен `--json`-контракт: `restore` проверяет бэкап до
+  остановки сервиса и получил аддитивное `rollback_complete`, у
+  `repair-module` — поля помощника модуля и `null` вместо `false`, см. выше;
+  при флаге установки `--client-ipv6-direct` режим «исключать из VPN»
+  по-прежнему шлёт `2000::/3` — индивидуальные маршруты инсталлер не трогает;
+  `--jc=0`, `sbin` в PATH и бэкапы поколения 3.1 бота не касаются, подробности
+  в [docs/compat.md](docs/compat.md)); минимальная — по-прежнему v5.21.0.
+
 ### 🇬🇧 English
 
 #### 🐛 Fixed
@@ -41,6 +52,17 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
   `rollback_complete:false` — some files from the snapshot were not put
   back. The bot shows a separate warning: the missing files are in the
   snapshot under `backups/`, the reason is in `manage_amneziawg.log`.
+
+#### 🔧 Changed
+
+- **Installer compatibility**: supported version is [v5.37.1](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.37.1) (the
+  `--json` contract is verified: `restore` checks the backup before stopping
+  the service and gained an additive `rollback_complete`, `repair-module`
+  gained module-helper fields and `null` instead of `false`, see above; with
+  the `--client-ipv6-direct` install flag the "exclude from VPN" mode still
+  sends `2000::/3` — the installer leaves per-client routes alone; `--jc=0`,
+  `sbin` in PATH and generation 3.1 backups do not affect the bot, details in
+  [docs/compat.en.md](docs/compat.en.md)); the minimum is still v5.21.0.
 
 ## [0.12.2] — 2026-09-29
 

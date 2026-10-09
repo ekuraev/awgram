@@ -12,7 +12,7 @@ the bot.
 
 | | Version |
 |---|---|
-| Supported (`--json` contract verified) | [v5.37.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.37.0) |
+| Supported (`--json` contract verified) | [v5.37.1](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.37.1) |
 | Minimum | [v5.21.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.21.0) |
 
 v5.20.x and older are not supported: the bot relies on the extended
@@ -39,8 +39,10 @@ reality disagree.
 
 ## Installer release history
 
-None of the v5.21.1–v5.37.0 releases broke the JSON contract. All new
-messages go to stderr; the `--json` envelopes on stdout are unchanged.
+Releases v5.21.1–v5.37.0 did not break the JSON contract: all new messages
+went to stderr and the `--json` envelopes on stdout were unchanged. v5.37.1
+is the first where a field of an existing envelope changed its type (`null`
+instead of `false` in `repair-module --json`), see its row below.
 
 | Version | What changed | Effect on the bot |
 |---|---|---|
@@ -61,6 +63,7 @@ messages go to stderr; the `--json` envelopes on stdout are unchanged.
 | v5.35.0 | `add`/`regen`/`modify` refuse when `HeaderProtectionKey` disagrees with the `AWG_PROTOCOL` marker; keys are masked in `check`/`show` output and traces | A `modify` refusal comes as an `ok:false` error envelope; before awgram v0.12.1 the bot took it for success — fixed |
 | v5.36.0–v5.36.2 | Additive `protocol`/`protocol_error` in `check --json`; secrets hidden in the service status; since v5.36.2 a list-based full tunnel gets `2000::/3` plus a "sink" address instead of `::/0` (the Windows client reaches the LAN again) | The "all traffic" preset (`0.0.0.0/0, ::/0`) is left alone. Since awgram v0.12.2 the "exclude from VPN" mode sends `2000::/3` instead of `::/0` on v5.36.2+ — the installer adds the sink address itself; the routes screen recognises these lists and the mode 2 list (as "exclude all local") |
 | v5.37.0 | Default client DNS (`CLIENT_DNS`) in the install config; an empty `--expires=` is an error; `add`/`restore` handle expiry markers more strictly | None: the bot passes `--expires` only with a non-empty validated value, refusals come as `status:"error"`/`rolled_back` |
+| v5.37.1 | `repair-module --json` goes through the module helper (`amneziawg-ensure-module`, kernel 7.0): the envelope gains helper, stage, package and kernels-without-module fields, and a fact that does not exist is `null`, not `false`: when the repair is refused up front (broken helper, dpkg not answering, no headers for the kernel) `module_loaded`/`service_active`/`rc` are `null` and the reason is in `error`; on the helper path `service_active:null` when the module did not load. `restore` checks the backup before stopping the service (a refusal is the old `ok:false`, `rolled_back:false` envelope with no snapshot left behind), the rollback brings the files exactly to the snapshot and, with `rolled_back:true`, carries an additive `rollback_complete`. Install flag `--client-ipv6-direct` (`CLIENT_IPV6_DIRECT=1`): the mode 2 list has no IPv6 part, `regen` strips `2000::/3`/`::/0` from a client whose IPv4 part equals the server list. `--jc=0`, `sbin` in PATH, backup and `restore` of generation 3.1, on 3.1 `add`/`regen` refuse without `qrencode`/`perl` | Before awgram v0.12.3 the `null` broke parsing of the `repair-module` reply ("failed to parse server response"); now a refusal is an operation error with the reason in the bot log, and `service_active:null` with `rc:1` is the usual "module failed to load". `rollback_complete:false` gets its own incomplete-rollback warning instead of "configuration was rolled back". With `CLIENT_IPV6_DIRECT=1` the "exclude from VPN" mode still sends `2000::/3`: the installer leaves per-client routes alone, so such a client's IPv6 goes through the tunnel; if `regen` stripped the IPv6 part, the routes screen shows the list as set manually. `add`/`regen` refusals are the old `status:"error"`; `--jc=0` does not affect `check --json` |
 
 ## How a new installer release is verified
 
