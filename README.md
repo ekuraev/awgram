@@ -9,7 +9,7 @@
 <br>
 [![Platform](https://img.shields.io/badge/linux-amd64%20%7C%20arm64-informational?logo=linux&logoColor=white)](https://github.com/ekuraev/awgram/releases/latest)
 [![Rust](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fekuraev%2Fawgram%2Fmain%2FCargo.toml&query=%24.package.rust-version&prefix=%E2%89%A5%20&label=rust&logo=rust&color=orange)](Cargo.toml)
-[![Installer](https://img.shields.io/badge/amneziawg--installer-%E2%89%A5%20v5.21.0%20%C2%B7%20tested%20v5.37.0-blue)](docs/compat.md)
+[![Installer](https://img.shields.io/badge/amneziawg--installer-%E2%89%A5%20v5.21.0%20%C2%B7%20tested%20v5.37.1-blue)](docs/compat.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Telegram-бот на Rust для управления клиентами [AmneziaWG](https://amnezia.org/) прямо
@@ -99,7 +99,7 @@ https://github.com/user-attachments/assets/35af60f4-c7d8-44d5-9c90-bcd06b20c864
 - Linux-VPS на amd64 или arm64 с systemd; root или sudo на время установки.
 - Нативный AmneziaWG, поставленный
   [bivlked/amneziawg-installer](https://github.com/bivlked/amneziawg-installer)
-  версии v5.21.0 и новее (сверено с v5.37.0, см.
+  версии v5.21.0 и новее (сверено с v5.37.1, см.
   [docs/compat.md](docs/compat.md)).
 - Токен бота от [@BotFather](https://t.me/BotFather) и числовые Telegram ID
   администраторов.
@@ -150,7 +150,7 @@ webhook), который живёт на том же VPS, что и VPN. Кон�
 [bivlked/amneziawg-installer](https://github.com/bivlked/amneziawg-installer)
 и напрямую зависит от его `--json`-интерфейса.
 
-- **Поддерживаемая версия — [v5.37.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.37.0)**
+- **Поддерживаемая версия — [v5.37.1](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.37.1)**
   (сверен `--json`-контракт), минимальная —
   [v5.21.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.21.0).
 - Подкоманды: `add`, `remove`, `list`, `stats`, `regen`, `modify`, `backup`,
