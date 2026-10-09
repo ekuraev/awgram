@@ -33,6 +33,8 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
   по-прежнему шлёт `2000::/3` — индивидуальные маршруты инсталлер не трогает;
   `--jc=0`, `sbin` в PATH и бэкапы поколения 3.1 бота не касаются, подробности
   в [docs/compat.md](docs/compat.md)); минимальная — по-прежнему v5.21.0.
+- **Зависимости**: tokio 1.53.2, rand 0.10.3, thiserror 2.0.21 — патчевые
+  исправления без изменения API (dependabot #69, #70, #71).
 
 ### 🇬🇧 English
 
@@ -63,6 +65,8 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
   sends `2000::/3` — the installer leaves per-client routes alone; `--jc=0`,
   `sbin` in PATH and generation 3.1 backups do not affect the bot, details in
   [docs/compat.en.md](docs/compat.en.md)); the minimum is still v5.21.0.
+- **Dependencies**: tokio 1.53.2, rand 0.10.3, thiserror 2.0.21 — patch
+  fixes with no API changes (dependabot #69, #70, #71).
 
 ## [0.12.2] — 2026-09-29
 
