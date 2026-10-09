@@ -3640,9 +3640,9 @@ async fn callback_handler(
         Action::RepairModule => {
             let pid = progress(&bot, chat, msg_id, i18n::creating(lang)).await;
             let text = match vpn.repair_module().await {
-                Ok(out) => {
+                Ok(rc) => {
                     settings.log_event(now_epoch(), EventKind::Repair, None, Some(uid), None);
-                    i18n::repair_result(lang, out.rc)
+                    i18n::repair_result(lang, rc)
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "repair-module провалился");

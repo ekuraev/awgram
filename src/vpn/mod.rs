@@ -785,8 +785,9 @@ impl Vpn {
 
     /// Восстанавливает из архива инсталлера по пути. Содержимое архива уже
     /// проверил вызывающий (`backup::format`), здесь только конверт:
-    /// `rolled_back:true → RestoreRolledBack`, `ok:false && !rolled_back →
-    /// ScriptFailed`. `AWG_STRICT_CONFIRM=1` + `--yes`.
+    /// `rolled_back:true → RestoreRolledBack` (с `rollback_complete:false`,
+    /// инсталлер v5.37.1+, — `RestoreRollbackIncomplete`), `ok:false &&
+    /// !rolled_back → ScriptFailed`. `AWG_STRICT_CONFIRM=1` + `--yes`.
     pub async fn restore_path(&self, path: &std::path::Path) -> Result<()> {
         let spec = RunSpec {
             script: &self.script,
@@ -807,6 +808,14 @@ impl Vpn {
             wire::parse_restore(&out).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
         if parsed.ok == Some(true) {
             Ok(())
+        } else if parsed.rolled_back && parsed.rollback_complete == Some(false) {
+            // Файлы из снимка вернулись не все: сказать «конфиг откачен» значило
+            // бы отправить человека жить с неполным сервером, не заглянув в него.
+            tracing::error!(
+                error = ?parsed.error,
+                "restore провалился, откат неполный"
+            );
+            Err(crate::error::Error::RestoreRollbackIncomplete)
         } else if parsed.rolled_back {
             Err(crate::error::Error::RestoreRolledBack)
         } else {
@@ -909,7 +918,13 @@ impl Vpn {
     /// заявлены инсталлером как операция до 5 минут (manage.sh: «может занять
     /// до 5 минут — DKMS rebuild»). Общий timeout 60с обрывал бы восстановление
     /// посреди apt-установки headers.
-    pub async fn repair_module(&self) -> Result<wire::RepairOut> {
+    ///
+    /// Отказ до ремонта (инсталлер v5.37.1+: помощник модуля сломан, dpkg не
+    /// отвечает, у ядра нет заголовков) приходит конвертом с `rc:null` и
+    /// причиной в `error` — отдаём её как `ScriptFailed`, а не код «неизвестный
+    /// результат». Общий `try_error_envelope` тут не подходит: он ждёт в `rc`
+    /// число, а инсталлер шлёт `null`.
+    pub async fn repair_module(&self) -> Result<i32> {
         let spec = RunSpec {
             script: &self.script,
             sudo_prefix: &self.sudo_prefix,
@@ -924,7 +939,21 @@ impl Vpn {
                 stderr: format!("repair-module: пустой stdout (exit {code})"),
             });
         }
-        wire::parse_repair(&out).map_err(|e| crate::error::Error::Parse(e.to_string()))
+        let parsed =
+            wire::parse_repair(&out).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
+        match parsed.rc {
+            Some(rc) => Ok(rc),
+            None => {
+                let reason = parsed
+                    .error
+                    .unwrap_or_else(|| "repair-module failed".into());
+                tracing::error!(error = %reason, code, "repair-module: отказ до ремонта");
+                Err(crate::error::Error::ScriptFailed {
+                    code: Some(code),
+                    stderr: reason,
+                })
+            }
+        }
     }
 }
 
@@ -1652,6 +1681,49 @@ exit 1
         );
     }
 
+    #[tokio::test]
+    #[serial]
+    async fn restore_incomplete_rollback_is_distinct_error() {
+        // Инсталлер v5.37.1: rollback_complete:false — откат выполнен, но
+        // часть файлов из снимка не вернулась; «конфиг откачен» было бы ложью.
+        let (dir, vpn) = vpn_with_script(
+            r#"#!/bin/sh
+echo '{"command":"restore","ok":false,"error":"boom","source":"/x.tar.gz","applied":false,"rolled_back":true,"rollback_complete":false,"rc":1}'
+exit 1
+"#,
+        );
+        let bdir = dir.path().join("backups");
+        std::fs::create_dir_all(&bdir).unwrap();
+        let path = bdir.join("awg_backup_x.tar.gz");
+        std::fs::write(&path, b"x").unwrap();
+        let err = vpn.restore_path(&path).await.unwrap_err();
+        assert!(
+            matches!(err, crate::error::Error::RestoreRollbackIncomplete),
+            "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn restore_complete_rollback_stays_rolled_back() {
+        // rollback_complete:true (v5.37.1) — прежний исход.
+        let (dir, vpn) = vpn_with_script(
+            r#"#!/bin/sh
+echo '{"command":"restore","ok":false,"error":"boom","source":"/x.tar.gz","applied":false,"rolled_back":true,"rollback_complete":true,"rc":1}'
+exit 1
+"#,
+        );
+        let bdir = dir.path().join("backups");
+        std::fs::create_dir_all(&bdir).unwrap();
+        let path = bdir.join("awg_backup_x.tar.gz");
+        std::fs::write(&path, b"x").unwrap();
+        let err = vpn.restore_path(&path).await.unwrap_err();
+        assert!(
+            matches!(err, crate::error::Error::RestoreRolledBack),
+            "got {err:?}"
+        );
+    }
+
     #[test]
     fn bot_backups_dir_is_awgram_subdir() {
         let (dir, vpn) = vpn_with_script("#!/bin/sh\n");
@@ -1754,8 +1826,42 @@ echo '{"command":"repair-module","ok":true,"module_loaded":true,"service_active"
 exit 1
 "#;
         let (_d, vpn) = vpn_with_script(stub);
-        let out = vpn.repair_module().await.unwrap();
-        assert_eq!(out.rc, 2);
+        let rc = vpn.repair_module().await.unwrap();
+        assert_eq!(rc, 2);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn repair_module_helper_path_module_down_is_rc_1() {
+        // Инсталлер v5.37.1, путь через помощник: модуль не загрузился →
+        // service_active:null (сервис не проверялся), rc:1, exit 1.
+        let stub = r#"#!/bin/sh
+[ "$1" = repair-module ] || exit 1
+echo '{"command":"repair-module","ok":false,"module_loaded":false,"service_active":null,"rc":1,"helper":"current","path":"helper","repair_rc":1,"finish_rc":null,"status_complete":true,"packages":"empty","source":"base","fix_disabled":false,"kernels_without_module":[],"unfinished_without_module":[],"kernels_unknown":[],"running_module_on_disk":false,"running_headers":"ok"}'
+exit 1
+"#;
+        let (_d, vpn) = vpn_with_script(stub);
+        let rc = vpn.repair_module().await.unwrap();
+        assert_eq!(rc, 1);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn repair_module_refusal_envelope_surfaces_script_error() {
+        // Инсталлер v5.37.1: отказ до ремонта — факты null, причина в error.
+        let stub = r#"#!/bin/sh
+[ "$1" = repair-module ] || exit 1
+echo '{"command":"repair-module","ok":false,"module_loaded":null,"service_active":null,"rc":null,"helper":"broken","path":"refused","repair_rc":null,"finish_rc":null,"status_complete":null,"packages":null,"source":null,"fix_disabled":null,"kernels_without_module":null,"unfinished_without_module":null,"kernels_unknown":null,"running_module_on_disk":null,"running_headers":null,"error":"помощник модуля не отвечает как ожидалось"}'
+exit 1
+"#;
+        let (_d, vpn) = vpn_with_script(stub);
+        let err = vpn.repair_module().await.unwrap_err();
+        match err {
+            crate::error::Error::ScriptFailed { stderr, .. } => {
+                assert_eq!(stderr, "помощник модуля не отвечает как ожидалось");
+            }
+            other => panic!("got {other:?}"),
+        }
     }
 
     #[tokio::test]
