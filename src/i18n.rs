@@ -1837,6 +1837,23 @@ fn warn_mark(present: bool) -> &'static str {
         "⚠️"
     }
 }
+/// Строка поколения AmneziaWG из `check --json` (инсталлер v5.36.0+):
+/// `protocol` — «2.0»/«3.1», `null` с `protocol_error` — маркер не прочитан.
+/// На инсталлере без поля строки нет: поколение неизвестно, а не сломано.
+fn generation_line(lang: Lang, r: &crate::vpn::wire::CheckReport) -> Option<String> {
+    match (r.protocol.as_deref(), r.protocol_error.as_deref()) {
+        (Some(p), _) => Some(match lang {
+            Lang::Ru => format!("🔐 Поколение AmneziaWG: {}", html_escape(p)),
+            Lang::En => format!("🔐 AmneziaWG generation: {}", html_escape(p)),
+        }),
+        (None, Some(_)) => Some(match lang {
+            Lang::Ru => "⚠️ Поколение AmneziaWG: маркер не прочитан".to_string(),
+            Lang::En => "⚠️ AmneziaWG generation: marker not readable".to_string(),
+        }),
+        (None, None) => None,
+    }
+}
+
 pub fn check_card(lang: Lang, r: &crate::vpn::wire::CheckReport) -> String {
     let header = if r.ok { "✅" } else { "❌" };
     let mut lines = Vec::new();
@@ -1890,6 +1907,7 @@ pub fn check_card(lang: Lang, r: &crate::vpn::wire::CheckReport) -> String {
                     "не загружен (норма для userspace)"
                 }
             ));
+            lines.extend(generation_line(lang, r));
             lines.push(format!("👥 Клиентов: {}", r.clients.total));
             let fw = if !r.firewall.ufw_active {
                 "⚠️ UFW: не активен".to_string()
@@ -1949,6 +1967,7 @@ pub fn check_card(lang: Lang, r: &crate::vpn::wire::CheckReport) -> String {
                     "not loaded (ok for userspace)"
                 }
             ));
+            lines.extend(generation_line(lang, r));
             lines.push(format!("👥 Clients: {}", r.clients.total));
             let fw = if !r.firewall.ufw_active {
                 "⚠️ UFW: inactive".to_string()
@@ -2822,6 +2841,8 @@ mod tests {
                 ufw_active: true,
                 port_allowed: true,
             },
+            protocol: None,
+            protocol_error: None,
         };
         let text = check_card(Lang::Ru, &ok);
         assert!(text.contains("✅"));
@@ -2835,6 +2856,37 @@ mod tests {
         };
         let bad_text = check_card(Lang::Ru, &bad);
         assert!(bad_text.contains("❌"));
+    }
+
+    #[test]
+    fn check_card_shows_generation_when_installer_reports_it() {
+        use crate::vpn::wire::CheckReport;
+        let base = CheckReport {
+            ok: true,
+            ..Default::default()
+        };
+        // Инсталлер v5.36.0+: поколение по маркеру AWG_PROTOCOL.
+        let gen31 = CheckReport {
+            protocol: Some("3.1".into()),
+            ..base.clone()
+        };
+        let ru = check_card(Lang::Ru, &gen31);
+        assert!(ru.contains("Поколение") && ru.contains("3.1"), "{ru}");
+        let en = check_card(Lang::En, &gen31);
+        assert!(en.contains("generation") && en.contains("3.1"), "{en}");
+        // Маркер не прочитан — предупреждение, а не молчание.
+        let unreadable = CheckReport {
+            protocol: None,
+            protocol_error: Some("unreadable".into()),
+            ..base.clone()
+        };
+        let ru = check_card(Lang::Ru, &unreadable);
+        assert!(ru.contains("⚠️") && ru.contains("Поколение"), "{ru}");
+        let en = check_card(Lang::En, &unreadable);
+        assert!(en.contains("⚠️") && en.contains("generation"), "{en}");
+        // Старый инсталлер без поля: строки поколения нет вовсе.
+        assert!(!check_card(Lang::Ru, &base).contains("Поколение"));
+        assert!(!check_card(Lang::En, &base).contains("generation"));
     }
 
     #[test]

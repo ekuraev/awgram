@@ -250,6 +250,15 @@ pub struct CheckReport {
     pub clients: ClientsBlock,
     #[serde(default)]
     pub firewall: FirewallBlock,
+    /// Поколение AmneziaWG по маркеру `AWG_PROTOCOL` (инсталлер v5.36.0+):
+    /// `"2.0"` или `"3.1"`. `null` — маркер не прочитан, причина в
+    /// `protocol_error`; у старых инсталлеров поля нет вовсе — поколение
+    /// неизвестно. Явный `null` `serde(default)` не покрывает — `Option`.
+    #[serde(default)]
+    pub protocol: Option<String>,
+    /// `"unreadable"`, когда `protocol` — `null` из-за нечитаемого маркера.
+    #[serde(default)]
+    pub protocol_error: Option<String>,
 }
 
 // --- restart / repair-module ---
@@ -485,6 +494,28 @@ mod tests {
         assert!(!r.service.active); // default
         assert_eq!(r.interface.mtu, None);
         assert_eq!(r.port.number, 0);
+    }
+
+    #[test]
+    fn parse_check_reads_protocol_generation() {
+        // v5.36.0+: поколение по маркеру AWG_PROTOCOL — строка "2.0"/"3.1",
+        // null с protocol_error:"unreadable", если маркер не читается.
+        let s = r#"{"command":"check","ok":true,"protocol":"3.1","protocol_error":null}"#;
+        let r = parse_check(s).unwrap();
+        assert_eq!(r.protocol.as_deref(), Some("3.1"));
+        assert_eq!(r.protocol_error, None);
+        let s = r#"{"command":"check","ok":true,"protocol":null,"protocol_error":"unreadable"}"#;
+        let r = parse_check(s).unwrap();
+        assert_eq!(r.protocol, None);
+        assert_eq!(r.protocol_error.as_deref(), Some("unreadable"));
+    }
+
+    #[test]
+    fn parse_check_protocol_absent_on_old_installer() {
+        // До v5.36.0 полей нет: поколение неизвестно, не «нечитаемо».
+        let r = parse_check(r#"{"command":"check","ok":true}"#).unwrap();
+        assert_eq!(r.protocol, None);
+        assert_eq!(r.protocol_error, None);
     }
 
     #[test]
