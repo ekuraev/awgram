@@ -1,4 +1,5 @@
 use regex::Regex;
+use std::net::Ipv4Addr;
 use std::sync::OnceLock;
 
 #[derive(Debug, PartialEq, thiserror::Error)]
@@ -701,6 +702,103 @@ fn selection_from_exclude(value: &str, vpn_subnet: Option<&str>) -> Option<Route
     } else {
         None
     }
+}
+
+/// IPv4-адрес из `Endpoint` клиентского конфига (`a.b.c.d:port` или без
+/// порта). Имя хоста и IPv6 дают `None`: у них инсталлер дыру не делает
+/// (имя может сменить адрес, а дыра `/128` в `2000::/3` — это 125 маршрутов).
+pub fn endpoint_v4(endpoint: &str) -> Option<Ipv4Addr> {
+    let e = endpoint.trim();
+    if e.is_empty() || e.starts_with('[') || e.matches(':').count() > 1 {
+        return None;
+    }
+    e.rsplit_once(':').map_or(e, |(host, _)| host).parse().ok()
+}
+
+/// Список без адреса сервера — правило инсталлера v6.0.0 для `add`/`regen`:
+/// IPv4-маршрут, накрывающий адрес, заменяется дополнением до него (`/n` →
+/// `32−n` маршрутов), `0.0.0.0/0` не трогается (режим 1 awg-quick разводит
+/// сам), IPv6 и остальные маршруты остаются на местах. Иначе Linux-клиент на
+/// awg-quick заворачивает в туннель и пакеты к самому серверу. Бот применяет
+/// правило перед `modify`, который пишет список как есть: без этого правка
+/// маршрутов через бота возвращала бы дыру обратно до следующего `regen`.
+/// Список, где из IPv4-маршрутов есть только сам адрес, возвращается как
+/// есть: `add`/`regen` такой отвергают, а `modify` пишет и предупреждает —
+/// пустой IPv4-список бот не выдумывает.
+pub fn carve_host(list: &str, ip: Ipv4Addr) -> String {
+    let host = Ipv4Net::new(u32::from(ip), 32).expect("/32");
+    let everything = Ipv4Net::parse("0.0.0.0/0").expect("literal");
+    let mut out: Vec<String> = Vec::new();
+    let mut had_v4 = false;
+    let mut kept_v4 = false;
+    for raw in list.split(',') {
+        let token = raw.trim();
+        if token.is_empty() {
+            continue;
+        }
+        match Ipv4Net::parse(token) {
+            Some(net) if net != everything && net.contains(host) => {
+                had_v4 = true;
+                let rest = cidr::subtract(&[net], &[host]);
+                kept_v4 |= !rest.is_empty();
+                out.extend(rest.iter().map(ToString::to_string));
+            }
+            Some(_) => {
+                had_v4 = true;
+                kept_v4 = true;
+                out.push(token.to_string());
+            }
+            None => out.push(token.to_string()),
+        }
+    }
+    if had_v4 && !kept_v4 {
+        return list.to_string();
+    }
+    out.join(", ")
+}
+
+/// То же, что `selection_from_value`, но терпит дыру у адреса сервера:
+/// инсталлер v6.0.0 вырезает IPv4 из `Endpoint` из списка клиента при
+/// `add`/`regen` (см. `carve_host`), и прямая сверка с пресетом не сходится.
+/// Сначала пробуем как есть, затем — заполнив дыру `/32` сервера; список без
+/// дыры от этого не меняется, а чужая дыра (не у этого адреса) не закрывается.
+pub fn selection_from_value_with_hole(
+    value: &str,
+    vpn_subnet: Option<&str>,
+    server_ip: Option<Ipv4Addr>,
+) -> Option<RouteSelection> {
+    selection_from_value(value, vpn_subnet).or_else(|| {
+        let ip = server_ip?;
+        selection_from_value(&fill_host(value, ip), vpn_subnet)
+    })
+}
+
+/// Список с заполненной дырой `/32`: IPv4-часть агрегируется вместе с
+/// адресом, IPv6-часть остаётся. Только для сверки — в конфиг не пишется.
+fn fill_host(list: &str, ip: Ipv4Addr) -> String {
+    let host = Ipv4Net::new(u32::from(ip), 32).expect("/32");
+    let mut v4: Vec<Ipv4Net> = Vec::new();
+    let mut rest: Vec<&str> = Vec::new();
+    for raw in list.split(',') {
+        let token = raw.trim();
+        if token.is_empty() {
+            continue;
+        }
+        match Ipv4Net::parse(token) {
+            Some(net) => v4.push(net),
+            None => rest.push(token),
+        }
+    }
+    if v4.is_empty() {
+        return list.to_string();
+    }
+    v4.push(host);
+    let mut out: Vec<String> = cidr::aggregate(&v4)
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    out.extend(rest.iter().map(|t| t.to_string()));
+    out.join(", ")
 }
 
 /// Адрес интерфейса (`10.9.9.1/24`) → адрес его сети (`10.9.9.0/24`).
@@ -1415,6 +1513,158 @@ mod tests {
                 "{v6}"
             );
         }
+    }
+
+    #[test]
+    fn endpoint_v4_extracts_ipv4_with_or_without_port() {
+        let ip = std::net::Ipv4Addr::new(203, 0, 113, 7);
+        assert_eq!(endpoint_v4("203.0.113.7:51820"), Some(ip));
+        assert_eq!(endpoint_v4("203.0.113.7"), Some(ip));
+        assert_eq!(endpoint_v4("  203.0.113.7:51820\r"), Some(ip));
+    }
+
+    #[test]
+    fn endpoint_v4_none_for_hostname_ipv6_and_garbage() {
+        // Имя и IPv6 инсталлер тоже не вырезает: дыры у них нет.
+        for e in [
+            "vpn.example.com:51820",
+            "[2001:db8::1]:51820",
+            "2001:db8::1",
+            "",
+            "999.1.1.1:1",
+        ] {
+            assert_eq!(endpoint_v4(e), None, "{e:?}");
+        }
+    }
+
+    #[test]
+    fn carve_host_splits_covering_route_and_keeps_the_rest() {
+        let ip = std::net::Ipv4Addr::new(10, 1, 2, 3);
+        let v = carve_host("192.168.1.0/24, 10.0.0.0/8, ::/0", ip);
+        assert!(v.starts_with("192.168.1.0/24, "), "{v}");
+        assert!(v.ends_with(", ::/0"), "{v}");
+        let host = Ipv4Net::parse("10.1.2.3/32").unwrap();
+        let v4: Vec<Ipv4Net> = v
+            .split(',')
+            .map(str::trim)
+            .filter_map(Ipv4Net::parse)
+            .collect();
+        // /8 без одного адреса — 24 маршрута, как у инсталлера.
+        assert_eq!(v4.len(), 1 + 24, "{v}");
+        assert!(!v4.iter().any(|n| n.contains(host)), "{v}");
+        let mut filled = v4;
+        filled.push(host);
+        assert_eq!(
+            cidr::aggregate(&filled),
+            [
+                Ipv4Net::parse("10.0.0.0/8").unwrap(),
+                Ipv4Net::parse("192.168.1.0/24").unwrap()
+            ]
+        );
+    }
+
+    #[test]
+    fn carve_host_leaves_lists_without_the_address_untouched() {
+        let ip = std::net::Ipv4Addr::new(203, 0, 113, 7);
+        assert_eq!(
+            carve_host("10.0.0.0/8, 192.168.0.0/16", ip),
+            "10.0.0.0/8, 192.168.0.0/16"
+        );
+        // 0.0.0.0/0 инсталлер не трогает: awg-quick разводит его сам.
+        assert_eq!(carve_host(ROUTE_ALL, ip), ROUTE_ALL);
+        // Чужой маршрут с host-битами остаётся как написан (как у инсталлера).
+        assert_eq!(carve_host("10.1.2.3/8", ip), "10.1.2.3/8");
+    }
+
+    #[test]
+    fn carve_host_keeps_list_whose_only_ipv4_route_is_the_address() {
+        // Из IPv4 остался бы пустой список: такой `add`/`regen` отвергают, а
+        // `modify` пишет как задан и предупреждает — бот не делает хуже и
+        // отдаёт список без изменений.
+        let ip = std::net::Ipv4Addr::new(203, 0, 113, 7);
+        assert_eq!(carve_host("203.0.113.7/32", ip), "203.0.113.7/32");
+        assert_eq!(
+            carve_host("203.0.113.7/32, ::/0", ip),
+            "203.0.113.7/32, ::/0"
+        );
+    }
+
+    #[test]
+    fn carve_host_output_passes_parse_allowed_ips() {
+        // Вырезанный список уходит в `modify` через ту же валидацию, что и
+        // ввод пользователя.
+        let ip = std::net::Ipv4Addr::new(203, 0, 113, 7);
+        for sel in [exc(&NetPreset::WIDE), exc(&[NetPreset::Net10])] {
+            let v = build_allowed_ips(sel, Some("10.9.9.0/24"), V6Route::Sink).unwrap();
+            let carved = carve_host(&v, ip);
+            assert!(parse_allowed_ips(&carved).is_ok(), "{carved}");
+        }
+    }
+
+    #[test]
+    fn carve_host_is_idempotent() {
+        let ip = std::net::Ipv4Addr::new(203, 0, 113, 7);
+        let v = build_allowed_ips(exc(&[NetPreset::Net10]), None, V6Route::Sink).unwrap();
+        let once = carve_host(&v, ip);
+        assert_ne!(once, v);
+        assert_eq!(carve_host(&once, ip), once);
+    }
+
+    #[test]
+    fn selection_with_hole_recognises_exclude_list_carved_at_server() {
+        // Инсталлер v6.0.0: add/regen вырезают IPv4 из Endpoint из списка.
+        let ip = std::net::Ipv4Addr::new(203, 0, 113, 7);
+        for subnet in [None, Some("10.9.9.0/24")] {
+            let sel = exc(&NetPreset::WIDE);
+            let v = build_allowed_ips(sel, subnet, V6Route::Sink).unwrap();
+            let carved = carve_host(&v, ip);
+            assert_eq!(
+                selection_from_value(&carved, subnet),
+                None,
+                "дыра ломает прямую сверку: {carved}"
+            );
+            assert_eq!(
+                selection_from_value_with_hole(&carved, subnet, Some(ip)),
+                Some(sel),
+                "{carved}"
+            );
+        }
+    }
+
+    #[test]
+    fn selection_with_hole_recognises_include_list_carved_at_server() {
+        // Сервер с частным адресом внутри выбранной сети.
+        let ip = std::net::Ipv4Addr::new(10, 1, 2, 3);
+        let carved = carve_host("10.0.0.0/8, 172.16.0.0/12", ip);
+        let sel = selection_from_value_with_hole(&carved, None, Some(ip)).unwrap();
+        assert_eq!(sel.mode, RouteMode::Include);
+        assert!(sel.net(NetPreset::Net10) && sel.net(NetPreset::Net172));
+    }
+
+    #[test]
+    fn selection_with_hole_needs_the_right_address() {
+        let ip = std::net::Ipv4Addr::new(203, 0, 113, 7);
+        let v = build_allowed_ips(exc(&[NetPreset::Net10]), None, V6Route::All).unwrap();
+        let carved = carve_host(&v, ip);
+        assert_eq!(selection_from_value_with_hole(&carved, None, None), None);
+        let other = std::net::Ipv4Addr::new(203, 0, 113, 8);
+        assert_eq!(
+            selection_from_value_with_hole(&carved, None, Some(other)),
+            None
+        );
+    }
+
+    #[test]
+    fn selection_with_hole_keeps_plain_lists_recognised() {
+        // Адрес сервера вне списка: заполнять нечего, распознаётся как раньше.
+        let ip = std::net::Ipv4Addr::new(203, 0, 113, 7);
+        let sel = selection_from_value_with_hole("192.168.1.0/24", None, Some(ip)).unwrap();
+        assert!(sel.net(NetPreset::Net192_1));
+        assert!(
+            selection_from_value_with_hole(ROUTE_ALL, None, Some(ip))
+                .unwrap()
+                .all
+        );
     }
 
     #[test]
