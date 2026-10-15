@@ -644,11 +644,26 @@ impl Vpn {
     /// читаем файл — тот же источник, что и у `existing_files`/`client_expiry`.
     /// None: файла нет, ключа нет или значение пустое.
     pub fn client_allowed_ips(&self, name: &str) -> Option<String> {
+        self.client_conf_value(name, "AllowedIPs")
+    }
+
+    /// IPv4-адрес сервера из `Endpoint` того же `.conf`. Инсталлер v6.0.0
+    /// вырезает его из AllowedIPs клиента при `add`/`regen`; экран маршрутов
+    /// по нему терпит дыру при сверке с пресетом, а правка через `modify`
+    /// вырезает его сама. None: файла или ключа нет, либо там имя хоста или
+    /// IPv6 — у них дыры не бывает.
+    pub fn client_endpoint_v4(&self, name: &str) -> Option<std::net::Ipv4Addr> {
+        validate::endpoint_v4(&self.client_conf_value(name, "Endpoint")?)
+    }
+
+    /// Значение ключа из `clients_dir/<name>.conf` (регистр ключа не важен).
+    /// None: файла нет, ключа нет или значение пустое.
+    fn client_conf_value(&self, name: &str, key: &str) -> Option<String> {
         let name = validate::validate_name(name).ok()?;
         let raw = std::fs::read_to_string(self.clients_dir.join(format!("{name}.conf"))).ok()?;
         raw.lines()
             .filter_map(|l| l.split_once('='))
-            .find(|(k, _)| k.trim().eq_ignore_ascii_case("AllowedIPs"))
+            .find(|(k, _)| k.trim().eq_ignore_ascii_case(key))
             .map(|(_, v)| v.trim().to_string())
             .filter(|v| !v.is_empty())
     }
@@ -2056,6 +2071,39 @@ echo '{"ok":true,"added":0,"failed":0,"applied":false,"results":[]}'
             vpn.client_allowed_ips("alice").unwrap(),
             "10.0.0.0/8, 192.168.0.0/16"
         );
+    }
+
+    #[test]
+    fn client_endpoint_v4_reads_ipv4_from_conf() {
+        let (dir, vpn) = vpn_with_script("#!/bin/sh\n");
+        std::fs::write(
+            dir.path().join("alice.conf"),
+            "[Interface]\nPrivateKey = x\n\n[Peer]\nAllowedIPs = 10.0.0.0/8\nEndpoint = 203.0.113.7:51820\n",
+        )
+        .unwrap();
+        assert_eq!(
+            vpn.client_endpoint_v4("alice"),
+            Some(std::net::Ipv4Addr::new(203, 0, 113, 7))
+        );
+    }
+
+    #[test]
+    fn client_endpoint_v4_none_for_hostname_or_missing() {
+        let (dir, vpn) = vpn_with_script("#!/bin/sh\n");
+        std::fs::write(
+            dir.path().join("alice.conf"),
+            "[Peer]\nEndpoint = vpn.example.com:51820\n",
+        )
+        .unwrap();
+        assert!(vpn.client_endpoint_v4("alice").is_none());
+        std::fs::write(
+            dir.path().join("bob.conf"),
+            "[Peer]\nAllowedIPs = 10.0.0.0/8\n",
+        )
+        .unwrap();
+        assert!(vpn.client_endpoint_v4("bob").is_none());
+        assert!(vpn.client_endpoint_v4("carol").is_none());
+        assert!(vpn.client_endpoint_v4("../etc/passwd").is_none());
     }
 
     #[test]

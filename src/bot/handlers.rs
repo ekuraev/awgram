@@ -2356,8 +2356,17 @@ async fn apply_routes(
                 return Ok(());
             };
             let param = crate::vpn::validate::ModifyParam::AllowedIps;
+            // `modify` пишет список как есть, а `add`/`regen` инсталлера
+            // v6.0.0 вырезают из него адрес сервера (иначе Linux-клиент на
+            // awg-quick заворачивает в туннель пакеты к самому серверу).
+            // Делаем ту же дыру сами: конфиг после правки через бота совпадает
+            // с тем, что выдал бы инсталлер, и предупреждения в его лог нет.
+            let value = match vpn.client_endpoint_v4(&name) {
+                Some(ip) => crate::vpn::validate::carve_host(value, ip),
+                None => value.to_string(),
+            };
             let pid = progress(bot, chat, msg_id, i18n::creating(lang)).await;
-            match vpn.modify(&name, param, value).await {
+            match vpn.modify(&name, param, &value).await {
                 Ok(out) => {
                     settings.log_event(
                         now_epoch(),
@@ -3229,10 +3238,23 @@ async fn callback_handler(
             } else {
                 None
             };
+            // Инсталлер v6.0.0 вырезает адрес сервера из списка: сверяем с
+            // пресетом, терпя дыру у IPv4 из Endpoint того же конфига.
+            let server_ip = if recreate {
+                vpn.client_endpoint_v4(&name)
+            } else {
+                None
+            };
             let subnet = vpn.vpn_subnet().await;
             let sel = current
                 .as_deref()
-                .and_then(|v| crate::vpn::validate::selection_from_value(v, subnet.as_deref()))
+                .and_then(|v| {
+                    crate::vpn::validate::selection_from_value_with_hole(
+                        v,
+                        subnet.as_deref(),
+                        server_ip,
+                    )
+                })
                 .unwrap_or_default();
             let ctx = crate::bot::RouteCtx::Create {
                 name,
@@ -3570,10 +3592,18 @@ async fn callback_handler(
             // при создании: тумблеры предзаполняются текущим значением клиента.
             if param == crate::vpn::validate::ModifyParam::AllowedIps {
                 let current = vpn.client_allowed_ips(&name);
+                // Дыра у адреса сервера (инсталлер v6.0.0) — не «задано вручную».
+                let server_ip = vpn.client_endpoint_v4(&name);
                 let subnet = vpn.vpn_subnet().await;
                 let sel = current
                     .as_deref()
-                    .and_then(|v| crate::vpn::validate::selection_from_value(v, subnet.as_deref()))
+                    .and_then(|v| {
+                        crate::vpn::validate::selection_from_value_with_hole(
+                            v,
+                            subnet.as_deref(),
+                            server_ip,
+                        )
+                    })
                     .unwrap_or_default();
                 let ctx = crate::bot::RouteCtx::Edit { name };
                 show_routes(
