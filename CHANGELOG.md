@@ -3,6 +3,108 @@
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версионирование — [SemVer](https://semver.org/lang/ru/).
 Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning — [SemVer](https://semver.org/).
 
+## [0.13.0] — 2026-10-15
+
+### 🇷🇺 Русский
+
+#### ✨ Добавлено
+
+- **Карточка «Проверка сервера» показывает поколение AmneziaWG.** Строка
+  «🔐 Поколение AmneziaWG: 3.1» (или 2.0) берётся из поля `protocol` ответа
+  `check --json` (инсталлер v5.36.0+); если маркер поколения не прочитан —
+  предупреждение. Инсталлер v6.0.0 по умолчанию ставит 3.1, а клиент без
+  поддержки 3.1 к такому серверу не подключится, поэтому поколение сервера
+  должно быть видно из бота. На инсталлере без поля строки нет.
+
+#### 🐛 Исправлено
+
+- **Экран маршрутов на инсталлере v6.0.0 снова узнаёт пресеты.** `add` и
+  `regen` теперь вырезают из AllowedIPs клиента IPv4-адрес сервера
+  (исправление для Linux-клиентов на `awg-quick`), и список с такой дырой
+  бот показывал как «задано вручную» с пустыми тумблерами — у каждого
+  клиента режима «исключать из VPN» и у старых клиентов после `regen`.
+  Сверка с пресетом терпит дыру у адреса из `Endpoint` конфига клиента;
+  дыра у другого адреса по-прежнему считается чужой настройкой.
+- **«Применить» на экране маршрутов не возвращает адрес сервера в туннель.**
+  `modify` инсталлера пишет список как есть, поэтому правка через бота
+  стирала дыру до следующего `regen`. Теперь бот вырезает адрес сервера сам,
+  по правилу инсталлера: конфиг после правки совпадает с тем, что выдал бы
+  `add`/`regen`.
+- **rustls обновлён до 0.23.46** — закрыты четыре уязвимости клиента TLS:
+  [RUSTSEC-2026-0346](https://rustsec.org/advisories/RUSTSEC-2026-0346)
+  (`Debug` сессии раскрывал секреты),
+  [RUSTSEC-2026-0347](https://rustsec.org/advisories/RUSTSEC-2026-0347)
+  (буфер данных уходил внешнему серверу после отказа ECH),
+  [RUSTSEC-2026-0348](https://rustsec.org/advisories/RUSTSEC-2026-0348)
+  (распаковка сертификата Brotli до 1 ГиБ до аутентификации),
+  [RUSTSEC-2026-0349](https://rustsec.org/advisories/RUSTSEC-2026-0349)
+  (неаутентифицированный ServerHello понижал обмен ключами). Крейт приходит
+  транзитивно через `reqwest`/`teloxide` и шифрует соединение с Telegram API.
+
+#### 🔧 Изменено
+
+- **Совместимость с инсталлером**: поддерживаемая версия —
+  [v6.0.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v6.0.0) (сверен `--json`-контракт обоих скриптов: поля, коды
+  выхода и `ok` те же, что в v5.37.1; новое — вырез адреса сервера из
+  AllowedIPs в `add`/`regen` и отказ списка, где из IPv4 остаётся только он,
+  см. выше; у сервера по-прежнему одно поколение и один интерфейс `awg0`,
+  поэтому выбор поколения на клиента ([#51](https://github.com/ekuraev/awgram/issues/51)) в боте не появляется;
+  подробности в [docs/compat.md](docs/compat.md)); минимальная — по-прежнему
+  v5.21.0.
+- **Зависимости**: toml 1.1.8, serde_json 1.0.154 — патчевые исправления без
+  изменения API (dependabot #73, #74).
+
+### 🇬🇧 English
+
+#### ✨ Added
+
+- **The "Server check" card shows the AmneziaWG generation.** The line
+  "🔐 AmneziaWG generation: 3.1" (or 2.0) comes from the `protocol` field of
+  `check --json` (installer v5.36.0+); an unreadable generation marker is a
+  warning. Installer v6.0.0 sets up 3.1 by default, and a client without 3.1
+  support cannot connect to such a server, so the server's generation has to
+  be visible from the bot. On an installer without the field there is no
+  line.
+
+#### 🐛 Fixed
+
+- **The routes screen recognises presets again on installer v6.0.0.** `add`
+  and `regen` now carve the server's IPv4 address out of the client's
+  AllowedIPs (a fix for Linux clients on `awg-quick`), and the bot showed a
+  list with such a hole as "set manually" with empty toggles — for every
+  client in the "exclude from VPN" mode and for older clients after `regen`.
+  The preset check now tolerates a hole at the address from the client's
+  `Endpoint`; a hole at any other address still counts as a manual list.
+- **"Apply" on the routes screen no longer routes the server address back
+  into the tunnel.** The installer's `modify` writes the list as given, so an
+  edit through the bot erased the hole until the next `regen`. The bot now
+  carves the server address itself, by the installer's rule: the config
+  after an edit matches what `add`/`regen` would issue.
+- **rustls bumped to 0.23.46** — fixes four TLS client vulnerabilities:
+  [RUSTSEC-2026-0346](https://rustsec.org/advisories/RUSTSEC-2026-0346)
+  (`Debug` of session values exposed secrets),
+  [RUSTSEC-2026-0347](https://rustsec.org/advisories/RUSTSEC-2026-0347)
+  (buffered data sent to the outer server after an ECH rejection),
+  [RUSTSEC-2026-0348](https://rustsec.org/advisories/RUSTSEC-2026-0348)
+  (Brotli certificate decompression up to 1 GiB before authentication),
+  [RUSTSEC-2026-0349](https://rustsec.org/advisories/RUSTSEC-2026-0349)
+  (an unauthenticated ServerHello downgraded the key exchange). The crate
+  comes in transitively via `reqwest`/`teloxide` and secures the connection
+  to the Telegram API.
+
+#### 🔧 Changed
+
+- **Installer compatibility**: supported version is [v6.0.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v6.0.0) (the
+  `--json` contract of both scripts is verified: fields, exit codes and `ok`
+  are the same as in v5.37.1; new are the server-address carve in
+  `add`/`regen` and the refusal of a list whose only IPv4 route is that
+  address, see above; a server still has one generation and one `awg0`
+  interface, so a per-client generation choice ([#51](https://github.com/ekuraev/awgram/issues/51)) does not appear in
+  the bot; details in [docs/compat.en.md](docs/compat.en.md)); the minimum
+  is still v5.21.0.
+- **Dependencies**: toml 1.1.8, serde_json 1.0.154 — patch fixes with no API
+  changes (dependabot #73, #74).
+
 ## [0.12.3] — 2026-10-09
 
 ### 🇷🇺 Русский
@@ -1033,6 +1135,7 @@ config paths have changed. On a running VPS, perform once:
 - Environment diagnostics (🔬 button), ⏳ client expiry badges.
 - RU/EN localization, PSK default, backup/restore, persistent state.
 
+[0.13.0]: https://github.com/ekuraev/awgram/compare/v0.12.3...v0.13.0
 [0.12.3]: https://github.com/ekuraev/awgram/compare/v0.12.2...v0.12.3
 [0.12.2]: https://github.com/ekuraev/awgram/compare/v0.12.1...v0.12.2
 [0.12.1]: https://github.com/ekuraev/awgram/compare/v0.12.0...v0.12.1
