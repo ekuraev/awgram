@@ -12,7 +12,7 @@ the bot.
 
 | | Version |
 |---|---|
-| Supported (`--json` contract verified) | [v5.37.1](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.37.1) |
+| Supported (`--json` contract verified) | [v6.0.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v6.0.0) |
 | Minimum | [v5.21.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.21.0) |
 
 v5.20.x and older are not supported: the bot relies on the extended
@@ -37,12 +37,48 @@ reality disagree.
 - Bulk creation has no fallback: `modify` would have to run once per
   client, so without the flag the routes step is hidden there.
 
+## The server address outside the client's AllowedIPs
+
+Since v6.0.0 `add` and `regen` carve the IPv4 address from the client's
+`Endpoint` out of its AllowedIPs: a `/n` route covering the address becomes
+`32−n` routes (`0.0.0.0/0` is left alone; a hostname or IPv6 gets no hole).
+This is a fix for Linux clients on `awg-quick`: it installs its routing rule
+only for `0.0.0.0/0`, so a list covering the server's address sent the
+packets to the server itself into the tunnel. The Windows, Android and iOS
+apps add a route to the server themselves, the hole does not affect them.
+The carve has no switch.
+
+For the bot this means:
+
+- the `allowed_ips` field of the `add --allowed-ips` reply is wider than the
+  list passed in: in the "exclude from VPN" mode the server's public address
+  is always inside;
+- the routes screen matches the client's list against the presets while
+  tolerating a hole at the IPv4 from the same `.conf`'s `Endpoint`: such a
+  client shows as its preset, not as "set manually"; a hole at any other
+  address still counts as a manual list;
+- the installer's `modify AllowedIPs` writes the list as given (it only
+  warns), so on "Apply" the routes screen carves the server address itself,
+  by the same rule: the config after an edit through the bot matches what
+  `add`/`regen` would issue, and the hole does not vanish until the next
+  `regen`. The bot does this on any installer version: on older ones the
+  hole is harmless (the apps add a route to the server themselves), and
+  their `regen` treats such a list as individual and leaves it alone. If
+  the only IPv4 route left would be the server address, the bot leaves the
+  list unchanged — `modify` writes it as given and warns;
+- a list whose only IPv4 route is the server address is refused by
+  `add`/`regen` before the config is written — with the old
+  `status:"error"`; the bot's presets never build such a list.
+
 ## Installer release history
 
 Releases v5.21.1–v5.37.0 did not break the JSON contract: all new messages
 went to stderr and the `--json` envelopes on stdout were unchanged. v5.37.1
 is the first where a field of an existing envelope changed its type (`null`
-instead of `false` in `repair-module --json`), see its row below.
+instead of `false` in `repair-module --json`), see its row below. v6.0.0 did
+not change the envelopes but changed the contents of `allowed_ips` and of
+the client `.conf` files (the server-address carve), see its row and the
+section above.
 
 | Version | What changed | Effect on the bot |
 |---|---|---|
@@ -64,11 +100,14 @@ instead of `false` in `repair-module --json`), see its row below.
 | v5.36.0–v5.36.2 | Additive `protocol`/`protocol_error` in `check --json`; secrets hidden in the service status; since v5.36.2 a list-based full tunnel gets `2000::/3` plus a "sink" address instead of `::/0` (the Windows client reaches the LAN again) | The "all traffic" preset (`0.0.0.0/0, ::/0`) is left alone. Since awgram v0.12.2 the "exclude from VPN" mode sends `2000::/3` instead of `::/0` on v5.36.2+ — the installer adds the sink address itself; the routes screen recognises these lists and the mode 2 list (as "exclude all local") |
 | v5.37.0 | Default client DNS (`CLIENT_DNS`) in the install config; an empty `--expires=` is an error; `add`/`restore` handle expiry markers more strictly | None: the bot passes `--expires` only with a non-empty validated value, refusals come as `status:"error"`/`rolled_back` |
 | v5.37.1 | `repair-module --json` goes through the module helper (`amneziawg-ensure-module`, kernel 7.0): the envelope gains helper, stage, package and kernels-without-module fields, and a fact that does not exist is `null`, not `false`: when the repair is refused up front (broken helper, dpkg not answering, no headers for the kernel) `module_loaded`/`service_active`/`rc` are `null` and the reason is in `error`; on the helper path `service_active:null` when the module did not load. `restore` checks the backup before stopping the service (a refusal is the old `ok:false`, `rolled_back:false` envelope with no snapshot left behind), the rollback brings the files exactly to the snapshot and, with `rolled_back:true`, carries an additive `rollback_complete`. Install flag `--client-ipv6-direct` (`CLIENT_IPV6_DIRECT=1`): the mode 2 list has no IPv6 part, `regen` strips `2000::/3`/`::/0` from a client whose IPv4 part equals the server list. `--jc=0`, `sbin` in PATH, backup and `restore` of generation 3.1, on 3.1 `add`/`regen` refuse without `qrencode`/`perl` | Before awgram v0.12.3 the `null` broke parsing of the `repair-module` reply ("failed to parse server response"); now a refusal is an operation error with the reason in the bot log, and `service_active:null` with `rc:1` is the usual "module failed to load". `rollback_complete:false` gets its own incomplete-rollback warning instead of "configuration was rolled back". With `CLIENT_IPV6_DIRECT=1` the "exclude from VPN" mode still sends `2000::/3`: the installer leaves per-client routes alone, so such a client's IPv6 goes through the tunnel; if `regen` stripped the IPv6 part, the routes screen shows the list as set manually. `add`/`regen` refusals are the old `status:"error"`; `--jc=0` does not affect `check --json` |
+| v6.0.0 | A fresh install sets up AmneziaWG 3.1 by default (`HeaderProtectionKey`, `ContentPaddingAddition`), 2.0 where 3.1 cannot run; working servers stay on their generation, and a server still has one generation and one `awg0` interface. `add`/`regen` carve the server's IPv4 from `Endpoint` out of the client's AllowedIPs and refuse a list whose only IPv4 route is that address; `modify` warns about the server address in the list and about a new `Endpoint` under the client's routes. `check`/`diagnose` warn when a data packet matches a handshake packet in length and when the kernel module is reachable without root (verdict and JSON unchanged). `manage` 6.0.0 with an older `awg_common.sh` refuses with the old `ok:false` envelope. Fields, exit codes and `ok` of the `--json` envelopes are the same as in v5.37.1 | The routes screen tolerates the hole at the server address and carves it itself on an edit through `modify` (see the section above); before awgram v0.13.0 a client with the hole showed as "set manually" with empty toggles. The "Server check" card shows the generation from `protocol` (`2.0`/`3.1`, the field exists since v5.36.0) and warns when the marker is unreadable; on an installer without the field there is no line. The installer does not run a second interface for 2.0 and 3.1, so a per-client generation choice does not appear in the bot. `add`/`regen` refusals and a mismatch of the installer halves come as the old envelopes; the new `check` warnings go to stderr |
 
 ## How a new installer release is verified
 
-When the installer ships a new release, the `manage_amneziawg.sh` diff is
-reviewed: `--json` envelopes of the subcommands in use, exit codes, new
-fields and warnings. If the contract is intact, only this table and the
-README badge are updated; if it changed, the fix lands in the CHANGELOG as
-compatibility with that specific version.
+When the installer ships a new release, the diffs of `manage_amneziawg.sh`
+and `awg_common.sh` are reviewed (the `add`/`regen` and routing logic lives
+in the library, and the two are updated as a pair): `--json` envelopes of
+the subcommands in use, exit codes, new fields and warnings. If the
+contract is intact, only this table and the README badge are updated; if
+it changed, the fix lands in the CHANGELOG as compatibility with that
+specific version.
