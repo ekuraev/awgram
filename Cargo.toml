@@ -20,7 +20,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 regex = "1"
 rand = "0.10"
-rusqlite = { version = "0.40", features = ["backup", "bundled"] }
+rusqlite = { version = "0.41", features = ["backup", "bundled"] }
 url = "2"
 # Версия и TLS-фичи едут за teloxide; socks нужен для socks5(h)-прокси.
 reqwest = { version = "0.12", default-features = false, features = ["socks"] }
