@@ -3,6 +3,69 @@
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версионирование — [SemVer](https://semver.org/lang/ru/).
 Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning — [SemVer](https://semver.org/).
 
+## [0.13.1] — 2026-10-27
+
+### 🇷🇺 Русский
+
+#### 🐛 Исправлено
+
+- **Закрыты три advisory в зависимостях.**
+  [RUSTSEC-2026-0381](https://rustsec.org/advisories/RUSTSEC-2026-0381) —
+  `webpki-roots` 1.0.11: из набора корневых сертификатов убран
+  `emSign ECC Root CA - G3`, через который проходили цепочки с
+  недоверенными промежуточными сертификатами emSign (их закрытые ключи
+  стали известны);
+  [RUSTSEC-2026-0382](https://rustsec.org/advisories/RUSTSEC-2026-0382) —
+  `rustls-webpki` 0.103.16: проверка сертификата отвергает цепочки с теми
+  же ключами;
+  [RUSTSEC-2026-0386](https://rustsec.org/advisories/RUSTSEC-2026-0386) —
+  `tokio` 1.53.3: безопасные конструкторы `AsyncFd` принимали любой
+  дескриптор и нарушали I/O-safety (unsound; бот `AsyncFd` не использует).
+  `webpki-roots` и `rustls-webpki` приходят транзитивно через
+  `reqwest`/`teloxide` и проверяют сертификат Telegram API.
+
+#### 🔧 Изменено
+
+- **Совместимость с инсталлером**: поддерживаемая версия —
+  [v6.1.1](https://github.com/bivlked/amneziawg-installer/releases/tag/v6.1.1) (сверен `--json`-контракт обоих скриптов
+  v6.0.1–v6.1.1: конверты, коды выхода и `ok` те же, что в v6.0.0; новое —
+  предупреждения о `Jc` за пределом пачки amneziawg-go в `check`,
+  `add`/`regen` и `modify`, все в stderr, и флаг установки `--i1`;
+  подробности в [docs/compat.md](docs/compat.md)); минимальная —
+  по-прежнему v5.21.0.
+- **Зависимости**: sha2 0.11.1 — патчевое исправление без изменения API
+  (dependabot #76); tokio 1.53.3 — см. выше (dependabot #77).
+
+### 🇬🇧 English
+
+#### 🐛 Fixed
+
+- **Three dependency advisories closed.**
+  [RUSTSEC-2026-0381](https://rustsec.org/advisories/RUSTSEC-2026-0381) —
+  `webpki-roots` 1.0.11: `emSign ECC Root CA - G3`, which let certificate
+  paths run through distrusted emSign intermediates (their private keys are
+  now known), is removed from the bundled roots;
+  [RUSTSEC-2026-0382](https://rustsec.org/advisories/RUSTSEC-2026-0382) —
+  `rustls-webpki` 0.103.16: certificate verification rejects paths with
+  those keys;
+  [RUSTSEC-2026-0386](https://rustsec.org/advisories/RUSTSEC-2026-0386) —
+  `tokio` 1.53.3: the safe `AsyncFd` constructors accepted any descriptor
+  and violated I/O safety (unsound; the bot does not use `AsyncFd`).
+  `webpki-roots` and `rustls-webpki` come in transitively via
+  `reqwest`/`teloxide` and verify the Telegram API certificate.
+
+#### 🔧 Changed
+
+- **Installer compatibility**: supported version is [v6.1.1](https://github.com/bivlked/amneziawg-installer/releases/tag/v6.1.1) (the
+  `--json` contract of both scripts is verified for v6.0.1–v6.1.1:
+  envelopes, exit codes and `ok` are the same as in v6.0.0; new are the
+  warnings about `Jc` beyond the amneziawg-go batch in `check`,
+  `add`/`regen` and `modify`, all on stderr, and the `--i1` install flag;
+  details in [docs/compat.en.md](docs/compat.en.md)); the minimum is still
+  v5.21.0.
+- **Dependencies**: sha2 0.11.1 — a patch fix with no API changes
+  (dependabot #76); tokio 1.53.3 — see above (dependabot #77).
+
 ## [0.13.0] — 2026-10-15
 
 ### 🇷🇺 Русский
@@ -1135,6 +1198,7 @@ config paths have changed. On a running VPS, perform once:
 - Environment diagnostics (🔬 button), ⏳ client expiry badges.
 - RU/EN localization, PSK default, backup/restore, persistent state.
 
+[0.13.1]: https://github.com/ekuraev/awgram/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/ekuraev/awgram/compare/v0.12.3...v0.13.0
 [0.12.3]: https://github.com/ekuraev/awgram/compare/v0.12.2...v0.12.3
 [0.12.2]: https://github.com/ekuraev/awgram/compare/v0.12.1...v0.12.2
