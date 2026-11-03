@@ -3,6 +3,44 @@
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версионирование — [SemVer](https://semver.org/lang/ru/).
 Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning — [SemVer](https://semver.org/).
 
+## [0.13.2] — 2026-11-03
+
+### 🇷🇺 Русский
+
+#### 🔧 Изменено
+
+- **Совместимость с инсталлером**: поддерживаемая версия —
+  [v6.1.2](https://github.com/bivlked/amneziawg-installer/releases/tag/v6.1.2) (сверен `--json`-контракт обоих скриптов:
+  конверты, коды выхода и `ok` те же, что в v6.0.0; новое — отчёт в `check`
+  о защите от уязвимости ядра CVE-2026-98432, целиком в stderr, вердикт не
+  меняется, и команда `qr` для QR-кода в терминале, которую бот не
+  использует; подробности в [docs/compat.md](docs/compat.md)); минимальная —
+  по-прежнему v5.21.0.
+- **Зависимости**: rusqlite 0.41.0 (dependabot #80) — встроенный SQLite
+  обновлён с 3.53.2 до 3.54.1 (libsqlite3-sys 0.39.1), закрыт use-after-free
+  из безопасного кода в `trace_v2`/`busy_handler` (бот их не вызывает); API
+  `Backup`, которым бот делает снимок и восстановление БД, не менялся;
+  tokio 1.54.1 — минорный выпуск без advisory, влит в `main` отдельно
+  (dependabot #77).
+
+### 🇬🇧 English
+
+#### 🔧 Changed
+
+- **Installer compatibility**: supported version is [v6.1.2](https://github.com/bivlked/amneziawg-installer/releases/tag/v6.1.2) (the
+  `--json` contract of both scripts is verified: envelopes, exit codes and
+  `ok` are the same as in v6.0.0; new are the `check` report on the
+  CVE-2026-98432 kernel vulnerability guard, entirely on stderr with the
+  verdict unchanged, and the `qr` command for a QR code in the terminal,
+  which the bot does not use; details in
+  [docs/compat.en.md](docs/compat.en.md)); the minimum is still v5.21.0.
+- **Dependencies**: rusqlite 0.41.0 (dependabot #80) — bundled SQLite goes
+  from 3.53.2 to 3.54.1 (libsqlite3-sys 0.39.1), a use-after-free from safe
+  code in `trace_v2`/`busy_handler` is fixed (the bot calls neither); the
+  `Backup` API the bot uses for database snapshots and restores is
+  unchanged; tokio 1.54.1 — a minor release with no advisory, merged into
+  `main` separately (dependabot #77).
+
 ## [0.13.1] — 2026-10-27
 
 ### 🇷🇺 Русский
@@ -1198,6 +1236,7 @@ config paths have changed. On a running VPS, perform once:
 - Environment diagnostics (🔬 button), ⏳ client expiry badges.
 - RU/EN localization, PSK default, backup/restore, persistent state.
 
+[0.13.2]: https://github.com/ekuraev/awgram/compare/v0.13.1...v0.13.2
 [0.13.1]: https://github.com/ekuraev/awgram/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/ekuraev/awgram/compare/v0.12.3...v0.13.0
 [0.12.3]: https://github.com/ekuraev/awgram/compare/v0.12.2...v0.12.3
