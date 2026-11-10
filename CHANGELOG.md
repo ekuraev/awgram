@@ -3,6 +3,42 @@
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версионирование — [SemVer](https://semver.org/lang/ru/).
 Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning — [SemVer](https://semver.org/).
 
+## [0.13.3] — 2026-11-10
+
+### 🇷🇺 Русский
+
+#### 🔧 Изменено
+
+- **Совместимость с инсталлером**: поддерживаемая версия —
+  [v6.2.2](https://github.com/bivlked/amneziawg-installer/releases/tag/v6.2.2) (сверен `--json`-контракт обоих скриптов
+  для v6.2.0–v6.2.2: конверты, коды выхода и `ok` те же, что в v6.0.0;
+  новое — AmneziaWG 3.1 на новых установках ARM64 и подсказки для сервера
+  на готовом ARM-пакете модуля после смены ядра в `check` и
+  `repair-module`, целиком в stderr; `restore` бэкапа 3.1 на arm64 больше
+  не отказывает; подробности в [docs/compat.md](docs/compat.md));
+  минимальная — по-прежнему v5.21.0.
+- **Зависимости**: rusqlite 0.41.1 (dependabot #80) — исправлены паника
+  детерминированной скалярной функции без аргументов и проверка имени
+  `PRAGMA` со SQLCipher (бот не использует ни то, ни другое); встроенный
+  SQLite и API `Backup` не менялись.
+
+### 🇬🇧 English
+
+#### 🔧 Changed
+
+- **Installer compatibility**: supported version is [v6.2.2](https://github.com/bivlked/amneziawg-installer/releases/tag/v6.2.2) (the
+  `--json` contract of both scripts is verified for v6.2.0–v6.2.2:
+  envelopes, exit codes and `ok` are the same as in v6.0.0; new are
+  AmneziaWG 3.1 on new ARM64 installs and the hints for a server on the
+  prebuilt ARM module package after a kernel change in `check` and
+  `repair-module`, entirely on stderr; `restore` of a 3.1 backup on arm64
+  no longer refuses; details in [docs/compat.en.md](docs/compat.en.md));
+  the minimum is still v5.21.0.
+- **Dependencies**: rusqlite 0.41.1 (dependabot #80) — fixes a panic with
+  a zero-argument deterministic scalar function and the `PRAGMA` name check
+  with SQLCipher (the bot uses neither); the bundled SQLite and the
+  `Backup` API are unchanged.
+
 ## [0.13.2] — 2026-11-03
 
 ### 🇷🇺 Русский
@@ -1236,6 +1272,7 @@ config paths have changed. On a running VPS, perform once:
 - Environment diagnostics (🔬 button), ⏳ client expiry badges.
 - RU/EN localization, PSK default, backup/restore, persistent state.
 
+[0.13.3]: https://github.com/ekuraev/awgram/compare/v0.13.2...v0.13.3
 [0.13.2]: https://github.com/ekuraev/awgram/compare/v0.13.1...v0.13.2
 [0.13.1]: https://github.com/ekuraev/awgram/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/ekuraev/awgram/compare/v0.12.3...v0.13.0
