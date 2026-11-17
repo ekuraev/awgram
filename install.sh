@@ -693,8 +693,12 @@ migrate_state() { # при смене root<->hardened переносит state.j
   # файлы БД, иначе новый процесс упадёт с EACCES при открытии;
   # при переходе обратно в root ничего не делаем — root читает/пишет всё
   if [ "$MODE" = "hardened" ]; then
+    # `[ -f ] && chown` последней командой цикла нельзя: БД ещё нет (бот ни
+    # разу не стартовал) — glob не раскрылся, цикл и функция вернули бы 1,
+    # и set -e молча оборвал бы установку до записи unit-файла
     for f in "$STATE_DIR"/awgram.db*; do
-      [ -f "$f" ] && chown "$SVC_USER:$SVC_USER" "$f"
+      [ -f "$f" ] || continue
+      chown "$SVC_USER:$SVC_USER" "$f"
     done
   fi
 }
