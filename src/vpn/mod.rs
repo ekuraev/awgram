@@ -44,6 +44,9 @@ pub struct Vpn {
     /// Меняется только вместе с обновлением инсталлера, то есть с
     /// перезапуском бота, поэтому кэш живёт всё время процесса.
     add_allowed_ips: AtomicU8,
+    /// Знает ли `add` флаг `--no-psk` (инсталлер v6.3.0+, где новый клиент
+    /// получает PresharedKey по умолчанию). Кэш по тем же правилам.
+    add_no_psk: AtomicU8,
     /// Дописывает ли инсталлер адрес «стока» IPv6 к списку с `2000::/3`
     /// (v5.36.2+). Кэш по тем же правилам, что и `add_allowed_ips`.
     v6_sink: AtomicU8,
@@ -80,6 +83,7 @@ impl Vpn {
             timeout_secs: cfg.op_timeout_secs,
             clients_dir: cfg.clients_dir.clone(),
             add_allowed_ips: AtomicU8::new(CAP_UNKNOWN),
+            add_no_psk: AtomicU8::new(CAP_UNKNOWN),
             v6_sink: AtomicU8::new(CAP_UNKNOWN),
         }
     }
@@ -195,6 +199,32 @@ impl Vpn {
         }
     }
 
+    /// Флаг PSK для `add`. С v6.3.0 инсталлер выдаёт PresharedKey каждому
+    /// новому клиенту, если не сказано иное (а на сервере, поставленном с
+    /// `--no-psk`, — наоборот), поэтому выбор из бота передаётся явно в обе
+    /// стороны: `--psk` либо `--no-psk`. Старый скрипт `--no-psk` не знает —
+    /// ему флаг не шлём: без `--psk` клиент там и так без PSK. Справка не
+    /// прочиталась — тоже не шлём: неизвестная опция уронила бы создание.
+    async fn psk_flag(&self, psk: bool) -> Option<&'static str> {
+        if psk {
+            return Some("--psk");
+        }
+        if self.add_no_psk.load(Ordering::Relaxed) == CAP_UNKNOWN {
+            self.probe_help().await;
+        }
+        (self.add_no_psk.load(Ordering::Relaxed) == CAP_YES).then_some("--no-psk")
+    }
+
+    /// После отказа скрипта разобрать аргументы: был ли в них `--no-psk`,
+    /// обещанный справкой. Если да — запоминаем, что флага нет, и вызывающий
+    /// повторяет `add` без него (клиента отвергнутый вызов не создал).
+    fn drop_no_psk(&self, psk: bool) -> bool {
+        !psk && self
+            .add_no_psk
+            .compare_exchange(CAP_YES, CAP_NO, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+    }
+
     /// Читает `--help` и раскладывает ответ по кэшам возможностей. Уже
     /// известный ответ не переписывает: `add_allowed_ips` мог быть сброшен в
     /// CAP_NO после отказа скрипта.
@@ -214,8 +244,13 @@ impl Vpn {
             }
         };
         let flag = out.contains("--allowed-ips");
+        let no_psk = out.contains("--no-psk");
         let sink = parse_script_version(&out).is_some_and(|v| v >= V6_SINK_SINCE);
-        for (slot, yes) in [(&self.add_allowed_ips, flag), (&self.v6_sink, sink)] {
+        for (slot, yes) in [
+            (&self.add_allowed_ips, flag),
+            (&self.add_no_psk, no_psk),
+            (&self.v6_sink, sink),
+        ] {
             let _ =
                 slot.compare_exchange(CAP_UNKNOWN, cap(yes), Ordering::Relaxed, Ordering::Relaxed);
         }
@@ -261,13 +296,16 @@ impl Vpn {
     }
 
     pub async fn add(&self, name: &str, expires: Option<&str>, psk: bool) -> Result<AddResult> {
-        self.add_raw(name, expires, psk, None)
-            .await?
-            .ok_or_else(|| {
-                // Без `--allowed-ips` отвергать нечего: все прочие аргументы
-                // скрипт знает с v5.21.0.
-                crate::error::Error::Parse("add: скрипт не принял аргументы".into())
-            })
+        let mut res = self.add_raw(name, expires, psk, None).await?;
+        if res.is_none() && self.drop_no_psk(psk) {
+            tracing::warn!("manage не принял --no-psk вопреки справке — повторяю add без флага");
+            res = self.add_raw(name, expires, psk, None).await?;
+        }
+        res.ok_or_else(|| {
+            // Без `--allowed-ips` и `--no-psk` отвергать нечего: все прочие
+            // аргументы скрипт знает с v5.21.0.
+            crate::error::Error::Parse("add: скрипт не принял аргументы".into())
+        })
     }
 
     /// Общая реализация `add`. `Ok(None)` — скрипт отверг аргументы целиком:
@@ -289,8 +327,8 @@ impl Vpn {
                 .map_err(|e| crate::error::Error::Parse(e.to_string()))?;
             args.push(format!("--expires={exp}"));
         }
-        if psk {
-            args.push("--psk".into());
+        if let Some(flag) = self.psk_flag(psk).await {
+            args.push(flag.into());
         }
         if let Some(aip) = allowed_ips {
             let aip = validate::parse_allowed_ips(aip)
@@ -390,11 +428,14 @@ impl Vpn {
         expires: Option<&str>,
         psk: bool,
     ) -> Result<crate::vpn::model::BulkResult> {
-        self.add_many_raw(names, expires, psk, None)
-            .await?
-            .ok_or_else(|| {
-                crate::error::Error::Parse("add_many: скрипт не принял аргументы".into())
-            })
+        let mut res = self.add_many_raw(names, expires, psk, None).await?;
+        if res.is_none() && self.drop_no_psk(psk) {
+            tracing::warn!(
+                "manage не принял --no-psk вопреки справке — повторяю add (пачка) без флага"
+            );
+            res = self.add_many_raw(names, expires, psk, None).await?;
+        }
+        res.ok_or_else(|| crate::error::Error::Parse("add_many: скрипт не принял аргументы".into()))
     }
 
     /// Общая реализация. `Ok(None)` — аргументы отвергнуты целиком, см.
@@ -423,8 +464,8 @@ impl Vpn {
                 .map_err(|e| crate::error::Error::Parse(e.to_string()))?;
             args.push(format!("--expires={exp}"));
         }
-        if psk {
-            args.push("--psk".into());
+        if let Some(flag) = self.psk_flag(psk).await {
+            args.push(flag.into());
         }
         if let Some(aip) = allowed_ips {
             let aip = validate::parse_allowed_ips(aip)
@@ -1021,6 +1062,7 @@ impl Vpn {
             timeout_secs: 5,
             clients_dir,
             add_allowed_ips: AtomicU8::new(CAP_UNKNOWN),
+            add_no_psk: AtomicU8::new(CAP_UNKNOWN),
             v6_sink: AtomicU8::new(CAP_UNKNOWN),
         }
     }
@@ -1047,6 +1089,7 @@ mod tests {
             timeout_secs: 5,
             clients_dir: dir.path().to_path_buf(),
             add_allowed_ips: AtomicU8::new(CAP_UNKNOWN),
+            add_no_psk: AtomicU8::new(CAP_UNKNOWN),
             v6_sink: AtomicU8::new(CAP_UNKNOWN),
         };
         (dir, vpn)
@@ -1214,6 +1257,7 @@ echo '{{"command":"add","ok":true,"added":1,"failed":0,"applied":true,"results":
             timeout_secs: 5,
             clients_dir: dir.path().to_path_buf(),
             add_allowed_ips: AtomicU8::new(CAP_UNKNOWN),
+            add_no_psk: AtomicU8::new(CAP_UNKNOWN),
             v6_sink: AtomicU8::new(CAP_UNKNOWN),
         };
         let res = vpn.add("alice", None, false).await.unwrap();
@@ -1244,6 +1288,7 @@ echo '{"command":"add","ok":true,"added":1,"failed":0,"applied":true,"results":[
             timeout_secs: 5,
             clients_dir: dir.path().to_path_buf(),
             add_allowed_ips: AtomicU8::new(CAP_UNKNOWN),
+            add_no_psk: AtomicU8::new(CAP_UNKNOWN),
             v6_sink: AtomicU8::new(CAP_UNKNOWN),
         };
         let res = vpn.add("alice", None, false).await.unwrap();
@@ -1984,6 +2029,7 @@ echo '{{"command":"add","ok":true,"added":2,"failed":1,"applied":true,"results":
             timeout_secs: 5,
             clients_dir: dir.path().to_path_buf(),
             add_allowed_ips: AtomicU8::new(CAP_UNKNOWN),
+            add_no_psk: AtomicU8::new(CAP_UNKNOWN),
             v6_sink: AtomicU8::new(CAP_UNKNOWN),
         };
         let res = vpn
@@ -2285,8 +2331,9 @@ echo '{"command":"add","ok":true,"added":1,"failed":0,"applied":true,"results":[
     #[tokio::test]
     #[serial]
     async fn add_client_without_routes_never_probes_flag() {
-        // Маршруты не заданы — справку спрашивать незачем, лишний запуск
-        // скрипта на каждое создание не нужен.
+        // Маршруты не заданы, PSK запрошен — справку спрашивать незачем,
+        // лишний запуск скрипта на каждое создание не нужен. (Без PSK
+        // справка нужна: от неё зависит `--no-psk`.)
         let (_d, vpn) = vpn_with_script(
             r#"#!/bin/sh
 case "$1" in
@@ -2295,7 +2342,7 @@ esac
 echo '{"command":"add","ok":true,"added":1,"failed":0,"applied":true,"results":[{"name":"alice","status":"created","conf":"/tmp/alice.conf"}]}'
 "#,
         );
-        let out = vpn.add_client("alice", None, false, None).await.unwrap();
+        let out = vpn.add_client("alice", None, true, None).await.unwrap();
         assert!(!out.routes_applied);
         assert_eq!(
             vpn.add_allowed_ips.load(Ordering::Relaxed),
@@ -2371,6 +2418,107 @@ echo '{"command":"add","ok":true,"added":2,"failed":0,"applied":true,"results":[
             out.res.created[1].allowed_ips.as_deref(),
             Some("10.0.0.0/8, ::/0")
         );
+    }
+
+    // --- add --no-psk (инсталлер v6.3.0+: PSK у нового клиента по умолчанию) ---
+
+    /// Скрипт инсталлера v6.3.0+: справка перечисляет `--no-psk`, а `add`
+    /// отвечает именем клиента, по которому видно, какой флаг PSK пришёл.
+    /// `--psk` и `--no-psk` вместе — ошибка, как в апстриме.
+    const PSK_DEFAULT_STUB: &str = r#"#!/bin/sh
+case "$1" in
+  --help) echo "  --psk                 (только для add) PresharedKey клиенту"; echo "  --no-psk              (только для add) создать клиента без PresharedKey"; exit 0 ;;
+esac
+psk=0; nopsk=0; n=0
+for a in "$@"; do
+  case "$a" in --psk) psk=1 ;; --no-psk) nopsk=1 ;; --*|add) ;; *) n=$((n+1)) ;; esac
+done
+[ "$psk$nopsk" = 11 ] && exit 1
+res=""; i=0
+while [ "$i" -lt "$n" ]; do
+  [ -n "$res" ] && res="$res,"
+  res="$res{\"name\":\"psk${psk}nopsk${nopsk}\",\"status\":\"created\",\"conf\":\"/tmp/c.conf\"}"
+  i=$((i+1))
+done
+echo "{\"command\":\"add\",\"ok\":true,\"added\":$n,\"failed\":0,\"applied\":true,\"results\":[$res]}"
+"#;
+
+    #[tokio::test]
+    #[serial]
+    async fn add_without_psk_sends_no_psk_when_script_knows_it() {
+        // С v6.3.0 `add` без флагов выдаёт PSK: выбор «без PSK» обязан уйти
+        // явным `--no-psk`, иначе кнопка в боте ничего не значит.
+        let (_d, vpn) = vpn_with_script(PSK_DEFAULT_STUB);
+        let res = vpn.add("alice", None, false).await.unwrap();
+        assert_eq!(res.name, "psk0nopsk1");
+        // С PSK — как раньше, `--psk`; оба флага вместе скрипт отвергает.
+        let res = vpn.add("alice", None, true).await.unwrap();
+        assert_eq!(res.name, "psk1nopsk0");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn add_many_without_psk_sends_no_psk_when_script_knows_it() {
+        let names = vec!["a".to_string(), "b".to_string()];
+        let (_d, vpn) = vpn_with_script(PSK_DEFAULT_STUB);
+        let res = vpn.add_many(&names, None, false).await.unwrap();
+        assert_eq!(res.created.len(), 2);
+        assert_eq!(res.created[0].name, "psk0nopsk1");
+        let res = vpn.add_many(&names, None, true).await.unwrap();
+        assert_eq!(res.created[0].name, "psk1nopsk0");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn add_without_psk_sends_no_flag_to_old_installer() {
+        // До v6.3.0 флага `--no-psk` нет, а клиент без `--psk` и так без PSK:
+        // неизвестная опция уронила бы создание.
+        let (_d, vpn) = vpn_with_script(
+            r#"#!/bin/sh
+case "$1" in
+  --help) echo "  --psk                 (только для add) сгенерировать PresharedKey для клиента"; exit 0 ;;
+esac
+for a in "$@"; do
+  case "$a" in
+    --no-psk) echo '{"command":"help","ok":false,"error":"invalid usage (unknown option or command)","rc":1}'; exit 1 ;;
+  esac
+done
+echo '{"command":"add","ok":true,"added":1,"failed":0,"applied":true,"results":[{"name":"alice","status":"created","conf":"/tmp/alice.conf"}]}'
+"#,
+        );
+        assert_eq!(vpn.add("alice", None, false).await.unwrap().name, "alice");
+        assert_eq!(vpn.add_no_psk.load(Ordering::Relaxed), CAP_NO);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn add_retries_without_no_psk_when_script_rejects_it() {
+        // Справка обещала `--no-psk`, а разбор аргументов его не принял:
+        // клиента скрипт не создал, повтор без флага безопасен.
+        const STUB: &str = r#"#!/bin/sh
+case "$1" in
+  --help) echo "  --no-psk              создать клиента без PresharedKey"; exit 0 ;;
+esac
+for a in "$@"; do
+  case "$a" in
+    --no-psk) echo '{"command":"help","ok":false,"error":"invalid usage (unknown option or command)","rc":1}'; exit 1 ;;
+  esac
+done
+echo '{"command":"add","ok":true,"added":1,"failed":0,"applied":true,"results":[{"name":"alice","status":"created","conf":"/tmp/alice.conf"}]}'
+"#;
+        let (_d, vpn) = vpn_with_script(STUB);
+        assert_eq!(vpn.add("alice", None, false).await.unwrap().name, "alice");
+        assert_eq!(
+            vpn.add_no_psk.load(Ordering::Relaxed),
+            CAP_NO,
+            "отказ запоминается — второй раз флаг не шлём"
+        );
+        let (_d, vpn) = vpn_with_script(STUB);
+        let res = vpn
+            .add_many(&["alice".to_string()], None, false)
+            .await
+            .unwrap();
+        assert_eq!(res.created.len(), 1);
     }
 
     #[tokio::test]
