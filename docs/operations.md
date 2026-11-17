@@ -1,9 +1,10 @@
-# Эксплуатация: обновления и бэкапы
+# Эксплуатация: обновления, бэкапы и удаление
 
 [English version](operations.en.md)
 
 Операторские заметки, которые не поместились в README: каналы обновлений,
-особенности бэкапов в hardened-режиме и ручное восстановление без бота.
+особенности бэкапов в hardened-режиме, ручное восстановление без бота и
+удаление.
 
 ## Каналы обновлений
 
@@ -58,3 +59,62 @@ tar -xzf awgram_backup_<ts>.tar.gz awg/ \
 БД бота (`awgram.db` внутри бандла) при таком восстановлении не
 затрагивается — её можно положить на место вручную при остановленном
 сервисе `awgram`.
+
+## Удаление
+
+```bash
+sudo awgram-setup uninstall
+```
+
+Команда спрашивает подтверждение и удаляет только самого бота:
+
+| Удаляется | Остаётся |
+|---|---|
+| сервис `awgram` (остановка, отключение, unit-файл) | AmneziaWG, `awg0`, клиенты и их конфиги |
+| бинарник `/usr/local/bin/awgram` и его копия `.bak` | бэкапы бота в `<каталог клиентов>/backups/awgram` |
+| правило `/etc/sudoers.d/awgram` и пользователь `awgram` (hardened) | ACL пользователя `awgram` на каталоге клиентов (hardened) |
+| сам `awgram-setup` | инсталлер AmneziaWG и его скрипты |
+
+Конфиг, токен и данные бота — `/etc/awgram` (`config.toml`, `env` с токеном,
+`setup.conf`, в root-режиме `state.json`) и `/var/lib/awgram` (`awgram.db`:
+группы, история, настройки) — удаляются отдельно:
+
+| Запуск | Конфиг и данные |
+|---|---|
+| `awgram-setup uninstall` в терминале | второй вопрос: удалить или оставить |
+| `awgram-setup uninstall --purge` | удаляются без вопроса |
+| `awgram-setup uninstall --yes` | остаются |
+| `awgram-setup uninstall --yes --purge` | удаляются; вопросов нет вообще |
+
+Оставленные конфиг и данные подхватит следующая установка: токен и
+`admin_ids` она возьмёт из них и повторно не спросит, а группы и история
+вернутся вместе с `awgram.db`. Токен при этом продолжает лежать на диске в
+`/etc/awgram/env` — если бот больше не нужен, удаляйте с `--purge` и
+отзовите токен у @BotFather.
+
+Без терминала (cron, CI, `ssh` без tty) нужен `--yes`: иначе подтвердить
+удаление нечем, и команда завершится, ничего не удалив.
+
+Если `awgram-setup` на сервере уже нет, ту же команду выполняет установщик
+из релиза:
+
+```bash
+curl -fsSL https://github.com/ekuraev/awgram/releases/latest/download/install.sh \
+  | sudo bash -s -- uninstall
+```
+
+Что остаётся убрать вручную, если нужно удалить всё:
+
+```bash
+# бэкапы бота (путь — ваш каталог клиентов, по умолчанию /root/awg)
+sudo rm -rf /root/awg/backups/awgram
+
+# hardened-режим: ACL пользователя awgram на каталоге клиентов.
+# Выполнять ДО uninstall, пока пользователь существует:
+sudo setfacl -R -x u:awgram /root/awg
+sudo setfacl -R -d -x u:awgram /root/awg
+```
+
+Справка по команде — `awgram-setup help uninstall`; так же устроена справка
+по остальным командам: `awgram-setup help install | update | config | status`
+или `awgram-setup <команда> --help`.

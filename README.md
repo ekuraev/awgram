@@ -131,9 +131,15 @@ curl -fsSL https://github.com/ekuraev/awgram/releases/latest/download/install.sh
 историю шелла) — вместо этого `export AWGRAM_TOKEN='ТОКЕН'` перед той же
 командой без `--token`.
 
-Управление после установки: `awgram-setup update | config | status | uninstall`.
+Управление после установки: `awgram-setup update | config | status | uninstall`;
+справка по любой команде — `awgram-setup help <команда>`.
 Предрелизные сборки — `awgram-setup update --channel rc`; подробнее о каналах
 обновлений — в [docs/operations.md](docs/operations.md#каналы-обновлений).
+
+Удалить бота — `sudo awgram-setup uninstall`: AmneziaWG и клиенты остаются,
+конфиг и данные бота удаляются по отдельному вопросу или с `--purge`. Что
+именно удаляется и что остаётся — в
+[docs/operations.md](docs/operations.md#удаление).
 
 ## Как это работает
 
