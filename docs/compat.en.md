@@ -12,7 +12,7 @@ the bot.
 
 | | Version |
 |---|---|
-| Supported (`--json` contract verified) | [v6.2.2](https://github.com/bivlked/amneziawg-installer/releases/tag/v6.2.2) |
+| Supported (`--json` contract verified) | [v6.3.1](https://github.com/bivlked/amneziawg-installer/releases/tag/v6.3.1) |
 | Minimum | [v5.21.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.21.0) |
 
 v5.20.x and older are not supported: the bot relies on the extended
@@ -70,6 +70,37 @@ For the bot this means:
   `add`/`regen` before the config is written — with the old
   `status:"error"`; the bot's presets never build such a list.
 
+## PresharedKey by default and `add --no-psk`
+
+Since v6.3.0 a plain `add` gives the new client a PresharedKey; a client
+without a PSK is created with `add --no-psk`. On a server installed with
+`--no-psk` (`NO_PSK=1` in `awgsetup_cfg.init`) it is the other way round:
+no PSK without flags, and `--psk` turns it on. Before v6.3.0 only `--psk`
+gave a PSK.
+
+The bot asks about the PSK when a client is created (the "With PSK" /
+"No PSK" buttons, ordered by the "Default PSK" setting), so it passes the
+choice explicitly both ways and does not depend on the server's setting:
+
+- "With PSK" — `add --psk`, as before, on any installer version;
+- "No PSK" — `add --no-psk` when the script's help lists the flag (`--help`,
+  the same detection as for `--allowed-ips`); an installer older than v6.3.0
+  has no such flag and the bot does not send it — a client without `--psk`
+  has no PSK there anyway;
+- the help promised `--no-psk` but the script rejected it (the emergency
+  envelope with `command:"help"`, no client created) — the bot remembers
+  that and repeats `add` without the flag.
+
+awgram before v0.13.4 does not know `--no-psk`: on installer v6.3.0 and
+newer a client created with the "No PSK" button gets a PresharedKey anyway.
+The connection is not affected — the key lands in both the server config
+and the client config.
+
+Clients already issued are untouched by the new default, and `regen` keeps
+whatever a client has. `--psk` and `--no-psk` together, or with a command
+other than `add`, are now an error; the bot sends at most one of them and
+only with `add`.
+
 ## Installer release history
 
 Releases v5.21.1–v5.37.0 did not break the JSON contract: all new messages
@@ -86,6 +117,9 @@ the envelopes are the same, the report goes to stderr, see its row below.
 v6.2.0–v6.2.2 moved new ARM64 installs to AmneziaWG 3.1 and fixed the hints
 for a prebuilt ARM module after a kernel change: the envelopes are the same,
 the hints go to stderr, see their row below.
+v6.3.0–v6.3.1 left the envelopes of the existing commands alone but changed
+the default of `add`: a new client gets a PresharedKey unless `--no-psk` is
+passed — see their row and the section above.
 
 | Version | What changed | Effect on the bot |
 |---|---|---|
@@ -111,6 +145,7 @@ the hints go to stderr, see their row below.
 | v6.0.1–v6.1.1 | A warning about `Jc` beyond the amneziawg-go batch: a client on amneziawg-go sends the junk packets, the non-empty `I1`–`I5` and the handshake in one batch of 128 packets and crashes on the first handshake when it overflows (amneziawg-go#111); `check`/`diagnose`, `add`/`regen`, `modify` (when it rebuilds the QR and `vpn://`) and the config validator warn when `Jc + number of I + 1 > 128` and say how to lower `Jc` (the `check` verdict, the envelopes and the profiles do not change); the install flag `--jc` is limited to 0–122. The install flag `--i1` pins a custom `I1` packet in `awgsetup_cfg.init` (`AWG_I1_PIN`), profiles get it after `regen`. The validation summary names the config's generation (3.1 or 2.0). The rest is installer and docs: apt output and git's answer in the install log, a server DNS check before the PPA unavailability message, docs that start from the 3.1 path | None: the `Jc` warnings go to stderr, `check --json` does not carry them, the bot neither shows them nor sets `Jc`; a pinned `I1` arrives in `add`/`regen` profiles as an ordinary parameter. Fields, exit codes and `ok` of the `--json` envelopes are the same as in v6.0.0 |
 | v6.1.2 | Protection against the kernel vulnerability CVE-2026-98432 (a bug in parsing a TCP SYN with IP options, critical): the installer sets a firewall rule in the `raw` table (TCP packets with IP options are dropped before the kernel parses them) and the unit `amneziawg-ipopts-guard.service`; on a running server the mode `install_amneziawg.sh --ipopts-guard` adds it; `check`/`status` report whether the guard is in place (no `amneziawg-ipopts-guard` helper, no rule, unit not enabled, status check failed) — messages only, the verdict does not change. The command `qr <name> [--vpn]` prints the config QR or the `vpn://` link QR right in the terminal ([#375](https://github.com/bivlked/amneziawg-installer/issues/375)); it refuses `--json`, and `--vpn` with any other command is an error with exit code 1. The rest is installer and docs: Ubuntu kernels 7.0.0-42/-43, the "No connection: where to start" section in ADVANCED | None: the guard report goes through `log`/`log_warn`, that is to stderr, `check --json` has no new fields, the verdict and the exit code are the same; the bot uses neither the `qr` command nor the `--vpn` flag — it still takes the QR and the link from the `.png`/`.vpnuri` files that `add`/`regen`/`modify` create. The helper check is capped by `timeout 10` and fits in the bot's operation timeout (60 s by default). Fields, exit codes and `ok` of the `--json` envelopes are the same as in v6.0.0 |
 | v6.2.0–v6.2.2 | AmneziaWG 3.1 on 64-bit ARM: a new install on ARM64 gets the 3.1 profile and the PPA module through DKMS (32-bit ARM stays on 2.0, running servers keep their generation), and `restore` of a 3.1 backup on arm64 no longer refuses with the `arm` code. A server on the prebuilt ARM module package after a kernel change: instead of "normal for userspace mode", `check` warns that there is no module for the kernel, and `repair-module` on the legacy path (no helper) names what works instead of the `dkms` recipe — running the installer again, which keeps the keys and the profiles. The rest is installer and docs: apt download retries are off during an install and `--uninstall` (CVE-2026-109518), prebuilt modules for Raspberry Pi OS trixie, removal of the Oracle Cloud image's `REJECT` rule sitting above the UFW rules, the client table | None: one `check` branch changed in `manage_amneziawg.sh` — a warning through `log_warn`, that is to stderr; `module.loaded`, the verdict and the exit code of `check --json` are the same. The `repair-module` recipe goes through `log_error` (stderr), the return code is unchanged (1), the envelope is the same. A `restore` refusal already came as the `ok:false`, `rolled_back:false` envelope; on arm64 it is now gone. The bot still labels a module that is not loaded "ok for userspace": `check --json` cannot tell a prebuilt ARM package from userspace mode, so on such a server after a kernel change read the output of `manage check` on the server. Fields, exit codes and `ok` of the `--json` envelopes are the same as in v6.0.0 |
+| v6.3.0–v6.3.1 | A PresharedKey for every new client: a plain `add` gives a PSK, a client without one is `add --no-psk` (or a server installed with `--no-psk`: `NO_PSK=1` in the init); `--psk` and `--no-psk` together or with a command other than `add` are an error. New commands `port <number>` (change the UDP port: `ListenPort`, the init, the UFW rule, every client regenerated) and `exit-ip <IPv4\|off>` (a separate exit address: a `SNAT` for the client subnet in `PostUp`/`PostDown`), each with its own `--json` envelope. `check` verifies that the exit address is on an interface and tells "a module is on disk but not loaded" (built against the headers of a same-named kernel after a 24.04 HWE to 26.04 upgrade) from userspace mode; `repair-module` rebuilds such a module through the version 4 helper and ends with an error if the rebuilt module does not load. The rest is the installer: a random port for a new install instead of `39743`, `S4` never 16, a trailing newline in `awg0.conf` after a reinstall | The bot passes the "No PSK" choice as `--no-psk` and detects the flag via `--help` (awgram v0.13.4; before that such a client got a PSK on v6.3.0+). The bot does not call `port` or `exit-ip`: after `manage port` the client configs and QR codes are regenerated, the bot hands out the new files, and the port on the check card comes from `check --json`. A missing exit address makes `check --json` return `ok:false` with no field of its own: the check card shows ❌ in the header over green lines, and `manage check` on the server names the reason. The module messages go through `log_warn`/`log_error` (stderr); `module.loaded` is the same, and the bot still labels a module that is not loaded "ok for userspace". The `repair-module --json` envelope is unchanged: a rebuilt module that fails to load comes as the same `ok:false`. Fields, exit codes and `ok` of the envelopes of the commands in use are the same as in v6.0.0 |
 
 ## How a new installer release is verified
 
