@@ -131,9 +131,15 @@ You can skip the `--token` flag (so the token never lands in `argv` or shell
 history) — `export AWGRAM_TOKEN='TOKEN'` before the same command without
 `--token` instead.
 
-Post-install management: `awgram-setup update | config | status | uninstall`.
+Post-install management: `awgram-setup update | config | status | uninstall`;
+help for any command — `awgram-setup help <command>`.
 Pre-release builds: `awgram-setup update --channel rc`; update channels are
 described in [docs/operations.en.md](docs/operations.en.md#update-channels).
+
+To remove the bot run `sudo awgram-setup uninstall`: AmneziaWG and the
+clients stay, the bot's config and data are removed on a separate question
+or with `--purge`. What exactly is removed and what is kept — in
+[docs/operations.en.md](docs/operations.en.md#uninstall).
 
 ## How it works
 
