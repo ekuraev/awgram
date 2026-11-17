@@ -3,6 +3,122 @@
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версионирование — [SemVer](https://semver.org/lang/ru/).
 Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning — [SemVer](https://semver.org/).
 
+## [0.13.4] — 2026-11-17
+
+### 🇷🇺 Русский
+
+#### 🐛 Исправлено
+
+- **«Без PSK» снова создаёт клиента без PresharedKey на инсталлере v6.3.0
+  и новее.** С v6.3.0 `manage add` без флагов выдаёт новому клиенту PSK, и
+  выбор «Без PSK» в боте (одиночное и массовое создание) перестал что-либо
+  значить: клиент всё равно получал ключ. Теперь выбор уходит явным
+  `add --no-psk`; наличие флага бот определяет по справке скрипта
+  (`--help`), как у `--allowed-ips`, а на инсталлере до v6.3.0 флаг не
+  шлёт — там клиент без `--psk` и так без PSK. Клиенты, созданные раньше,
+  не меняются; подробности в [docs/compat.md](docs/compat.md).
+- **Установщик: смена режима root → hardened не обрывается, пока бот ни
+  разу не стартовал.** Если `awgram.db` ещё не создана (например, сервис
+  падал из-за неверного токена), `awgram-setup install --mode hardened`
+  молча завершался после записи бинарника и конфига — без unit-файла,
+  `setup.conf` и запуска сервиса.
+- **Установщик: `--help` рядом с командой больше её не запускает.**
+  `awgram-setup --help uninstall` выполнял удаление; теперь справка
+  побеждает команду в любом порядке аргументов.
+
+#### ✨ Добавлено
+
+- **Справка по командам установщика**
+  ([#86](https://github.com/ekuraev/awgram/issues/86)):
+  `awgram-setup help install | update | config | status | uninstall` и
+  `awgram-setup <команда> --help` — что команда делает, её флаги и примеры.
+  Раньше `help [cmd]` был заявлен, но тему игнорировал. Справка выводится
+  на языке установки (или `--lang`), на неизвестную тему отвечает ошибкой.
+- **Описание удаления бота**
+  ([#86](https://github.com/ekuraev/awgram/issues/86)): раздел
+  [«Удаление»](docs/operations.md#удаление) — что удаляет
+  `awgram-setup uninstall` и что остаётся (AmneziaWG, клиенты, бэкапы бота,
+  ACL), что происходит с конфигом и данными при `--purge` и `--yes`, запуск
+  без терминала и без `awgram-setup`, ручная очистка остатков.
+
+#### 🔧 Изменено
+
+- **Совместимость с инсталлером**: поддерживаемая версия —
+  [v6.3.1](https://github.com/bivlked/amneziawg-installer/releases/tag/v6.3.1) (сверен `--json`-контракт обоих скриптов
+  для v6.3.0–v6.3.1: конверты, коды выхода и `ok` используемых команд те
+  же, что в v6.0.0; новое — PresharedKey по умолчанию и `add --no-psk`, см.
+  выше, команды `port` и `exit-ip`, которые бот не вызывает, проверка
+  адреса выхода в `check`: пропавший адрес даёт `ok:false` без отдельного
+  поля, причину называет `manage check` на сервере; подробности в
+  [docs/compat.md](docs/compat.md)); минимальная — по-прежнему v5.21.0.
+- **Зависимости**: toml 1.2.1 (dependabot #83) — бот только читает им
+  `config.toml`; flate2 1.1.11 (dependabot #84) — исправления чтения
+  gzip-заголовка при ошибках ввода и сброса буфера при записи (бандлы
+  бэкапов).
+- **`cargo deny`**: [RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543)
+  (chrono помечен как неподдерживаемый; уязвимости и исправленной версии
+  нет) добавлен в исключения с причиной: крейт нужен `teloxide-core`, и до
+  перехода teloxide на другой крейт убрать его из дерева нельзя.
+
+### 🇬🇧 English
+
+#### 🐛 Fixed
+
+- **"No PSK" creates a client without a PresharedKey again on installer
+  v6.3.0 and newer.** Since v6.3.0 a plain `manage add` gives the new client
+  a PSK, so the "No PSK" choice in the bot (single and bulk creation) stopped
+  meaning anything: the client got a key anyway. The choice is now passed as
+  an explicit `add --no-psk`; the bot detects the flag from the script's help
+  (`--help`), as it does for `--allowed-ips`, and does not send it to an
+  installer older than v6.3.0 — a client without `--psk` has no PSK there
+  anyway. Clients created earlier do not change; details in
+  [docs/compat.en.md](docs/compat.en.md).
+- **Installer: switching root → hardened no longer aborts while the bot has
+  never started.** If `awgram.db` did not exist yet (the service kept
+  failing on an invalid token, for example), `awgram-setup install --mode
+  hardened` exited silently after writing the binary and the config — with
+  no unit file, no `setup.conf` and no service start.
+- **Installer: `--help` next to a command no longer runs it.**
+  `awgram-setup --help uninstall` performed the removal; help now wins over
+  the command in any argument order.
+
+#### ✨ Added
+
+- **Per-command help in the installer**
+  ([#86](https://github.com/ekuraev/awgram/issues/86)):
+  `awgram-setup help install | update | config | status | uninstall` and
+  `awgram-setup <command> --help` — what the command does, its flags and
+  examples. `help [cmd]` used to be advertised but ignored the topic. The
+  help is printed in the install language (or `--lang`), and an unknown
+  topic is an error.
+- **Uninstall documented**
+  ([#86](https://github.com/ekuraev/awgram/issues/86)): the
+  ["Uninstall"](docs/operations.en.md#uninstall) section — what
+  `awgram-setup uninstall` removes and what it keeps (AmneziaWG, the
+  clients, the bot's backups, ACLs), what happens to the config and data
+  with `--purge` and `--yes`, running without a terminal and without
+  `awgram-setup`, cleaning up the leftovers by hand.
+
+#### 🔧 Changed
+
+- **Installer compatibility**: supported version is [v6.3.1](https://github.com/bivlked/amneziawg-installer/releases/tag/v6.3.1) (the
+  `--json` contract of both scripts is verified for v6.3.0–v6.3.1:
+  envelopes, exit codes and `ok` of the commands in use are the same as in
+  v6.0.0; new are the PresharedKey default and `add --no-psk`, see above,
+  the `port` and `exit-ip` commands, which the bot does not call, and the
+  exit-address check in `check`: a missing address yields `ok:false` with no
+  field of its own, and `manage check` on the server names the reason;
+  details in [docs/compat.en.md](docs/compat.en.md)); the minimum is still
+  v5.21.0.
+- **Dependencies**: toml 1.2.1 (dependabot #83) — the bot only reads
+  `config.toml` with it; flate2 1.1.11 (dependabot #84) — fixes for reading
+  the gzip header on input errors and for draining the buffer on writes
+  (backup bundles).
+- **`cargo deny`**: [RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543)
+  (chrono marked unmaintained; no vulnerability and no fixed version) is
+  added to the ignore list with a reason: `teloxide-core` requires the
+  crate, and it cannot leave the tree until teloxide moves to another one.
+
 ## [0.13.3] — 2026-11-10
 
 ### 🇷🇺 Русский
