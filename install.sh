@@ -36,6 +36,8 @@ MSG_RU[err_not_implemented]="Команда ещё не реализована"
 MSG_EN[err_not_implemented]="Command not implemented yet"
 MSG_RU[err_unknown_arg]="Неизвестный аргумент: %s (см. help) / Unknown argument: %s (see help)"
 MSG_EN[err_unknown_arg]="Неизвестный аргумент: %s (см. help) / Unknown argument: %s (see help)"
+MSG_RU[err_help_topic]="Нет справки по '%s': команды — install, update, config, status, uninstall / No help for '%s': commands are install, update, config, status, uninstall"
+MSG_EN[err_help_topic]="Нет справки по '%s': команды — install, update, config, status, uninstall / No help for '%s': commands are install, update, config, status, uninstall"
 MSG_RU[err_bad_lang]="Недопустимое значение --lang: %s (ru|en)"
 MSG_EN[err_bad_lang]="Invalid --lang value: %s (ru|en)"
 MSG_RU[err_need_root]="Нужны права root: запустите через sudo"
@@ -595,7 +597,7 @@ awgram-setup — установка и управление awgram (Telegram-б�
   config      изменить параметры: токен, admin_ids, путь к manage-скрипту
   status      версия, состояние сервиса, режим, пути
   uninstall   удалить бота (конфиг — с подтверждением или --purge)
-  help [cmd]  эта справка или справка по команде
+  help [cmd]  эта справка или справка по команде (то же: КОМАНДА --help)
 
 Флаги (install; для config действуют --token/--admins/--script-path):
   --lang ru|en          язык интерфейса (сохраняется)
@@ -633,7 +635,7 @@ Commands:
   config      change settings: token, admin_ids, manage-script path
   status      version, service state, mode, paths
   uninstall   remove the bot (config removed only with confirmation or --purge)
-  help [cmd]  this help or per-command help
+  help [cmd]  this help or per-command help (same as COMMAND --help)
 
 Flags (install; config accepts --token/--admins/--script-path):
   --lang ru|en          interface language (persisted)
@@ -658,12 +660,319 @@ Examples:
   awgram-setup update --channel rc
 EOF
 }
+
+# Справка по одной команде: $1 = install|update|config|status|uninstall|help.
+help_topic_ru() {
+  case "$1" in
+    install) cat <<'EOF'
+awgram-setup install — установить бота или перенастроить уже установленного
+
+Использование:
+  install.sh | awgram-setup [install] [ФЛАГИ]
+
+Команда по умолчанию. Без флагов задаёт вопросы: язык, режим сервиса, токен,
+ID администраторов, путь к manage-скрипту. Скачивает бинарник последнего
+релиза (с проверкой sha256), пишет /etc/awgram/config.toml и токен в
+/etc/awgram/env, ставит сервис awgram и сам awgram-setup. Нужен root.
+
+Поверх существующей установки: в терминале — выбор «обновить / перенастроить /
+выйти»; с --yes — перенастройка. Сохранённые токен и admin_ids повторно не
+спрашиваются, прежний config.toml остаётся рядом как config.toml.bak.
+
+Флаги:
+  --lang ru|en          язык интерфейса (сохраняется)
+  --mode root|hardened  режим сервиса: от root или отдельный пользователь+sudoers
+  --token TOKEN         токен бота от @BotFather; безопаснее — переменной
+                        окружения AWGRAM_TOKEN (не виден в ps и истории shell)
+  --admins 1,2,3        Telegram ID администраторов через запятую
+  --script-path PATH    путь к manage_amneziawg.sh (по умолчанию /root/awg/manage_amneziawg.sh)
+  --clients-dir PATH    каталог client-конфигов (по умолчанию каталог manage-скрипта)
+  --version vX.Y.Z      конкретный релиз вместо последнего (канал не меняет)
+  --channel stable|rc   канал обновлений (запоминается)
+  --yes | -y            без вопросов; недостающий параметр — ошибка
+
+Примеры:
+  curl -fsSL https://github.com/ekuraev/awgram/releases/latest/download/install.sh | bash
+  curl -fsSL ... | bash -s -- install --lang ru --mode hardened --token 'X' --admins 1 --yes
+  awgram-setup install --mode root --yes      # сменить режим, остальное сохранить
+EOF
+      ;;
+    update) cat <<'EOF'
+awgram-setup update — обновить бинарник и сам awgram-setup
+
+Использование:
+  awgram-setup update [--channel stable|rc] [--version vX.Y.Z]
+
+Скачивает последний релиз выбранного канала (с проверкой sha256), заменяет
+бинарник и перезапускает сервис. Если сервис на новой версии не поднялся,
+возвращает прежний бинарник и завершается с ошибкой. Конфиг, токен и данные
+бота не трогает. Нужен root.
+
+Флаги:
+  --channel stable|rc   канал обновлений (запоминается); канал rc видит и
+                        стабильные релизы; вернуться: update --channel stable
+  --version vX.Y.Z      поставить конкретный релиз, в том числе более старый
+                        (канал не меняет)
+
+Примеры:
+  awgram-setup update
+  awgram-setup update --channel rc
+  awgram-setup update --version v0.13.0
+EOF
+      ;;
+    config) cat <<'EOF'
+awgram-setup config — изменить параметры установленного бота
+
+Использование:
+  awgram-setup config [--token TOKEN] [--admins 1,2,3] [--script-path PATH]
+
+Без флагов открывает меню: токен, admin_ids, путь к manage-скрипту, показ
+текущих значений. С флагами меняет названные параметры без вопросов. После
+изменения предлагает перезапустить сервис (с --yes перезапускает сам).
+Прежний config.toml остаётся как config.toml.bak. Нужен root.
+
+Флаги:
+  --token TOKEN         новый токен (или переменная окружения AWGRAM_TOKEN)
+  --admins 1,2,3        новый список Telegram ID администраторов
+  --script-path PATH    новый путь к manage_amneziawg.sh; в режиме hardened
+                        заодно перевыпускается правило sudoers
+  --yes | -y            не спрашивать о перезапуске
+
+Режим сервиса и каталог клиентов меняет install (см. help install).
+
+Примеры:
+  awgram-setup config
+  awgram-setup config --admins 1,2 --yes
+EOF
+      ;;
+    status) cat <<'EOF'
+awgram-setup status — показать состояние установки
+
+Использование:
+  awgram-setup status
+
+Печатает установленную версию и последний релиз канала, состояние сервиса,
+режим (root/hardened), канал обновлений и текущие настройки из config.toml
+(токен — только «задан / не задан»). Ничего не меняет. Настройки видны при
+запуске от root: config.toml закрыт для остальных.
+EOF
+      ;;
+    uninstall) cat <<'EOF'
+awgram-setup uninstall — удалить бота
+
+Использование:
+  awgram-setup uninstall [--purge] [--yes]
+
+Удаляет:
+  - сервис awgram (останавливает, отключает, убирает unit-файл);
+  - бинарник /usr/local/bin/awgram и его копию .bak;
+  - правило /etc/sudoers.d/awgram и пользователя awgram (режим hardened);
+  - сам awgram-setup.
+
+Конфиг, токен и данные бота (/etc/awgram, /var/lib/awgram):
+  - в терминале — отдельный вопрос;
+  - с --purge — удаляются без вопроса;
+  - с --yes без --purge — остаются: повторная установка возьмёт из них
+    токен и admin_ids.
+
+Не трогает: AmneziaWG, клиентов и их конфиги, бэкапы бота в
+<каталог клиентов>/backups/awgram, ACL на каталоге клиентов.
+
+Флаги:
+  --purge               удалить также конфиг, токен и данные бота
+  --yes | -y            без вопросов (без терминала обязателен: иначе
+                        удаление не подтвердить и ничего не удалится)
+
+Нужен root. Если awgram-setup уже нет:
+  curl -fsSL https://github.com/ekuraev/awgram/releases/latest/download/install.sh | bash -s -- uninstall
+
+Примеры:
+  awgram-setup uninstall                  # с вопросами
+  awgram-setup uninstall --yes            # удалить, конфиг и данные оставить
+  awgram-setup uninstall --yes --purge    # удалить всё
+EOF
+      ;;
+    help) cat <<'EOF'
+awgram-setup help — справка
+
+Использование:
+  awgram-setup help [КОМАНДА]
+  awgram-setup КОМАНДА --help
+
+Без команды — общая справка, с командой (install, update, config, status,
+uninstall) — подробности о ней. Язык: --lang ru|en; по умолчанию — язык
+установки.
+EOF
+      ;;
+  esac
+}
+help_topic_en() {
+  case "$1" in
+    install) cat <<'EOF'
+awgram-setup install — install the bot or reconfigure an existing install
+
+Usage:
+  install.sh | awgram-setup [install] [FLAGS]
+
+The default command. Without flags it asks for the language, service mode,
+token, admin IDs and the manage-script path. It downloads the latest release
+binary (sha256-verified), writes /etc/awgram/config.toml and the token to
+/etc/awgram/env, and installs the awgram service and awgram-setup itself.
+Requires root.
+
+Over an existing install: in a terminal it offers "update / reconfigure /
+exit"; with --yes it reconfigures. The saved token and admin_ids are not asked
+again, and the previous config.toml is kept next to it as config.toml.bak.
+
+Flags:
+  --lang ru|en          interface language (persisted)
+  --mode root|hardened  service mode: run as root or dedicated user + sudoers
+  --token TOKEN         bot token from @BotFather; safer via the AWGRAM_TOKEN
+                        environment variable (stays out of ps and shell history)
+  --admins 1,2,3        comma-separated Telegram admin IDs
+  --script-path PATH    path to manage_amneziawg.sh (default /root/awg/manage_amneziawg.sh)
+  --clients-dir PATH    client-config dir (default: the manage-script directory)
+  --version vX.Y.Z      a specific release instead of the latest (does not change the channel)
+  --channel stable|rc   update channel (sticky)
+  --yes | -y            no questions; a missing parameter is an error
+
+Examples:
+  curl -fsSL https://github.com/ekuraev/awgram/releases/latest/download/install.sh | bash
+  curl -fsSL ... | bash -s -- install --lang en --mode hardened --token 'X' --admins 1 --yes
+  awgram-setup install --mode root --yes      # switch the mode, keep the rest
+EOF
+      ;;
+    update) cat <<'EOF'
+awgram-setup update — update the binary and awgram-setup itself
+
+Usage:
+  awgram-setup update [--channel stable|rc] [--version vX.Y.Z]
+
+Downloads the latest release of the selected channel (sha256-verified),
+replaces the binary and restarts the service. If the service does not come up
+on the new version, the previous binary is put back and the command fails.
+The config, the token and the bot's data are left alone. Requires root.
+
+Flags:
+  --channel stable|rc   update channel (sticky); the rc channel also sees
+                        stable releases; to return: update --channel stable
+  --version vX.Y.Z      install a specific release, an older one included
+                        (does not change the channel)
+
+Examples:
+  awgram-setup update
+  awgram-setup update --channel rc
+  awgram-setup update --version v0.13.0
+EOF
+      ;;
+    config) cat <<'EOF'
+awgram-setup config — change the settings of an installed bot
+
+Usage:
+  awgram-setup config [--token TOKEN] [--admins 1,2,3] [--script-path PATH]
+
+Without flags it opens a menu: token, admin_ids, manage-script path, show
+current values. With flags it changes the named settings without questions.
+After a change it offers to restart the service (with --yes it restarts by
+itself). The previous config.toml is kept as config.toml.bak. Requires root.
+
+Flags:
+  --token TOKEN         new token (or the AWGRAM_TOKEN environment variable)
+  --admins 1,2,3        new list of Telegram admin IDs
+  --script-path PATH    new path to manage_amneziawg.sh; in hardened mode the
+                        sudoers rule is regenerated too
+  --yes | -y            do not ask about the restart
+
+The service mode and the clients dir are changed by install (see help install).
+
+Examples:
+  awgram-setup config
+  awgram-setup config --admins 1,2 --yes
+EOF
+      ;;
+    status) cat <<'EOF'
+awgram-setup status — show the state of the install
+
+Usage:
+  awgram-setup status
+
+Prints the installed version and the latest release of the channel, the
+service state, the mode (root/hardened), the update channel and the current
+settings from config.toml (the token only as "set / not set"). Changes
+nothing. The settings are shown when run as root: config.toml is closed to
+everyone else.
+EOF
+      ;;
+    uninstall) cat <<'EOF'
+awgram-setup uninstall — remove the bot
+
+Usage:
+  awgram-setup uninstall [--purge] [--yes]
+
+Removes:
+  - the awgram service (stops and disables it, deletes the unit file);
+  - the binary /usr/local/bin/awgram and its .bak copy;
+  - the /etc/sudoers.d/awgram rule and the awgram user (hardened mode);
+  - awgram-setup itself.
+
+Config, token and the bot's data (/etc/awgram, /var/lib/awgram):
+  - in a terminal — a separate question;
+  - with --purge — removed without asking;
+  - with --yes and no --purge — kept: a later install picks up the token
+    and admin_ids from them.
+
+Left alone: AmneziaWG, the clients and their configs, the bot's backups in
+<clients dir>/backups/awgram, ACLs on the clients dir.
+
+Flags:
+  --purge               also remove the config, the token and the bot's data
+  --yes | -y            no questions (required without a terminal: otherwise
+                        the removal cannot be confirmed and nothing is removed)
+
+Requires root. If awgram-setup is already gone:
+  curl -fsSL https://github.com/ekuraev/awgram/releases/latest/download/install.sh | bash -s -- uninstall
+
+Examples:
+  awgram-setup uninstall                  # with questions
+  awgram-setup uninstall --yes            # remove, keep the config and data
+  awgram-setup uninstall --yes --purge    # remove everything
+EOF
+      ;;
+    help) cat <<'EOF'
+awgram-setup help — help
+
+Usage:
+  awgram-setup help [COMMAND]
+  awgram-setup COMMAND --help
+
+Without a command — the general help; with one (install, update, config,
+status, uninstall) — the details of that command. Language: --lang ru|en; the
+default is the language of the install.
+EOF
+      ;;
+  esac
+}
 cmd_help() {
-  # без выбранного языка печатаем обе версии
-  case "$UI_LANG" in
-    ru) help_ru ;;
-    en) help_en ;;
-    *)  help_ru; echo; help_en ;;
+  # язык: --lang, иначе язык установки; setup.conf читаем без load_setup_conf —
+  # справка не должна падать у не-root, которому каталог конфига закрыт
+  if [ -z "$UI_LANG" ] && [ -r "$SETUP_CONF" ]; then
+    UI_LANG="$(sed -n 's/^LANG=//p' "$SETUP_CONF" 2>/dev/null | head -1)" || UI_LANG=""
+  fi
+  case "$HELP_TOPIC" in
+    "")
+      # без выбранного языка печатаем обе версии
+      case "$UI_LANG" in
+        ru) help_ru ;;
+        en) help_en ;;
+        *)  help_ru; echo; help_en ;;
+      esac ;;
+    install|update|config|status|uninstall|help)
+      case "$UI_LANG" in
+        ru) help_topic_ru "$HELP_TOPIC" ;;
+        en) help_topic_en "$HELP_TOPIC" ;;
+        *)  help_topic_ru "$HELP_TOPIC"; echo; help_topic_en "$HELP_TOPIC" ;;
+      esac ;;
+    *) die err_help_topic "$HELP_TOPIC" "$HELP_TOPIC" ;;
   esac
 }
 
@@ -900,6 +1209,7 @@ cmd_uninstall() {
 
 # ---------- парсинг аргументов и диспетчер ----------
 main() {
+  local help_req=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --lang)        UI_LANG="${2:?--lang}"; shift 2
@@ -917,14 +1227,20 @@ main() {
       --yes|-y)      ASSUME_YES=1; shift ;;
       --no-systemd)  NO_SYSTEMD=1; shift ;;
       --purge)       PURGE=1; shift ;;
-      -h|--help)     COMMAND="help"; shift ;;
+      -h|--help)     help_req=1; shift ;;
       install|update|config|status|uninstall) COMMAND="$1"; shift ;;
-      help)          COMMAND="help"; shift
-                     # shellcheck disable=SC2034  # зарезервировано под тематическую help-справку (help <topic>)
-                     HELP_TOPIC="${1:-}"; [ $# -gt 0 ] && shift ;;
+      help)          help_req=1; shift
+                     # тема — следующий аргумент, если это не флаг (help --lang en)
+                     case "${1:-}" in ""|-*) ;; *) HELP_TOPIC="$1"; shift ;; esac ;;
       *)             die err_unknown_arg "$1" "$1" ;;
     esac
   done
+  # Справка побеждает команду в любом порядке: `uninstall --help` и
+  # `--help uninstall` печатают справку по uninstall и ничего не удаляют.
+  if [ "$help_req" = 1 ]; then
+    [ -n "$HELP_TOPIC" ] || HELP_TOPIC="$COMMAND"
+    COMMAND="help"
+  fi
   : "${COMMAND:=install}"
   case "$COMMAND" in
     install)   cmd_install ;;

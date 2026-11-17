@@ -131,6 +131,28 @@ help_out="$(bash /repo/install.sh help)"
 grep -q 'AWGRAM_TOKEN' <<<"$help_out" || fail "help lacks AWGRAM_TOKEN"
 grep -q -- '--channel' <<<"$help_out" || fail "help lacks --channel"
 
+# --- сценарий 5d2: справка по команде (help <cmd>, <cmd> --help) ---
+help_un="$(bash /repo/install.sh help uninstall --lang en)"
+grep -q -- '--purge' <<<"$help_un" || fail "help uninstall lacks --purge"
+grep -q 'backups/awgram' <<<"$help_un" || fail "help uninstall lacks what is left alone"
+grep -q -- '--channel' <<<"$help_un" && fail "help uninstall must not be the general help"
+grep -q 'Удаляет' <<<"$help_un" && fail "help uninstall --lang en must be English only"
+# язык установки (setup.conf: LANG=en) без --lang
+grep -q 'Удаляет' <<<"$(bash /repo/install.sh help uninstall)" && fail "help must follow the install language"
+grep -q 'Удаляет' <<<"$(bash /repo/install.sh help uninstall --lang ru)" || fail "help uninstall --lang ru"
+# справка побеждает команду в любом порядке и ничего не удаляет
+[ "$(bash /repo/install.sh uninstall --help --lang en)" = "$help_un" ] || fail "uninstall --help differs from help uninstall"
+[ "$(bash /repo/install.sh --help uninstall --yes --purge --lang en)" = "$help_un" ] || fail "--help uninstall differs from help uninstall"
+[ -x /usr/local/bin/awgram ] || fail "uninstall --help removed the bot"
+[ -f /etc/awgram/config.toml ] || fail "uninstall --help removed the config"
+for c in install update config status help; do
+  out="$(bash /repo/install.sh help "$c" --lang en)"
+  grep -q "^awgram-setup $c " <<<"$out" || fail "help $c: wrong topic"
+done
+if bash /repo/install.sh help nosuchcmd >/dev/null 2>&1; then
+  fail "help for an unknown command must fail"
+fi
+
 # --- сценарий 5e: невалидный токен отклоняется ---
 if bash /repo/install.sh config --token 'bad token!' --yes --no-systemd >/dev/null 2>&1; then
   fail "invalid token must be rejected"
