@@ -5,8 +5,15 @@ yanked = "deny"
 # без CVE/эксплойта). Приходит транзитивно через aquamarine <- teloxide и
 # используется только на этапе компиляции (proc-macro для doc-комментариев),
 # рантайм-поверхности атаки нет. Апстрим-замены на дату проверки (2026-07-14) нет.
+#
+# RUSTSEC-2026-0543: chrono помечен как unmaintained (не vulnerability, без
+# CVE; затронуты все версии, исправленной нет). Убрать его из дерева нельзя:
+# кроме самого бота (локальное время в расписании и подписях бэкапов) крейт тянет
+# teloxide-core. Пересмотреть, когда teloxide перейдёт на jiff/time, — тогда
+# же перевести бота и снять запись. Дата проверки: 2026-11-17.
 ignore = [
   { id = "RUSTSEC-2026-0173", reason = "unmaintained proc-macro (compile-time only) via aquamarine <- teloxide; no CVE, no fix available upstream" },
+  { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained (no CVE, no fixed version); required by teloxide-core, cannot be dropped until teloxide migrates" },
 ]
 
 [licenses]
