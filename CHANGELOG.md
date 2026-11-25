@@ -11,13 +11,16 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
 
 - **Совместимость с инсталлером**: поддерживаемая версия —
   [v6.3.10](https://github.com/bivlked/amneziawg-installer/releases/tag/v6.3.10) (сверен `--json`-контракт обоих скриптов
-  для v6.3.2–v6.3.10: конверты, коды выхода и `ok` используемых команд те
-  же, что в v6.0.0; новое — у порта в `check --json` поля `source` и
-  `init_mismatch`, а сам порт берётся из `ListenPort` живого `awg0.conf`;
-  `regen` на 2.0 удаляет прежние QR и `vpn://` до перезаписи `.conf`, не
-  собранный файл приходит как `null`; команда `block-ru`, которую бот не
-  вызывает; подробности в [docs/compat.md](docs/compat.md)); минимальная —
-  по-прежнему v5.21.0. Правок кода бота не потребовалось.
+  для v6.3.2–v6.3.10: конверты используемых команд те же, что в v6.0.0, с
+  одним дополнением — у порта в `check --json` появились аддитивные поля
+  `source` и `init_mismatch`; коды выхода и `ok` меняются только в случаях
+  с портом: `check` теперь сверяет `ListenPort` живого `awg0.conf`, а не
+  порт из init, а `diagnose` (его отчёт бот показывает как есть)
+  предупреждает о расхождении; `regen` на 2.0 удаляет прежние QR и `vpn://`
+  до перезаписи `.conf`, не собранный файл приходит как `null`; команда
+  `block-ru`, которую бот не вызывает; подробности в
+  [docs/compat.md](docs/compat.md)); минимальная — по-прежнему v5.21.0.
+  Правок кода бота не потребовалось.
 - **Зависимости**: url 2.5.9 (dependabot #93) — закрывает
   [RUSTSEC-2026-0592](https://rustsec.org/advisories/RUSTSEC-2026-0592),
   переполнение стека в `Url::origin()` на вложенных `blob:`-адресах (бот
@@ -47,14 +50,16 @@ Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning 
 #### 🔧 Changed
 
 - **Installer compatibility**: supported version is [v6.3.10](https://github.com/bivlked/amneziawg-installer/releases/tag/v6.3.10) (the
-  `--json` contract of both scripts is verified for v6.3.2–v6.3.10:
-  envelopes, exit codes and `ok` of the commands in use are the same as in
-  v6.0.0; new are the `source` and `init_mismatch` fields of the port in
-  `check --json` with the port itself taken from `ListenPort` in the live
-  `awg0.conf`, `regen` on 2.0 deleting the old QR and `vpn://` before
-  rewriting `.conf` so that a file which failed to build comes as `null`,
-  and the `block-ru` command, which the bot does not call; details in
-  [docs/compat.en.md](docs/compat.en.md)); the minimum is still v5.21.0.
+  `--json` contract of both scripts is verified for v6.3.2–v6.3.10: the
+  envelopes of the commands in use are the same as in v6.0.0 with one
+  addition — the additive `source` and `init_mismatch` fields of the port
+  in `check --json`; exit codes and `ok` change only in the port cases:
+  `check` now verifies the `ListenPort` of the live `awg0.conf` rather than
+  the port from the init, and `diagnose` (whose report the bot shows as is)
+  warns about a mismatch; `regen` on 2.0 deletes the old QR and `vpn://`
+  before rewriting `.conf` so that a file which failed to build comes as
+  `null`; and the `block-ru` command, which the bot does not call; details
+  in [docs/compat.en.md](docs/compat.en.md)); the minimum is still v5.21.0.
   No changes to the bot code were needed.
 - **Dependencies**: url 2.5.9 (dependabot #93) — closes
   [RUSTSEC-2026-0592](https://rustsec.org/advisories/RUSTSEC-2026-0592),

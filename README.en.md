@@ -161,7 +161,8 @@ and depends directly on its `--json` interface.
   (`--json` contract verified), minimum —
   [v5.21.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.21.0).
 - Subcommands: `add`, `remove`, `list`, `stats`, `regen`, `modify`, `backup`,
-  `restore`, `check`, `restart`, `repair-module` — all with `--json`.
+  `restore`, `check`, `restart`, `repair-module` — all with `--json`; plus
+  `diagnose` as plain text, whose report the bot shows as is.
 - The optional `add --allowed-ips` (installer v5.32.0 and newer) is detected
   from the script's help rather than its version; without it the `add` +
   `modify` path is used.
