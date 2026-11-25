@@ -3,6 +3,84 @@
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версионирование — [SemVer](https://semver.org/lang/ru/).
 Format — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning — [SemVer](https://semver.org/).
 
+## [0.13.5] — 2026-11-26
+
+### 🇷🇺 Русский
+
+#### 🔧 Изменено
+
+- **Совместимость с инсталлером**: поддерживаемая версия —
+  [v6.3.10](https://github.com/bivlked/amneziawg-installer/releases/tag/v6.3.10) (сверен `--json`-контракт обоих скриптов
+  для v6.3.2–v6.3.10: конверты, коды выхода и `ok` используемых команд те
+  же, что в v6.0.0; новое — у порта в `check --json` поля `source` и
+  `init_mismatch`, а сам порт берётся из `ListenPort` живого `awg0.conf`;
+  `regen` на 2.0 удаляет прежние QR и `vpn://` до перезаписи `.conf`, не
+  собранный файл приходит как `null`; команда `block-ru`, которую бот не
+  вызывает; подробности в [docs/compat.md](docs/compat.md)); минимальная —
+  по-прежнему v5.21.0. Правок кода бота не потребовалось.
+- **Зависимости**: url 2.5.9 (dependabot #93) — закрывает
+  [RUSTSEC-2026-0592](https://rustsec.org/advisories/RUSTSEC-2026-0592),
+  переполнение стека в `Url::origin()` на вложенных `blob:`-адресах (бот
+  этот метод не вызывает: `url` разбирает только адреса прокси из
+  конфига); rusqlite 0.43.0 (dependabot #91) — встроенный SQLite 3.54.1 и
+  API `Backup` не менялись, исправления use-after-free и утечек приходятся
+  на фичи `session`, `column_metadata`, `vtab` и `functions`, которые бот
+  не включает, пустой или из одних комментариев SQL теперь ошибка (у бота
+  таких запросов нет); toml 1.2.3 (вместо 1.2.2 из dependabot #90) —
+  парсер отдаёт ошибку вместо переполнения стека на неверном TOML и на
+  множестве точечных ключей (бот читает им `config.toml`); regex 1.13.2
+  (dependabot #89) — исправлены паники в запасных движках
+  `BoundedBacktracker` и PikeVM и смещения совпадений у чередований с общим
+  повторяющимся префиксом (паттерны бота это не задевает); rand 0.10.4
+  (dependabot #92) — исправлена возможная паника при выборке
+  десериализованного `Uniform<Duration>` (бот использует только
+  `random_range`).
+- **`cargo deny`**: в cargo-deny 0.22 умолчание `advisories.unmaintained`
+  сменилось с `all` на `workspace` — unmaintained-крейты проверяются только
+  среди прямых зависимостей, и транзитивный `proc-macro-error2`
+  ([RUSTSEC-2026-0173](https://rustsec.org/advisories/RUSTSEC-2026-0173))
+  выпал из проверки. В `deny.toml` область задана явно, `unmaintained =
+  "all"`: проверяется весь граф, как раньше.
+
+### 🇬🇧 English
+
+#### 🔧 Changed
+
+- **Installer compatibility**: supported version is [v6.3.10](https://github.com/bivlked/amneziawg-installer/releases/tag/v6.3.10) (the
+  `--json` contract of both scripts is verified for v6.3.2–v6.3.10:
+  envelopes, exit codes and `ok` of the commands in use are the same as in
+  v6.0.0; new are the `source` and `init_mismatch` fields of the port in
+  `check --json` with the port itself taken from `ListenPort` in the live
+  `awg0.conf`, `regen` on 2.0 deleting the old QR and `vpn://` before
+  rewriting `.conf` so that a file which failed to build comes as `null`,
+  and the `block-ru` command, which the bot does not call; details in
+  [docs/compat.en.md](docs/compat.en.md)); the minimum is still v5.21.0.
+  No changes to the bot code were needed.
+- **Dependencies**: url 2.5.9 (dependabot #93) — closes
+  [RUSTSEC-2026-0592](https://rustsec.org/advisories/RUSTSEC-2026-0592),
+  a stack overflow in `Url::origin()` on nested `blob:` URLs (the bot
+  never calls the method: `url` only parses the proxy addresses from the
+  config); rusqlite 0.43.0 (dependabot #91) — the bundled SQLite 3.54.1 and
+  the `Backup` API are unchanged, the use-after-free and leak fixes concern
+  the `session`, `column_metadata`, `vtab` and `functions` features the bot
+  does not enable, and empty or comment-only SQL is now an error (the bot
+  has no such statements); toml 1.2.3 (instead of 1.2.2 from dependabot
+  #90) — the parser returns an error instead of a stack overflow on invalid
+  TOML and on many dotted keys (the bot reads `config.toml` with it); regex
+  1.13.2 (dependabot #89) — fixes panics in the fallback
+  `BoundedBacktracker` and PikeVM engines and the match offsets of
+  alternations whose branches start with the same repetition (the bot's
+  patterns do not hit these); rand 0.10.4 (dependabot #92) — fixes a
+  possible panic when sampling a deserialized `Uniform<Duration>` (the bot
+  only uses `random_range`).
+- **`cargo deny`**: cargo-deny 0.22 changed the default of
+  `advisories.unmaintained` from `all` to `workspace` — unmaintained crates
+  are only checked among direct dependencies, so the transitive
+  `proc-macro-error2`
+  ([RUSTSEC-2026-0173](https://rustsec.org/advisories/RUSTSEC-2026-0173))
+  dropped out of the check. `deny.toml` now sets the scope explicitly,
+  `unmaintained = "all"`: the whole graph is checked, as before.
+
 ## [0.13.4] — 2026-11-17
 
 ### 🇷🇺 Русский
@@ -1388,6 +1466,8 @@ config paths have changed. On a running VPS, perform once:
 - Environment diagnostics (🔬 button), ⏳ client expiry badges.
 - RU/EN localization, PSK default, backup/restore, persistent state.
 
+[0.13.5]: https://github.com/ekuraev/awgram/compare/v0.13.4...v0.13.5
+[0.13.4]: https://github.com/ekuraev/awgram/compare/v0.13.3...v0.13.4
 [0.13.3]: https://github.com/ekuraev/awgram/compare/v0.13.2...v0.13.3
 [0.13.2]: https://github.com/ekuraev/awgram/compare/v0.13.1...v0.13.2
 [0.13.1]: https://github.com/ekuraev/awgram/compare/v0.13.0...v0.13.1
