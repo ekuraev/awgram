@@ -1,5 +1,9 @@
 [advisories]
 version = 2
+# cargo-deny 0.22 по умолчанию ("workspace") проверяет unmaintained только у
+# прямых зависимостей: транзитивный proc-macro-error2 (запись ниже) выпал бы из
+# проверки. Явно держим прежнюю область — весь граф зависимостей.
+unmaintained = "all"
 yanked = "deny"
 # RUSTSEC-2026-0173: proc-macro-error2 помечен как unmaintained (не vulnerability,
 # без CVE/эксплойта). Приходит транзитивно через aquamarine <- teloxide и
