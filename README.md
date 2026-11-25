@@ -160,7 +160,8 @@ webhook), который живёт на том же VPS, что и VPN. Кон�
   (сверен `--json`-контракт), минимальная —
   [v5.21.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.21.0).
 - Подкоманды: `add`, `remove`, `list`, `stats`, `regen`, `modify`, `backup`,
-  `restore`, `check`, `restart`, `repair-module` — все с `--json`.
+  `restore`, `check`, `restart`, `repair-module` — все с `--json`; ещё
+  `diagnose` — текстом, его отчёт бот показывает как есть.
 - Необязательный `add --allowed-ips` (в инсталлере с v5.32.0) определяется по
   справке скрипта, а не по версии; без него работает путь `add` + `modify`.
 - С v6.3.0 инсталлер выдаёт PresharedKey каждому новому клиенту; выбор
